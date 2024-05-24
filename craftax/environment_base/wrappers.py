@@ -1,3 +1,5 @@
+from math import ceil, sqrt
+
 import jax
 import jax.numpy as jnp
 import chex
@@ -6,6 +8,9 @@ from flax import struct
 from functools import partial
 from typing import Optional, Tuple, Union, Any
 from gymnax.environments import environment, spaces
+from matplotlib import pyplot as plt, animation
+
+from craftax.craftax.renderer import render_craftax_pixels
 
 
 class GymnaxWrapper(object):
@@ -171,12 +176,16 @@ class LogWrapper(GymnaxWrapper):
     def __init__(self, env: environment.Environment):
         super().__init__(env)
 
+        # HACK: Limit to only the first 17 actions
+        self.action_space().n = 17
+
     @partial(jax.jit, static_argnums=(0, 2))
     def reset(
         self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
     ) -> Tuple[chex.Array, environment.EnvState]:
         obs, env_state = self._env.reset(key, params)
         state = LogEnvState(env_state, 0.0, 0, 0.0, 0, 0)
+
         return obs, state
 
     @partial(jax.jit, static_argnums=(0, 4))
@@ -206,4 +215,157 @@ class LogWrapper(GymnaxWrapper):
         info["returned_episode_lengths"] = state.returned_episode_lengths
         info["timestep"] = state.timestep
         info["returned_episode"] = done
+
         return obs, state, reward, done, info
+
+
+# Wrapper for plotting videos (every expensive op due to CPU latency, only run with this wrapper rarely!
+class VideoPlotWrapper(LogWrapper):
+    def __init__(self, env: environment.Environment):
+        super().__init__(env)
+        self.vis_renderer = None
+        self.curr_env_id = -9999
+        self.n_frames_seen = 0
+
+    @partial(jax.jit, static_argnums=(0, 2))
+    def reset(
+        self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
+    ) -> Tuple[chex.Array, environment.EnvState]:
+        obs, state = super().reset(key, params)
+        # Either flush the video or do setup (if this is the first reset)
+        if self.vis_renderer:
+            self.vis_renderer.flush_video()
+        else:
+            example_frame = render_craftax_pixels(state.env_state, 16)
+            self.vis_renderer = VisualizationRenderer(example_frame.shape, './', 0, True)
+
+        return obs, state
+
+    @partial(jax.jit, static_argnums=(0, 4))
+    def step(
+        self,
+        key: chex.PRNGKey,
+        state: environment.EnvState,
+        action: Union[int, float],
+        params: Optional[environment.EnvParams] = None,
+    ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
+        obs, state, reward, done, info = super().step(key, state, action, params)
+
+        env_state = state.env_state
+        new_obs = render_craftax_pixels(env_state, 16)
+
+        # This needs to leave the jax ecosystem so we use callback
+        def callback_func(new_obs, t, done):
+            self.vis_renderer.add_frame(new_obs, t, done)
+
+        # TODO disable callback for non-rendered envs, it incurs a huge performance penalty
+        jax.debug.callback(callback_func, new_obs, state.env_state.env_id, done)
+
+        # Add fields to be logged
+        info['action'] = action
+        info['health'] = env_state.player_health
+        info['food'] = env_state.player_food
+        info['drink'] = env_state.player_drink
+        info['energy'] = env_state.player_energy
+        info['done'] = done
+        info['is_sleeping'] = env_state.is_sleeping
+        info['is_resting'] = env_state.is_resting
+        info['player_position_x'] = env_state.player_position[0]
+        info['player_position_y'] = env_state.player_position[1]
+        info['recover'] = env_state.player_recover
+        info['hunger'] = env_state.player_hunger
+        info['thirst'] = env_state.player_thirst
+        info['fatigue'] = env_state.player_fatigue
+        info['light_level'] = env_state.light_level
+        # TODO why is this an array? It's supposed to be an int...
+        info['episode_id'] = env_state.env_id.squeeze()
+
+        return obs, state, reward, done, info
+
+
+# Class to progressively render visualization frames during test rollouts.
+# Should reduce the memory footprint compared to save_example_episode_video()
+class VisualizationRenderer(object):
+    # Set up plotting
+    def __init__(self, frame_shape, save_path, enumerator, is_rgb=False, draw_only_first=False):
+        self.frame_shape = frame_shape
+        self.save_path = save_path
+        self.enumerator = enumerator
+        self.is_rgb = is_rgb
+        self.draw_only_first = draw_only_first
+
+        # frame_shape should be shaped like <x, y, n_channels>
+
+        # Simple grid layout: n-by-n grid, possibly underfull
+        self.side_length = 1
+
+        # Determine figure aspect ratio
+        self.obs_x = frame_shape[0]
+        self.obs_y = frame_shape[1]
+
+        self.fig = plt.figure(figsize=(ceil(self.obs_y / 100), ceil(self.obs_x / 100)))
+        self.axs = self.fig.subplots(self.side_length, self.side_length, squeeze=(not draw_only_first))
+
+        # ims is a list of lists, each row is a list of artists to draw in the
+        # current frame; here we are just animating one artist, the image, in each frame
+        self.ims = []
+
+        self.n_frames_logged = 0
+        self.last_timestep = 0
+        self.n_videos_logged = 0
+        self.key = None
+        self.add_frame_callcount = 0
+
+    # Render a new frame
+    # Frames should have the shape described in frame_shape, with the first dimension being (usually) 1
+    def add_frame(self, frame, timestep, done):
+
+        self.add_frame_callcount += 1
+
+        # If we finished, grab a different episode to log
+        if self.add_frame_callcount % 1000000 == 0:
+            self.key = None
+
+        if not self.key:
+            self.key = timestep
+        # Attempt to log only one parallel env
+        if timestep != self.key:
+            return
+
+        if self.n_frames_logged % 50 == 0:
+            print('Logged', self.n_frames_logged, 'frames')
+        #self.last_timestep = timestep
+        curr_artist = []
+        frame = frame / 255.
+        # Draw the frame!
+        im = self.axs.imshow(frame, animated=True, vmin=0, vmax=1)
+        self.axs.set_xticks([])
+        self.axs.set_yticks([])
+        curr_artist.append(im)
+        self.ims.append(curr_artist)
+        self.n_frames_logged += 1
+
+        if self.n_frames_logged >= 500:
+            self.flush_video()
+
+    # Write out the rendered frames as an mp4 using ffmpeg
+    def flush_video(self):
+
+        print('Flushing', len(self.ims), 'frames')
+        # Animate/render the set of frames
+        ani = animation.ArtistAnimation(self.fig, self.ims, interval=200, blit=True,
+                                        repeat_delay=1000, repeat=False)
+
+        # Pipe to ffmpeg for encoding and writing to disk
+        writer = animation.FFMpegWriter(
+            fps=10, bitrate=-1, codec='hevc_nvenc')
+        ani.save(self.save_path + "/example_episode_" + str(self.n_videos_logged) + ".mp4", writer=writer)
+
+        plt.close()
+
+        self.last_timestep = 0
+        self.ims = []
+        self.n_frames_logged = 0
+        self.fig = plt.figure(figsize=(ceil(self.obs_y / 100), ceil(self.obs_x / 100)))
+        self.axs = self.fig.subplots(self.side_length, self.side_length, squeeze=(not self.draw_only_first))
+        self.n_videos_logged += 1

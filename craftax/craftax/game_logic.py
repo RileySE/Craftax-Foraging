@@ -1826,8 +1826,9 @@ def update_mobs(rng, state, params, static_params):
 
 def update_player_intrinsics(state, action, static_params):
     # Start sleeping?
+    # HACK: No sleeping above 50% energy
     is_starting_sleep = jnp.logical_and(
-        action == Action.SLEEP.value, state.player_energy < get_max_energy(state)
+        action == Action.SLEEP.value, state.player_energy < get_max_energy(state) * 0.5
     )
     new_is_sleeping = jnp.logical_or(state.is_sleeping, is_starting_sleep)
     state = state.replace(is_sleeping=new_is_sleeping)
@@ -2091,12 +2092,17 @@ def spawn_mobs(state, rng, params, static_params):
     )
     grass_map = state.map[state.player_level] == BlockType.GRASS.value
     path_map = state.map[state.player_level] == BlockType.PATH.value
+
+    # HACK: passives and monsters only spawn on grass, not path, allowing for the agent to find/make safe spaces
+    #all_valid_blocks_map = grass_map
+
     new_passive_mob_type = FLOOR_MOB_MAPPING[state.player_level, MobType.PASSIVE.value]
 
     passive_mobs_can_spawn_map = all_valid_blocks_map
 
+    # HACK: Increase min spawn distance to 6, so that passives never spawn within sight of the agent
     passive_mobs_can_spawn_map = jnp.logical_and(
-        passive_mobs_can_spawn_map, player_distance_map > 3
+        passive_mobs_can_spawn_map, player_distance_map > 5
     )
     passive_mobs_can_spawn_map = jnp.logical_and(
         passive_mobs_can_spawn_map, player_distance_map < params.mob_despawn_distance
@@ -3010,6 +3016,11 @@ def level_up_attributes(state, action, params):
 def craftax_step(rng, state, action, params, static_params):
     init_achievements = state.achievements
     init_health = state.player_health
+    # Adding reward terms for keeping food, drink, energy state high
+    # TODO there's builtin hunger, thirst, etc, terms, but they seem to be set in a trivial way? Do they do anything?
+    init_food = state.player_food
+    init_drink = state.player_drink
+    init_energy = state.player_energy
 
     # Interrupt action if sleeping or resting
     action = jax.lax.select(state.is_sleeping, Action.NOOP.value, action)
@@ -3079,8 +3090,27 @@ def craftax_step(rng, state, action, params, static_params):
         (state.achievements.astype(int) - init_achievements.astype(int))
         * achievement_coefficients
     ).sum()
-    health_reward = (state.player_health - init_health) * 0.1
-    reward = achievement_reward + health_reward
+
+    # Reward for being alive
+    alive_reward = 0.1
+    # Reward/penalty for gaining/losing health
+    health_reward = (state.player_health - init_health) / (init_health + 1.)
+    # Adding reward terms for keeping food, drink, energy, above 50%
+    food_reward = (state.player_food - init_food) / (init_food + 1.)
+    #food_reward = 1 - (state.player_food / get_max_food(state))
+    #food_reward = jax.lax.select(state.player_food / get_max_food(state) > 0.5, 0.1, -0.1)
+    #food_reward = jax.lax.select(state.player_food > 0., 0.1, -0.1)
+    drink_reward = (state.player_drink - init_drink) / (init_drink + 1.)
+    #drink_reward = (state.player_drink / get_max_drink(state) - 0.5)
+    #drink_reward = jax.lax.select(state.player_drink / get_max_drink(state) > 0.5, 0.1, -0.1)
+    #drink_reward = jax.lax.select(state.player_drink > 0., 0.1, -0.1)
+    energy_reward = (state.player_energy - init_energy) / (init_energy + 1.)
+    #energy_reward = (state.player_energy / get_max_energy(state) - 0.5)
+    #energy_reward = jax.lax.select(state.player_energy / get_max_energy(state) > 0.5, 0.1, -0.1)
+    #energy_reward = jax.lax.select(state.player_energy > 0., 0.1, -0.1)
+    #reward = achievement_reward + health_reward
+    reward = health_reward + food_reward + drink_reward + energy_reward + alive_reward
+    #reward = alive_reward
 
     rng, _rng = jax.random.split(rng)
 

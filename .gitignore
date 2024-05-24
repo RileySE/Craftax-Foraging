@@ -5,6 +5,8 @@ runs/
 
 play_data
 
+*.mp4
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -167,3 +169,4 @@ cython_debug/
 .idea/
 texture_cache.pbz2
 texture_cache*.pbz2
+/output/

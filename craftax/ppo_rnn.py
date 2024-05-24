@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+from math import ceil, sqrt
 
 import jax
 import jax.numpy as jnp
@@ -10,6 +11,7 @@ import optax
 import time
 
 from flax.training import orbax_utils
+from matplotlib import pyplot as plt, animation
 from orbax.checkpoint import (
     PyTreeCheckpointer,
     CheckpointManagerOptions,
@@ -28,6 +30,7 @@ from craftax.environment_base.wrappers import (
     OptimisticResetVecEnvWrapper,
     AutoResetEnvWrapper,
     BatchEnvWrapper,
+    VideoPlotWrapper,
 )
 from craftax.logz.batch_logging import create_log_dict, batch_log
 
@@ -125,6 +128,8 @@ class Transition(NamedTuple):
 
 
 def make_train(config):
+    # TODO Make this parameter exposed
+    config['NUM_UPDATES_PER_VIZ'] = 1000
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
     )
@@ -160,16 +165,30 @@ def make_train(config):
         raise ValueError(f"Unknown env: {config['ENV_NAME']}")
     env_params = env.default_params
 
+    # Env version to log videos, use only for occasional visualization as plotting is expensive/slow
+    # TODO why do I need to put this wrapper early in the stack?
+    env_viz = VideoPlotWrapper(env)
+    #env_viz = LogWrapperViz(env)
     env = LogWrapper(env)
+
     if config["USE_OPTIMISTIC_RESETS"]:
         env = OptimisticResetVecEnvWrapper(
             env,
             num_envs=config["NUM_ENVS"],
             reset_ratio=min(config["OPTIMISTIC_RESET_RATIO"], config["NUM_ENVS"]),
         )
+        env_viz = OptimisticResetVecEnvWrapper(
+            env_viz,
+            num_envs=config["NUM_ENVS"],
+            reset_ratio=min(config["OPTIMISTIC_RESET_RATIO"], config["NUM_ENVS"]),
+        )
     else:
         env = AutoResetEnvWrapper(env)
         env = BatchEnvWrapper(env, num_envs=config["NUM_ENVS"])
+        env_viz = AutoResetEnvWrapper(env_viz)
+        env_viz = BatchEnvWrapper(env_viz, num_envs=config["NUM_ENVS"])
+
+
 
     def linear_schedule(count):
         frac = (
@@ -181,7 +200,9 @@ def make_train(config):
 
     def train(rng):
         # INIT NETWORK
-        network = ActorCriticRNN(env.action_space(env_params).n, config=config)
+        #action_space_size = env.action_space(env_params).n
+        action_space_size = 17
+        network = ActorCriticRNN(action_space_size, config=config)
         rng, _rng = jax.random.split(rng)
         init_x = (
             jnp.zeros(
@@ -247,6 +268,7 @@ def make_train(config):
                 obsv, env_state, reward, done, info = env.step(
                     _rng, env_state, action, env_params
                 )
+
                 transition = Transition(
                     last_done, action, value, reward, log_prob, last_obs, info
                 )
@@ -416,11 +438,14 @@ def make_train(config):
                 _update_epoch, update_state, None, config["UPDATE_EPOCHS"]
             )
             train_state = update_state[0]
+
             metric = jax.tree_map(
                 lambda x: (x * traj_batch.info["returned_episode"]).sum()
                 / traj_batch.info["returned_episode"].sum(),
                 traj_batch.info,
             )
+            to_log = metric
+
             rng = update_state[-1]
             if config["DEBUG"] and config["USE_WANDB"]:
 
@@ -428,7 +453,7 @@ def make_train(config):
                     to_log = create_log_dict(metric, config)
                     batch_log(update_step, to_log, config)
 
-                jax.debug.callback(callback, metric, update_step)
+                jax.debug.callback(callback, to_log, update_step)
 
             runner_state = (
                 train_state,
@@ -439,6 +464,121 @@ def make_train(config):
                 rng,
                 update_step + 1,
             )
+
+            return runner_state, metric
+
+        # Func to interleave update steps and plotting
+        def _update_plot(runner_state, unused):
+
+            # Version of _env_step that calls the video plotting wrapper
+            def _env_step_viz(runner_state, unused):
+                (
+                    train_state,
+                    env_state,
+                    last_obs,
+                    last_done,
+                    hstate,
+                    rng,
+                    update_step,
+                ) = runner_state
+                rng, _rng = jax.random.split(rng)
+
+                # SELECT ACTION
+                ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
+                hstate, pi, value = network.apply(train_state.params, hstate, ac_in)
+                action = pi.sample(seed=_rng)
+                log_prob = pi.log_prob(action)
+                value, action, log_prob = (
+                    value.squeeze(0),
+                    action.squeeze(0),
+                    log_prob.squeeze(0),
+                )
+
+                # STEP ENV
+                rng, _rng = jax.random.split(rng)
+                obsv, env_state, reward, done, info = env_viz.step(
+                    _rng, env_state, action, env_params
+                )
+                # HACK: Add hstate to info for future logging
+                info['hidden_state'] = hstate
+                transition = Transition(
+                    last_done, action, value, reward, log_prob, last_obs, info
+                )
+                runner_state = (
+                    train_state,
+                    env_state,
+                    obsv,
+                    done,
+                    hstate,
+                    rng,
+                    update_step,
+                )
+                return runner_state, transition
+
+            # First, update
+            runner_state, metric = jax.lax.scan(
+                _update_step, runner_state, None, config["NUM_UPDATES_PER_VIZ"]
+            )
+
+            # Then, visualize
+            runner_state, traj_batch = jax.lax.scan(
+                _env_step_viz, runner_state, None, 2048
+            )
+
+            # Finally, log data associated with the visualization runs
+            update_step = runner_state[-1]
+            hidden_states = traj_batch.info['hidden_state']
+            actions = traj_batch.info['action']
+            healths = traj_batch.info['health']
+            foods = traj_batch.info['food']
+            drinks = traj_batch.info['drink']
+            energies = traj_batch.info['energy']
+            dones = traj_batch.info['done']
+            is_sleepings = traj_batch.info['is_sleeping']
+            is_restings = traj_batch.info['is_resting']
+            player_position_xs = traj_batch.info['player_position_x']
+            player_position_ys = traj_batch.info['player_position_y']
+            recovers = traj_batch.info['recover']
+            hungers = traj_batch.info['hunger']
+            thirsts = traj_batch.info['thirst']
+            fatigues = traj_batch.info['fatigue']
+            light_levels = traj_batch.info['light_level']
+            epi_ids = traj_batch.info['episode_id']
+            traj_batch.info['hidden_state'] = None
+
+            # Callback function for logging hidden states
+            # TODO use this only some of the time to lower IO costs?
+            def write_rnn_hstate(hstate, scalars, increment=0):
+                np.savetxt('./output/hstates_' + str(increment) + '.csv', hstate[:, 0, :], delimiter=',')
+                np.savetxt('./output/scalars_' + str(increment) + '.csv', scalars[:, 0, :], delimiter=',', fmt='%f',
+                           header='action,health,food,drink,energy,done,is_sleeping,is_resting, player_position_x,'
+                                  ' player_position_y, recover, hunger, thirst, fatigue, light_level, episode_id'
+                           )
+
+            # Reshape logging arrays and concat
+            new_shape = actions.shape + (1,)
+            actions = actions.reshape(new_shape)
+            healths = healths.reshape(new_shape)
+            foods = foods.reshape(new_shape)
+            drinks = drinks.reshape(new_shape)
+            energies = energies.reshape(new_shape)
+            dones = dones.reshape(new_shape)
+            is_sleepings = is_sleepings.reshape(new_shape)
+            is_restings = is_restings.reshape(new_shape)
+            player_position_xs = player_position_xs.reshape(new_shape)
+            player_position_ys = player_position_ys.reshape(new_shape)
+            recovers = recovers.reshape(new_shape)
+            hungers = hungers.reshape(new_shape)
+            thirsts = thirsts.reshape(new_shape)
+            fatigues = fatigues.reshape(new_shape)
+            light_levels = light_levels.reshape(new_shape)
+            epi_ids = epi_ids.reshape(new_shape)
+            log_array = jnp.concatenate([actions, healths, foods, drinks, energies, dones, is_sleepings, is_restings,
+                                         player_position_xs, player_position_ys, recovers, hungers, thirsts, fatigues,
+                                         light_levels, epi_ids
+                                         ], axis=2)
+            jax.debug.callback(write_rnn_hstate, hidden_states, log_array, update_step)
+
             return runner_state, metric
 
         rng, _rng = jax.random.split(rng)
@@ -451,8 +591,9 @@ def make_train(config):
             _rng,
             0,
         )
+
         runner_state, metric = jax.lax.scan(
-            _update_step, runner_state, None, config["NUM_UPDATES"]
+            _update_plot, runner_state, None, config["NUM_UPDATES"]
         )
         return {"runner_state": runner_state, "metric": metric}
 
