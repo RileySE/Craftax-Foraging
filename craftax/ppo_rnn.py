@@ -131,7 +131,7 @@ def make_train(config):
     # TODO Make this parameter exposed
     config['NUM_UPDATES_PER_VIZ'] = 1000
     config["NUM_UPDATES"] = (
-        config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
+        config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"] // config['NUM_UPDATES_PER_VIZ']
     )
     config["MINIBATCH_SIZE"] = (
         config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
