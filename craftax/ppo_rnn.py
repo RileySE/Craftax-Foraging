@@ -131,6 +131,12 @@ def make_train(config):
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"] // config['UPDATES_PER_VIZ']
     )
+    # HACK: We have to use the original formula for num_updates for LR annealing,
+    # modifying it breaks training due to its effect on LR scheduling
+    config['NUM_UPDATES_FOR_LR_ANNEALING'] = (
+        config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
+    )
+
     config["MINIBATCH_SIZE"] = (
         config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
@@ -192,7 +198,7 @@ def make_train(config):
         frac = (
             1.0
             - (count // (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"]))
-            / config["NUM_UPDATES"]
+            / config["NUM_UPDATES_FOR_LR_ANNEALING"]
         )
         return config["LR"] * frac
 

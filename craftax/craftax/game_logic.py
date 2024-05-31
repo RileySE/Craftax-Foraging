@@ -2095,6 +2095,7 @@ def spawn_mobs(state, rng, params, static_params):
 
     # HACK: passives and monsters only spawn on grass, not path, allowing for the agent to find/make safe spaces
     #all_valid_blocks_map = grass_map
+    #all_valid_blocks_map = path_map
 
     new_passive_mob_type = FLOOR_MOB_MAPPING[state.player_level, MobType.PASSIVE.value]
 
