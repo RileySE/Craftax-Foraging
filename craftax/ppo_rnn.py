@@ -128,10 +128,8 @@ class Transition(NamedTuple):
 
 
 def make_train(config):
-    # TODO Make this parameter exposed
-    config['NUM_UPDATES_PER_VIZ'] = 1000
     config["NUM_UPDATES"] = (
-        config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"] // config['NUM_UPDATES_PER_VIZ']
+        config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"] // config['UPDATES_PER_VIZ']
     )
     config["MINIBATCH_SIZE"] = (
         config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
@@ -166,9 +164,9 @@ def make_train(config):
     env_params = env.default_params
 
     # Env version to log videos, use only for occasional visualization as plotting is expensive/slow
-    # TODO why do I need to put this wrapper early in the stack?
-    env_viz = VideoPlotWrapper(env)
-    #env_viz = LogWrapperViz(env)
+    # TODO why do I need to put this wrapper early in the stack? It can't just layer on top
+    env_viz = VideoPlotWrapper(env, config['OUTPUT_PATH'], config['FRAMES_PER_FILE'])
+
     env = LogWrapper(env)
 
     if config["USE_OPTIMISTIC_RESETS"]:
@@ -201,6 +199,7 @@ def make_train(config):
     def train(rng):
         # INIT NETWORK
         #action_space_size = env.action_space(env_params).n
+        # HACK: Reduce action space (first floor actions only)
         action_space_size = 17
         network = ActorCriticRNN(action_space_size, config=config)
         rng, _rng = jax.random.split(rng)
@@ -517,7 +516,7 @@ def make_train(config):
 
             # First, update
             runner_state, metric = jax.lax.scan(
-                _update_step, runner_state, None, config["NUM_UPDATES_PER_VIZ"]
+                _update_step, runner_state, None, config["UPDATES_PER_VIZ"]
             )
 
             # Then, visualize
@@ -687,6 +686,10 @@ if __name__ == "__main__":
         "--use_optimistic_resets", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument("--optimistic_reset_ratio", type=int, default=16)
+    parser.add_argument('--updates_per_viz', type=int, default=1024)
+    parser.add_argument('--steps_per_viz', type=int, default=2048)
+    parser.add_argument('--output_path', type=str, default='./output/')
+    parser.add_argument('--frames_per_file', type=int, default=512)
 
     args, rest_args = parser.parse_known_args(sys.argv[1:])
     if rest_args:

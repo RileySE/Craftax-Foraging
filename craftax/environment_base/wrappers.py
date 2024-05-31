@@ -176,7 +176,8 @@ class LogWrapper(GymnaxWrapper):
     def __init__(self, env: environment.Environment):
         super().__init__(env)
 
-        # HACK: Limit to only the first 17 actions
+        # HACK: Limit to only the first 17 actions (first floor stuff)
+        # TODO make this a separate wrapper (seems a little overkill, but it should be)
         self.action_space().n = 17
 
     @partial(jax.jit, static_argnums=(0, 2))
@@ -221,11 +222,13 @@ class LogWrapper(GymnaxWrapper):
 
 # Wrapper for plotting videos (every expensive op due to CPU latency, only run with this wrapper rarely!
 class VideoPlotWrapper(LogWrapper):
-    def __init__(self, env: environment.Environment):
+    def __init__(self, env: environment.Environment, output_path='./', frames_per_file=500):
         super().__init__(env)
         self.vis_renderer = None
         self.curr_env_id = -9999
         self.n_frames_seen = 0
+        self.output_path = output_path
+        self.frames_per_file = frames_per_file
 
     @partial(jax.jit, static_argnums=(0, 2))
     def reset(
@@ -237,7 +240,8 @@ class VideoPlotWrapper(LogWrapper):
             self.vis_renderer.flush_video()
         else:
             example_frame = render_craftax_pixels(state.env_state, 16)
-            self.vis_renderer = VisualizationRenderer(example_frame.shape, './', 0, True)
+            self.vis_renderer = VisualizationRenderer(example_frame.shape, self.output_path, 0, True,
+                                                      frames_per_file=self.frames_per_file)
 
         return obs, state
 
@@ -284,15 +288,16 @@ class VideoPlotWrapper(LogWrapper):
 
 
 # Class to progressively render visualization frames during test rollouts.
-# Should reduce the memory footprint compared to save_example_episode_video()
+# TODO remove residual cruft
 class VisualizationRenderer(object):
     # Set up plotting
-    def __init__(self, frame_shape, save_path, enumerator, is_rgb=False, draw_only_first=False):
+    def __init__(self, frame_shape, save_path, enumerator, is_rgb=False, draw_only_first=False, frames_per_file=500):
         self.frame_shape = frame_shape
         self.save_path = save_path
         self.enumerator = enumerator
         self.is_rgb = is_rgb
         self.draw_only_first = draw_only_first
+        self.frames_per_file = frames_per_file
 
         # frame_shape should be shaped like <x, y, n_channels>
 
@@ -345,7 +350,7 @@ class VisualizationRenderer(object):
         self.ims.append(curr_artist)
         self.n_frames_logged += 1
 
-        if self.n_frames_logged >= 500:
+        if self.n_frames_logged >= self.frames_per_file:
             self.flush_video()
 
     # Write out the rendered frames as an mp4 using ffmpeg
