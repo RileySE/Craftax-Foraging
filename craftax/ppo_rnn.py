@@ -175,6 +175,9 @@ def make_train(config):
 
     env = LogWrapper(env)
 
+    if not os.path.isdir(config['OUTPUT_PATH']):
+        os.makedirs(config['OUTPUT_PATH'])
+
     if config["USE_OPTIMISTIC_RESETS"]:
         env = OptimisticResetVecEnvWrapper(
             env,
@@ -527,7 +530,7 @@ def make_train(config):
 
             # Then, visualize
             runner_state, traj_batch = jax.lax.scan(
-                _env_step_viz, runner_state, None, 2048
+                _env_step_viz, runner_state, None, config['STEPS_PER_VIZ']
             )
 
             # Finally, log data associated with the visualization runs
@@ -554,8 +557,8 @@ def make_train(config):
             # Callback function for logging hidden states
             # TODO use this only some of the time to lower IO costs?
             def write_rnn_hstate(hstate, scalars, increment=0):
-                np.savetxt('./output/hstates_' + str(increment) + '.csv', hstate[:, 0, :], delimiter=',')
-                np.savetxt('./output/scalars_' + str(increment) + '.csv', scalars[:, 0, :], delimiter=',', fmt='%f',
+                np.savetxt(os.path.join(config['OUTPUT_PATH'], 'hstates_' + str(increment) + '.csv'), hstate[:, 0, :], delimiter=',')
+                np.savetxt(os.path.join(config['OUTPUT_PATH'], 'scalars_' + str(increment) + '.csv'), scalars[:, 0, :], delimiter=',', fmt='%f',
                            header='action,health,food,drink,energy,done,is_sleeping,is_resting, player_position_x,'
                                   ' player_position_y, recover, hunger, thirst, fatigue, light_level, episode_id'
                            )
