@@ -239,9 +239,10 @@ def do_action(rng, state, action, static_params):
         == BlockType.FURNACE.value
     )
 
+    # HACK: Mined constructed surfaces leave behind grass rather than path, to prevent agent from building a cow farm
     mined_furnace_block = jax.lax.select(
         is_mining_furnace,
-        BlockType.PATH.value,
+        BlockType.GRASS.value,
         new_map[block_position[0], block_position[1]],
     )
     new_map = new_map.at[block_position[0], block_position[1]].set(mined_furnace_block)
@@ -254,7 +255,7 @@ def do_action(rng, state, action, static_params):
 
     mined_crafting_table_block = jax.lax.select(
         is_mining_crafting_table,
-        BlockType.PATH.value,
+        BlockType.GRASS.value,
         new_map[block_position[0], block_position[1]],
     )
     new_map = new_map.at[block_position[0], block_position[1]].set(
