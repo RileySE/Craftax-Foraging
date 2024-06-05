@@ -1136,6 +1136,7 @@ def update_mobs(rng, state, params, static_params):
         )
 
         # Choose movement
+        # HACK: Reduced the "close to player" threshold to 6 to be on-screen when aggro-ing
         close_to_player = (
             jnp.sum(
                 jnp.abs(
@@ -1143,15 +1144,16 @@ def update_mobs(rng, state, params, static_params):
                     - state.player_position
                 )
             )
-            < 10
+            < 6
         )
         close_to_player = jnp.logical_or(
             close_to_player, is_fighting_boss(state, static_params)
         )
 
+        # HACK: Increased random action probability when close to player to 50%
         rng, _rng = jax.random.split(rng)
         close_to_player = jnp.logical_and(
-            close_to_player, jax.random.uniform(_rng) < 0.75
+            close_to_player, jax.random.uniform(_rng) < 0.5
         )
 
         proposed_position = jax.lax.select(
@@ -2095,7 +2097,7 @@ def spawn_mobs(state, rng, params, static_params):
 
     # HACK: passives and monsters only spawn on grass, not path, allowing for the agent to find/make safe spaces
     #all_valid_blocks_map = grass_map
-    #all_valid_blocks_map = path_map
+    all_valid_blocks_map = path_map
 
     new_passive_mob_type = FLOOR_MOB_MAPPING[state.player_level, MobType.PASSIVE.value]
 

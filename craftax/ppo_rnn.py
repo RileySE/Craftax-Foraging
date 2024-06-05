@@ -171,7 +171,7 @@ def make_train(config):
 
     # Env version to log videos, use only for occasional visualization as plotting is expensive/slow
     # TODO why do I need to put this wrapper early in the stack? It can't just layer on top
-    env_viz = VideoPlotWrapper(env, config['OUTPUT_PATH'], config['FRAMES_PER_FILE'])
+    env_viz = VideoPlotWrapper(env, config['OUTPUT_PATH'], config['FRAMES_PER_FILE'], not config['NO_VIDEOS'])
 
     env = LogWrapper(env)
 
@@ -696,6 +696,7 @@ if __name__ == "__main__":
     parser.add_argument('--steps_per_viz', type=int, default=2048)
     parser.add_argument('--output_path', type=str, default='./output/')
     parser.add_argument('--frames_per_file', type=int, default=512)
+    parser.add_argument('--no_videos', action=argparse.BooleanOptionalAction, default=False)
 
     args, rest_args = parser.parse_known_args(sys.argv[1:])
     if rest_args:

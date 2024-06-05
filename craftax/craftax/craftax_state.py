@@ -124,8 +124,7 @@ class EnvParams:
     passive_mob_health: int = 3
     ranged_mob_health: int = 3
 
-    #mob_despawn_distance: int = 14
-    mob_despawn_distance: int = 24
+    mob_despawn_distance: int = 14
     max_attribute: int = 5
 
     god_mode: bool = False
@@ -137,6 +136,8 @@ class EnvParams:
 class StaticEnvParams:
     map_size: Tuple[int, int] = (48, 48)
     num_levels: int = 9
+    # TODO expose this parameter on the command line
+    is_patchy: bool = True
 
     # Mobs
     max_melee_mobs: int = 3

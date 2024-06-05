@@ -34,6 +34,43 @@ class SmoothGenConfig:
     tree_threshold_perlin: float
 
 
+# Config for "patchy" world where grass (containing cows) is sparse and localized
+OVERWORLD_PATCHY_CONFIG = SmoothGenConfig(
+    default_block=BlockType.PATH.value,
+    sea_block=BlockType.WATER.value,
+    coast_block=BlockType.SAND.value,
+    mountain_block=BlockType.STONE.value,
+    path_block=BlockType.GRASS.value,
+    inner_mountain_block=BlockType.PATH.value,
+    ore_requirement_blocks=jnp.array([BlockType.STONE.value] * 5),
+    ores=jnp.array(
+        [
+            BlockType.COAL.value,
+            BlockType.IRON.value,
+            BlockType.DIAMOND.value,
+            BlockType.OUT_OF_BOUNDS.value,
+            BlockType.OUT_OF_BOUNDS.value,
+        ]
+    ),
+    ore_chances=jnp.array([0.03, 0.02, 0.001, 0.0, 0.0]),
+    tree_requirement_block=BlockType.GRASS.value,
+    tree=BlockType.TREE.value,
+    lava=BlockType.LAVA.value,
+    player_spawn=BlockType.GRASS.value,
+    valid_ladder=BlockType.PATH.value,
+    ladder_up=False,
+    ladder_down=True,
+    player_proximity_map_water_strength=5,
+    player_proximity_map_water_max=1,
+    player_proximity_map_mountain_strength=5,
+    player_proximity_map_mountain_max=1,
+    default_light=1.0,
+    water_threshold=0.7,
+    sand_threshold=0.6,
+    tree_threshold_uniform=0.8,
+    tree_threshold_perlin=0.5,
+)
+
 OVERWORLD_CONFIG = SmoothGenConfig(
     default_block=BlockType.GRASS.value,
     sea_block=BlockType.WATER.value,
@@ -261,6 +298,17 @@ BOSS_LEVEL_CONFIG = SmoothGenConfig(
 ALL_SMOOTHGEN_CONFIGS = jax.tree_map(
     lambda l1, l2, l3, l4, l5, l6: jnp.stack((l1, l2, l3, l4, l5, l6), axis=0),
     OVERWORLD_CONFIG,
+    GNOMISH_MINES_CONFIG,
+    TROLL_MINES_CONFIG,
+    FIRE_LEVEL_CONFIG,
+    ICE_LEVEL_CONFIG,
+    BOSS_LEVEL_CONFIG,
+)
+
+# As above, but with "patchy" overworld
+PATCHY_SMOOTHGEN_CONFIGS = jax.tree_map(
+    lambda l1, l2, l3, l4, l5, l6: jnp.stack((l1, l2, l3, l4, l5, l6), axis=0),
+    OVERWORLD_PATCHY_CONFIG,
     GNOMISH_MINES_CONFIG,
     TROLL_MINES_CONFIG,
     FIRE_LEVEL_CONFIG,

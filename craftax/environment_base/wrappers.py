@@ -222,13 +222,14 @@ class LogWrapper(GymnaxWrapper):
 
 # Wrapper for plotting videos (every expensive op due to CPU latency, only run with this wrapper rarely!
 class VideoPlotWrapper(LogWrapper):
-    def __init__(self, env: environment.Environment, output_path='./', frames_per_file=500):
+    def __init__(self, env: environment.Environment, output_path='./', frames_per_file=500, do_videos=True):
         super().__init__(env)
         self.vis_renderer = None
         self.curr_env_id = -9999
         self.n_frames_seen = 0
         self.output_path = output_path
         self.frames_per_file = frames_per_file
+        self.do_videos = do_videos
 
     @partial(jax.jit, static_argnums=(0, 2))
     def reset(
@@ -236,12 +237,13 @@ class VideoPlotWrapper(LogWrapper):
     ) -> Tuple[chex.Array, environment.EnvState]:
         obs, state = super().reset(key, params)
         # Either flush the video or do setup (if this is the first reset)
-        if self.vis_renderer:
-            self.vis_renderer.flush_video()
-        else:
-            example_frame = render_craftax_pixels(state.env_state, 16)
-            self.vis_renderer = VisualizationRenderer(example_frame.shape, self.output_path, 0, True,
-                                                      frames_per_file=self.frames_per_file)
+        if self.do_videos:
+            if self.vis_renderer:
+                self.vis_renderer.flush_video()
+            else:
+                example_frame = render_craftax_pixels(state.env_state, 16)
+                self.vis_renderer = VisualizationRenderer(example_frame.shape, self.output_path, 0, True,
+                                                          frames_per_file=self.frames_per_file)
 
         return obs, state
 
@@ -260,7 +262,8 @@ class VideoPlotWrapper(LogWrapper):
 
         # This needs to leave the jax ecosystem so we use callback
         def callback_func(new_obs, t, done):
-            self.vis_renderer.add_frame(new_obs, t, done)
+            if self.do_videos:
+                self.vis_renderer.add_frame(new_obs, t, done)
 
         # TODO disable callback for non-rendered envs, it incurs a huge performance penalty
         jax.debug.callback(callback_func, new_obs, state.env_state.env_id, done)
