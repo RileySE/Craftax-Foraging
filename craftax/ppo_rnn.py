@@ -551,6 +551,8 @@ def make_train(config):
             thirsts = traj_batch.info['thirst']
             fatigues = traj_batch.info['fatigue']
             light_levels = traj_batch.info['light_level']
+            dist_to_melees = traj_batch.info['dist_to_melee_l1']
+            dist_to_passives = traj_batch.info['dist_to_passive_l1']
             epi_ids = traj_batch.info['episode_id']
             traj_batch.info['hidden_state'] = None
 
@@ -559,8 +561,8 @@ def make_train(config):
             def write_rnn_hstate(hstate, scalars, increment=0):
                 np.savetxt(os.path.join(config['OUTPUT_PATH'], 'hstates_' + str(increment) + '.csv'), hstate[:, 0, :], delimiter=',')
                 np.savetxt(os.path.join(config['OUTPUT_PATH'], 'scalars_' + str(increment) + '.csv'), scalars[:, 0, :], delimiter=',', fmt='%f',
-                           header='action,health,food,drink,energy,done,is_sleeping,is_resting, player_position_x,'
-                                  ' player_position_y, recover, hunger, thirst, fatigue, light_level, episode_id'
+                           header='action,health,food,drink,energy,done,is_sleeping,is_resting,player_position_x,'
+                                  'player_position_y,recover,hunger,thirst,fatigue,light_level,dist_to_melee_l1,dist_to_passive_l1,episode_id'
                            )
 
             # Reshape logging arrays and concat
@@ -580,10 +582,12 @@ def make_train(config):
             thirsts = thirsts.reshape(new_shape)
             fatigues = fatigues.reshape(new_shape)
             light_levels = light_levels.reshape(new_shape)
+            dist_to_melees = dist_to_melees.reshape(new_shape)
+            dist_to_passives = dist_to_passives.reshape(new_shape)
             epi_ids = epi_ids.reshape(new_shape)
             log_array = jnp.concatenate([actions, healths, foods, drinks, energies, dones, is_sleepings, is_restings,
                                          player_position_xs, player_position_ys, recovers, hungers, thirsts, fatigues,
-                                         light_levels, epi_ids
+                                         light_levels, dist_to_melees, dist_to_passives, epi_ids
                                          ], axis=2)
             jax.debug.callback(write_rnn_hstate, hidden_states, log_array, update_step)
 
