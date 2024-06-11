@@ -298,6 +298,13 @@ class VideoPlotWrapper(LogWrapper):
         # TODO why is this an array? It's supposed to be an int...
         info['episode_id'] = env_state.env_id.squeeze()
 
+        melee_pos = env_state.melee_mobs.position[env_state.player_level]
+        dist_to_melee = jnp.min(jnp.linalg.norm(env_state.player_position - melee_pos, ord=1, axis = -1))
+
+        passive_pos = env_state.passive_mobs.position[env_state.player_level]
+        dist_to_passive = jnp.min(jnp.linalg.norm(env_state.player_position - passive_pos, ord=1, axis = -1))
+        info['dist_to_melee_l1'] = dist_to_melee
+        info['dist_to_passive_l1'] = dist_to_passive
         return obs, state, reward, done, info
 
 
