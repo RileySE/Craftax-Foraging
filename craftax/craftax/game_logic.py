@@ -1151,10 +1151,9 @@ def update_mobs(rng, state, params, static_params):
             close_to_player, is_fighting_boss(state, static_params)
         )
 
-        # HACK: Increased random action probability when close to player to 50%
         rng, _rng = jax.random.split(rng)
         close_to_player = jnp.logical_and(
-            close_to_player, jax.random.uniform(_rng) < 0.5
+            close_to_player, jax.random.uniform(_rng) < 0.75
         )
 
         proposed_position = jax.lax.select(

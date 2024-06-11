@@ -258,15 +258,26 @@ class VideoPlotWrapper(LogWrapper):
         obs, state, reward, done, info = super().step(key, state, action, params)
 
         env_state = state.env_state
-        new_obs = render_craftax_pixels(env_state, 16)
 
         # This needs to leave the jax ecosystem so we use callback
         def callback_func(new_obs, t, done):
             if self.do_videos:
                 self.vis_renderer.add_frame(new_obs, t, done)
 
+
+        # Alternative to satisfy jax's cond function
+        # TODO is there a builtin no-op function I could use instead?
+        def null_func(env_state):
+            return 0
+
+        def do_callback(env_state):
+            new_obs = render_craftax_pixels(env_state, 16)
+            jax.debug.callback(callback_func, new_obs, state.env_state.env_id, done)
+            return 1
+
         # TODO disable callback for non-rendered envs, it incurs a huge performance penalty
-        jax.debug.callback(callback_func, new_obs, state.env_state.env_id, done)
+        callback_result = jax.lax.cond(self.do_videos, do_callback, null_func, env_state)
+
 
         # Add fields to be logged
         info['action'] = action

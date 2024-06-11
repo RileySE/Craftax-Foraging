@@ -527,7 +527,7 @@ def make_train(config):
 
             # Then, visualize
             runner_state, traj_batch = jax.lax.scan(
-                _env_step_viz, runner_state, None, 2048
+                _env_step_viz, runner_state, None, config["STEPS_PER_VIZ"]
             )
 
             # Finally, log data associated with the visualization runs
