@@ -124,7 +124,8 @@ class EnvParams:
     passive_mob_health: int = 3
     ranged_mob_health: int = 3
 
-    mob_despawn_distance: int = 14
+    # HACK: Set to infinity (was 14) for patch depletion stuff
+    mob_despawn_distance: int = 999
     max_attribute: int = 5
 
     god_mode: bool = False
@@ -141,7 +142,8 @@ class StaticEnvParams:
 
     # Mobs
     max_melee_mobs: int = 3
-    max_passive_mobs: int = 9
+    # HACK: Doubled to 18 for patch depletion stuff
+    max_passive_mobs: int = 18
     max_growing_plants: int = 30
     max_ranged_mobs: int = 2
     max_mob_projectiles: int = 3
