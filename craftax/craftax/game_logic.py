@@ -1316,12 +1316,13 @@ def update_mobs(rng, state, params, static_params):
             passive_mobs.position[state.player_level, passive_mob_index],
         )
 
+        # HACK: Made passive despawn range infinite
         should_not_despawn = (
             jnp.abs(
                 passive_mobs.position[state.player_level, passive_mob_index]
                 - state.player_position
             ).sum()
-            < params.mob_despawn_distance
+            < 999
         )
 
         # Clear our old entry if we are alive
@@ -2107,9 +2108,10 @@ def spawn_mobs(state, rng, params, static_params):
     passive_mobs_can_spawn_map = jnp.logical_and(
         passive_mobs_can_spawn_map, player_distance_map > 5
     )
-    passive_mobs_can_spawn_map = jnp.logical_and(
-        passive_mobs_can_spawn_map, player_distance_map < params.mob_despawn_distance
-    )
+    # HACK: No despawn distance for passives
+    #passive_mobs_can_spawn_map = jnp.logical_and(
+    #    passive_mobs_can_spawn_map, player_distance_map < params.mob_despawn_distance
+    #)
     passive_mobs_can_spawn_map = jnp.logical_and(
         passive_mobs_can_spawn_map, jnp.logical_not(state.mob_map[state.player_level])
     )

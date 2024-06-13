@@ -124,8 +124,7 @@ class EnvParams:
     passive_mob_health: int = 3
     ranged_mob_health: int = 3
 
-    # HACK: Set to infinity (was 14) for patch depletion stuff
-    mob_despawn_distance: int = 999
+    mob_despawn_distance: int = 14
     max_attribute: int = 5
 
     god_mode: bool = False
