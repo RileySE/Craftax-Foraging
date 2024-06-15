@@ -132,7 +132,7 @@ class EnvParams:
     fractal_noise_angles: tuple[int, int, int, int] = (None, None, None, None)
 
 
-@struct.dataclass
+# HACK: Removed the static "struct.dataclass" declaration. Hope that didn't break any optimizations!
 class StaticEnvParams:
     map_size: Tuple[int, int] = (48, 48)
     num_levels: int = 9
