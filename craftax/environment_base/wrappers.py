@@ -170,15 +170,18 @@ class LogEnvState:
     timestep: int
 
 
+# Wrapper to restrict to only the first 17 actions (the first floor stuff, basically)
+class ReduceActionSpaceWrapper(GymnaxWrapper):
+    def __init__(self, env: environment.Environment):
+        super().__init__(env)
+        self.action_space().n = 17
+
+
 class LogWrapper(GymnaxWrapper):
     """Log the episode returns and lengths."""
 
     def __init__(self, env: environment.Environment):
         super().__init__(env)
-
-        # HACK: Limit to only the first 17 actions (first floor stuff)
-        # TODO make this a separate wrapper (seems a little overkill, but it should be)
-        self.action_space().n = 17
 
     @partial(jax.jit, static_argnums=(0, 2))
     def reset(

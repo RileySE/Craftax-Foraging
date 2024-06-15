@@ -25,12 +25,13 @@ from flax.training.train_state import TrainState
 import distrax
 import functools
 
+from craftax.craftax import craftax_state
 from craftax.environment_base.wrappers import (
     LogWrapper,
     OptimisticResetVecEnvWrapper,
     AutoResetEnvWrapper,
     BatchEnvWrapper,
-    VideoPlotWrapper,
+    VideoPlotWrapper, ReduceActionSpaceWrapper,
 )
 from craftax.logz.batch_logging import create_log_dict, batch_log
 
@@ -141,6 +142,14 @@ def make_train(config):
         config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
 
+    # Define static params, modify based on command line flags and pass to env object to hold during runtime
+    # We modify static params here because there's a number of core game logic functions that take static params
+    # And don't take the normal "params" blob
+    static_params = craftax_state.StaticEnvParams()
+    if config['REWARD_FUNCTION'] == 'vanilla':
+        static_params.reward_func = 'vanilla'
+
+
     if config["ENV_NAME"] == "Craftax-Classic-Symbolic-v1":
         from craftax.craftax_classic.envs.craftax_symbolic_env import (
             CraftaxClassicSymbolicEnv,
@@ -158,16 +167,20 @@ def make_train(config):
     elif config["ENV_NAME"] == "Craftax-Symbolic-v1":
         from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
 
-        env = CraftaxSymbolicEnv()
+        env = CraftaxSymbolicEnv(static_params)
         is_symbolic = True
     elif config["ENV_NAME"] == "Craftax-Pixels-v1":
         from craftax.craftax.envs.craftax_pixels_env import CraftaxPixelsEnv
 
-        env = CraftaxPixelsEnv()
+        env = CraftaxPixelsEnv(static_params)
         is_symbolic = False
     else:
         raise ValueError(f"Unknown env: {config['ENV_NAME']}")
     env_params = env.default_params
+
+    # Restrict action space
+    if not config['FULL_ACTION_SPACE']:
+        env = ReduceActionSpaceWrapper(env)
 
     # Env version to log videos, use only for occasional visualization as plotting is expensive/slow
     # TODO why do I need to put this wrapper early in the stack? It can't just layer on top
@@ -195,8 +208,6 @@ def make_train(config):
         env_viz = AutoResetEnvWrapper(env_viz)
         env_viz = BatchEnvWrapper(env_viz, num_envs=config["NUM_ENVS"])
 
-
-
     def linear_schedule(count):
         frac = (
             1.0
@@ -207,9 +218,10 @@ def make_train(config):
 
     def train(rng):
         # INIT NETWORK
-        #action_space_size = env.action_space(env_params).n
-        # HACK: Reduce action space (first floor actions only)
-        action_space_size = 17
+        if config['FULL_ACTION_SPACE']:
+            action_space_size = env.action_space(env_params).n
+        else:
+            action_space_size = 17
         network = ActorCriticRNN(action_space_size, config=config)
         rng, _rng = jax.random.split(rng)
         init_x = (
@@ -704,6 +716,8 @@ if __name__ == "__main__":
     parser.add_argument('--output_path', type=str, default='./output/')
     parser.add_argument('--frames_per_file', type=int, default=512)
     parser.add_argument('--no_videos', action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument('--full_action_space', action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument('--reward_function', type=str, default='foraging')
 
     args, rest_args = parser.parse_known_args(sys.argv[1:])
     if rest_args:

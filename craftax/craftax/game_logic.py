@@ -3024,7 +3024,6 @@ def craftax_step(rng, state, action, params, static_params):
     init_achievements = state.achievements
     init_health = state.player_health
     # Adding reward terms for keeping food, drink, energy state high
-    # TODO there's builtin hunger, thirst, etc, terms, but they seem to be set in a trivial way? Do they do anything?
     init_food = state.player_food
     init_drink = state.player_drink
     init_energy = state.player_energy
@@ -3101,6 +3100,7 @@ def craftax_step(rng, state, action, params, static_params):
     # Reward for being alive
     alive_reward = 0.1
     # Reward/penalty for gaining/losing health
+    vanilla_health_reward = state.player_health - init_health
     health_reward = jnp.clip(state.player_health - init_health, -1., 1.) / (init_health + 1.)
     # Adding reward terms for keeping food, drink, energy, above 50%
     food_reward = jnp.clip(state.player_food - init_food, -1., 1.) / (init_food + 1.)
@@ -3115,9 +3115,11 @@ def craftax_step(rng, state, action, params, static_params):
     #energy_reward = (state.player_energy / get_max_energy(state) - 0.5)
     #energy_reward = jax.lax.select(state.player_energy / get_max_energy(state) > 0.5, 0.1, -0.1)
     #energy_reward = jax.lax.select(state.player_energy > 0., 0.1, -0.1)
-    #reward = achievement_reward + health_reward
-    reward = health_reward + food_reward + drink_reward + energy_reward + alive_reward
-    #reward = alive_reward
+
+    vanilla_reward = achievement_reward + vanilla_health_reward
+    foraging_reward = health_reward + food_reward + drink_reward + energy_reward + alive_reward
+    reward = jax.lax.select(static_params.reward_func == 'foraging', foraging_reward, vanilla_reward)
+
 
     rng, _rng = jax.random.split(rng)
 

@@ -136,8 +136,7 @@ class EnvParams:
 class StaticEnvParams:
     map_size: Tuple[int, int] = (48, 48)
     num_levels: int = 9
-    # TODO expose this parameter on the command line
-    is_patchy: bool = True
+    reward_func: str = 'foraging'
 
     # Mobs
     max_melee_mobs: int = 3
