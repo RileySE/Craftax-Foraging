@@ -132,16 +132,16 @@ class EnvParams:
     fractal_noise_angles: tuple[int, int, int, int] = (None, None, None, None)
 
 
-@struct.dataclass
+# HACK: Removed the static "struct.dataclass" declaration. Hope that didn't break any optimizations!
 class StaticEnvParams:
     map_size: Tuple[int, int] = (48, 48)
     num_levels: int = 9
-    # TODO expose this parameter on the command line
-    is_patchy: bool = True
+    reward_func: str = 'foraging'
 
     # Mobs
     max_melee_mobs: int = 3
-    max_passive_mobs: int = 9
+    # HACK: Doubled to 18 for patch depletion stuff
+    max_passive_mobs: int = 18
     max_growing_plants: int = 30
     max_ranged_mobs: int = 2
     max_mob_projectiles: int = 3

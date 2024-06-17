@@ -223,9 +223,10 @@ def do_action(rng, state, action, static_params):
         == BlockType.STONE.value,
         can_mine_stone,
     )
+    # HACK: Replace stone with grass to prevent agent from making cow patches
     mined_stone_block = jax.lax.select(
         is_mining_stone,
-        BlockType.PATH.value,
+        BlockType.GRASS.value,
         new_map[block_position[0], block_position[1]],
     )
     new_map = new_map.at[block_position[0], block_position[1]].set(mined_stone_block)
@@ -269,9 +270,10 @@ def do_action(rng, state, action, static_params):
         == BlockType.COAL.value,
         can_mine_coal,
     )
+    # HACK: Coal and iron also leave behind grass rather than path
     mined_coal_block = jax.lax.select(
         is_mining_coal,
-        BlockType.PATH.value,
+        BlockType.GRASS.value,
         new_map[block_position[0], block_position[1]],
     )
     new_map = new_map.at[block_position[0], block_position[1]].set(mined_coal_block)
@@ -286,7 +288,7 @@ def do_action(rng, state, action, static_params):
     )
     mined_iron_block = jax.lax.select(
         is_mining_iron,
-        BlockType.PATH.value,
+        BlockType.GRASS.value,
         new_map[block_position[0], block_position[1]],
     )
     new_map = new_map.at[block_position[0], block_position[1]].set(mined_iron_block)
@@ -301,7 +303,7 @@ def do_action(rng, state, action, static_params):
     )
     mined_diamond_block = jax.lax.select(
         is_mining_diamond,
-        BlockType.PATH.value,
+        BlockType.GRASS.value,
         new_map[block_position[0], block_position[1]],
     )
     new_map = new_map.at[block_position[0], block_position[1]].set(mined_diamond_block)
@@ -1316,12 +1318,13 @@ def update_mobs(rng, state, params, static_params):
             passive_mobs.position[state.player_level, passive_mob_index],
         )
 
+        # HACK: Made passive despawn range infinite
         should_not_despawn = (
             jnp.abs(
                 passive_mobs.position[state.player_level, passive_mob_index]
                 - state.player_position
             ).sum()
-            < params.mob_despawn_distance
+            < 999
         )
 
         # Clear our old entry if we are alive
@@ -2107,9 +2110,10 @@ def spawn_mobs(state, rng, params, static_params):
     passive_mobs_can_spawn_map = jnp.logical_and(
         passive_mobs_can_spawn_map, player_distance_map > 5
     )
-    passive_mobs_can_spawn_map = jnp.logical_and(
-        passive_mobs_can_spawn_map, player_distance_map < params.mob_despawn_distance
-    )
+    # HACK: No despawn distance for passives
+    #passive_mobs_can_spawn_map = jnp.logical_and(
+    #    passive_mobs_can_spawn_map, player_distance_map < params.mob_despawn_distance
+    #)
     passive_mobs_can_spawn_map = jnp.logical_and(
         passive_mobs_can_spawn_map, jnp.logical_not(state.mob_map[state.player_level])
     )
@@ -3020,7 +3024,6 @@ def craftax_step(rng, state, action, params, static_params):
     init_achievements = state.achievements
     init_health = state.player_health
     # Adding reward terms for keeping food, drink, energy state high
-    # TODO there's builtin hunger, thirst, etc, terms, but they seem to be set in a trivial way? Do they do anything?
     init_food = state.player_food
     init_drink = state.player_drink
     init_energy = state.player_energy
@@ -3097,23 +3100,26 @@ def craftax_step(rng, state, action, params, static_params):
     # Reward for being alive
     alive_reward = 0.1
     # Reward/penalty for gaining/losing health
-    health_reward = (state.player_health - init_health) / (init_health + 1.)
+    vanilla_health_reward = state.player_health - init_health
+    health_reward = jnp.clip(state.player_health - init_health, -1., 1.) / (init_health + 1.)
     # Adding reward terms for keeping food, drink, energy, above 50%
-    food_reward = (state.player_food - init_food) / (init_food + 1.)
+    food_reward = jnp.clip(state.player_food - init_food, -1., 1.) / (init_food + 1.)
     #food_reward = 1 - (state.player_food / get_max_food(state))
     #food_reward = jax.lax.select(state.player_food / get_max_food(state) > 0.5, 0.1, -0.1)
     #food_reward = jax.lax.select(state.player_food > 0., 0.1, -0.1)
-    drink_reward = (state.player_drink - init_drink) / (init_drink + 1.)
+    drink_reward = jnp.clip(state.player_drink - init_drink, -1., 1.) / (init_drink + 1.)
     #drink_reward = (state.player_drink / get_max_drink(state) - 0.5)
     #drink_reward = jax.lax.select(state.player_drink / get_max_drink(state) > 0.5, 0.1, -0.1)
     #drink_reward = jax.lax.select(state.player_drink > 0., 0.1, -0.1)
-    energy_reward = (state.player_energy - init_energy) / (init_energy + 1.)
+    energy_reward = jnp.clip(state.player_energy - init_energy, -1., 1.) / (init_energy + 1.)
     #energy_reward = (state.player_energy / get_max_energy(state) - 0.5)
     #energy_reward = jax.lax.select(state.player_energy / get_max_energy(state) > 0.5, 0.1, -0.1)
     #energy_reward = jax.lax.select(state.player_energy > 0., 0.1, -0.1)
-    #reward = achievement_reward + health_reward
-    reward = health_reward + food_reward + drink_reward + energy_reward + alive_reward
-    #reward = alive_reward
+
+    vanilla_reward = achievement_reward + vanilla_health_reward
+    foraging_reward = health_reward + food_reward + drink_reward + energy_reward + alive_reward
+    reward = jax.lax.select(static_params.reward_func == 'foraging', foraging_reward, vanilla_reward)
+
 
     rng, _rng = jax.random.split(rng)
 
