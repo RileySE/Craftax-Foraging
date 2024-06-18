@@ -308,7 +308,7 @@ class VideoPlotWrapper(LogWrapper):
         dists_to_melee = jnp.where(melee_mask, dists_to_melee, jnp.inf)
         closest_melee_idx = jnp.argmin(dists_to_melee)
         closest_melee_dist_xy = env_state.player_position - melee_pos[closest_melee_idx]
-        melee_on_screen = jnp.logical_or(jnp.abs(closest_melee_dist_xy[0]) <= 5, jnp.abs(closest_melee_dist_xy[1]) <= 4)
+        melee_on_screen = jnp.logical_and(jnp.abs(closest_melee_dist_xy[0]) <= 5, jnp.abs(closest_melee_dist_xy[1]) <= 4)
         melee_on_screen = jnp.logical_and(melee_on_screen, melee_mask[closest_melee_idx])
         dist_to_melee = dists_to_melee[closest_melee_idx]
 
@@ -319,7 +319,7 @@ class VideoPlotWrapper(LogWrapper):
         dists_to_passive = jnp.where(passive_mask, dists_to_passive, jnp.inf)
         closest_passive_idx = jnp.argmin(dists_to_passive)
         closest_passive_dist_xy = env_state.player_position - passive_pos[closest_passive_idx]
-        passive_on_screen = jnp.logical_or(jnp.abs(closest_passive_dist_xy[0]) <= 5, jnp.abs(closest_passive_dist_xy[1]) <= 4)
+        passive_on_screen = jnp.logical_and(jnp.abs(closest_passive_dist_xy[0]) <= 5, jnp.abs(closest_passive_dist_xy[1]) <= 4)
         passive_on_screen = jnp.logical_and(passive_on_screen, passive_mask[closest_passive_idx])
         dist_to_passive = dists_to_passive[closest_passive_idx]
 
