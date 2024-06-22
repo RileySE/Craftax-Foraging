@@ -561,7 +561,9 @@ def make_train(config):
             fatigues = traj_batch.info['fatigue']
             light_levels = traj_batch.info['light_level']
             dist_to_melees = traj_batch.info['dist_to_melee_l1']
+            melee_on_screen = traj_batch.info['melee_on_screen']
             dist_to_passives = traj_batch.info['dist_to_passive_l1']
+            passive_on_screen = traj_batch.info['passive_on_screen']
             epi_ids = traj_batch.info['episode_id']
             traj_batch.info['hidden_state'] = None
 
@@ -582,7 +584,7 @@ def make_train(config):
                 np.savetxt(temp_filename,
                            scalars[:, 0, :], delimiter=',', fmt='%f',
                            header='action,health,food,drink,energy,done,is_sleeping,is_resting,player_position_x,'
-                                  'player_position_y,recover,hunger,thirst,fatigue,light_level,dist_to_melee_l1,dist_to_passive_l1,episode_id'
+                                  'player_position_y,recover,hunger,thirst,fatigue,light_level,dist_to_melee_l1,melee_on_screen,dist_to_passive_l1,passive_on_screen,episode_id'
                            )
                 temp_file = open(temp_filename, 'r')
                 out_file_scalars = open(out_filename_scalars, 'a+')
@@ -609,13 +611,15 @@ def make_train(config):
             fatigues = fatigues.reshape(new_shape)
             light_levels = light_levels.reshape(new_shape)
             dist_to_melees = dist_to_melees.reshape(new_shape)
+            melee_on_screen = melee_on_screen.reshape(new_shape)
             dist_to_passives = dist_to_passives.reshape(new_shape)
+            passive_on_screen = passive_on_screen.reshape(new_shape)
             epi_ids = epi_ids.reshape(new_shape)
-            log_array = jnp.concatenate(
-                [actions, healths, foods, drinks, energies, dones, is_sleepings, is_restings,
-                 player_position_xs, player_position_ys, recovers, hungers, thirsts, fatigues,
-                 light_levels, dist_to_melees, dist_to_passives, epi_ids
-                 ], axis=2)
+
+            log_array = jnp.concatenate([actions, healths, foods, drinks, energies, dones, is_sleepings, is_restings,
+                                         player_position_xs, player_position_ys, recovers, hungers, thirsts, fatigues,
+                                         light_levels, dist_to_melees,melee_on_screen, dist_to_passives, passive_on_screen, epi_ids
+                                         ], axis=2)
             jax.debug.callback(write_rnn_hstate, hidden_states, log_array, update_step)
 
             return runner_state, None
