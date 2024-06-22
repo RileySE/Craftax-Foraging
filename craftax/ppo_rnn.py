@@ -487,60 +487,57 @@ def make_train(config):
 
             return runner_state, metric
 
-        # Func to interleave update steps and plotting
-        def _update_plot(runner_state, unused):
-
             # Version of _env_step that calls the video plotting wrapper
-            def _env_step_viz(runner_state, unused):
-                (
-                    train_state,
-                    env_state,
-                    last_obs,
-                    last_done,
-                    hstate,
-                    rng,
-                    update_step,
-                ) = runner_state
-                rng, _rng = jax.random.split(rng)
 
-                # SELECT ACTION
-                ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-                hstate, pi, value = network.apply(train_state.params, hstate, ac_in)
-                action = pi.sample(seed=_rng)
-                log_prob = pi.log_prob(action)
-                value, action, log_prob = (
-                    value.squeeze(0),
-                    action.squeeze(0),
-                    log_prob.squeeze(0),
-                )
+        def _env_step_viz(runner_state, unused):
+            (
+                train_state,
+                env_state,
+                last_obs,
+                last_done,
+                hstate,
+                rng,
+                update_step,
+            ) = runner_state
+            rng, _rng = jax.random.split(rng)
 
-                # STEP ENV
-                rng, _rng = jax.random.split(rng)
-                obsv, env_state, reward, done, info = env_viz.step(
-                    _rng, env_state, action, env_params
-                )
-                # HACK: Add hstate to info for future logging
-                info['hidden_state'] = hstate
-                transition = Transition(
-                    last_done, action, value, reward, log_prob, last_obs, info
-                )
-                runner_state = (
-                    train_state,
-                    env_state,
-                    obsv,
-                    done,
-                    hstate,
-                    rng,
-                    update_step,
-                )
-                return runner_state, transition
-
-            # First, update
-            runner_state, metric = jax.lax.scan(
-                _update_step, runner_state, None, config["UPDATES_PER_VIZ"]
+            # SELECT ACTION
+            ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
+            hstate, pi, value = network.apply(train_state.params, hstate, ac_in)
+            action = pi.sample(seed=_rng)
+            log_prob = pi.log_prob(action)
+            value, action, log_prob = (
+                value.squeeze(0),
+                action.squeeze(0),
+                log_prob.squeeze(0),
             )
 
-            # Then, visualize
+            # STEP ENV
+            rng, _rng = jax.random.split(rng)
+            obsv, env_state, reward, done, info = env_viz.step(
+                _rng, env_state, action, env_params
+            )
+            # HACK: Add hstate to info for future logging
+            info['hidden_state'] = hstate
+            transition = Transition(
+                last_done, action, value, reward, log_prob, last_obs, info
+            )
+            runner_state = (
+                train_state,
+                env_state,
+                obsv,
+                done,
+                hstate,
+                rng,
+                update_step + 1,
+            )
+            return runner_state, transition
+
+            # Do one "step" of logging, writing the result to a file.
+            # Several steps can be run in series using --logging_steps_per_viz to do long rollouts without hitting memory limits
+
+        def _logging_step(runner_state, unused):
+            # Visualization rollouts
             runner_state, traj_batch = jax.lax.scan(
                 _env_step_viz, runner_state, None, config['STEPS_PER_VIZ']
             )
@@ -569,13 +566,30 @@ def make_train(config):
             traj_batch.info['hidden_state'] = None
 
             # Callback function for logging hidden states
-            # TODO use this only some of the time to lower IO costs?
             def write_rnn_hstate(hstate, scalars, increment=0):
-                np.savetxt(os.path.join(config['OUTPUT_PATH'], 'hstates_' + str(increment) + '.csv'), hstate[:, 0, :], delimiter=',')
-                np.savetxt(os.path.join(config['OUTPUT_PATH'], 'scalars_' + str(increment) + '.csv'), scalars[:, 0, :], delimiter=',', fmt='%f',
+                # We save to temp files and then append to the target file since numpy apparently cannot write files in append mode for some reason
+                out_filename_hstates = os.path.join(config['OUTPUT_PATH'], 'hstates_' + str(increment) + '.csv')
+                temp_filename = os.path.join(config['OUTPUT_PATH'], 'temp.csv')
+                np.savetxt(temp_filename,
+                           hstate[:, 0, :], delimiter=',')
+                temp_file = open(temp_filename, 'r')
+                out_file_hstates = open(out_filename_hstates, 'a+')
+                out_file_hstates.write(temp_file.read())
+                out_file_hstates.close()
+                temp_file.close()
+                # Then do the same thing for the scalars
+                out_filename_scalars = os.path.join(config['OUTPUT_PATH'], 'scalars_' + str(increment) + '.csv')
+                np.savetxt(temp_filename,
+                           scalars[:, 0, :], delimiter=',', fmt='%f',
                            header='action,health,food,drink,energy,done,is_sleeping,is_resting,player_position_x,'
                                   'player_position_y,recover,hunger,thirst,fatigue,light_level,dist_to_melee_l1,dist_to_passive_l1,episode_id'
                            )
+                temp_file = open(temp_filename, 'r')
+                out_file_scalars = open(out_filename_scalars, 'a+')
+                out_file_scalars.write(temp_file.read())
+                temp_file.close()
+                out_file_scalars.close()
+                print('Writing log file', out_filename_hstates)
 
             # Reshape logging arrays and concat
             new_shape = actions.shape + (1,)
@@ -597,11 +611,30 @@ def make_train(config):
             dist_to_melees = dist_to_melees.reshape(new_shape)
             dist_to_passives = dist_to_passives.reshape(new_shape)
             epi_ids = epi_ids.reshape(new_shape)
-            log_array = jnp.concatenate([actions, healths, foods, drinks, energies, dones, is_sleepings, is_restings,
-                                         player_position_xs, player_position_ys, recovers, hungers, thirsts, fatigues,
-                                         light_levels, dist_to_melees, dist_to_passives, epi_ids
-                                         ], axis=2)
+            log_array = jnp.concatenate(
+                [actions, healths, foods, drinks, energies, dones, is_sleepings, is_restings,
+                 player_position_xs, player_position_ys, recovers, hungers, thirsts, fatigues,
+                 light_levels, dist_to_melees, dist_to_passives, epi_ids
+                 ], axis=2)
             jax.debug.callback(write_rnn_hstate, hidden_states, log_array, update_step)
+
+            return runner_state, None
+
+        # Func to interleave update steps and plotting
+        def _update_plot(runner_state, unused):
+
+            # First, update
+            runner_state, metric = jax.lax.scan(
+                _update_step, runner_state, None, config["UPDATES_PER_VIZ"]
+            )
+
+            # Can we save the environment state and resume training later?
+            #runner_state_copy = runner_state
+
+            # Then do iterations of logging
+            runner_state, empty = jax.lax.scan(
+                _logging_step, runner_state, None, config['LOGGING_STEPS_PER_VIZ']
+            )
 
             return runner_state, metric
 
@@ -616,9 +649,32 @@ def make_train(config):
             0,
         )
 
+        # Copy initial runner state for final validation runs
+        initial_runner_state = runner_state
+
         runner_state, metric = jax.lax.scan(
             _update_plot, runner_state, None, config["NUM_UPDATES"]
         )
+
+        # Do validation rollouts with a fixed random seed
+        # Generate rng from validation-specific random seed
+        val_rng_key = jax.random.PRNGKey(config["VALIDATION_SEED"])
+        val_runner_state = (
+            initial_runner_state[0],
+            initial_runner_state[1],
+            initial_runner_state[2],
+            initial_runner_state[3],
+            initial_runner_state[4],
+            val_rng_key,
+            0,
+        )
+
+        # Do validation logging iterations
+        # TODO separate command line argument for validation logging step count?
+        val_runner_state, empty = jax.lax.scan(
+            _logging_step, val_runner_state, None, config['LOGGING_STEPS_PER_VIZ']
+        )
+
         return {"runner_state": runner_state, "metric": metric}
 
     return train
@@ -712,12 +768,14 @@ if __name__ == "__main__":
     )
     parser.add_argument("--optimistic_reset_ratio", type=int, default=16)
     parser.add_argument('--updates_per_viz', type=int, default=1024)
-    parser.add_argument('--steps_per_viz', type=int, default=2048)
+    parser.add_argument('--steps_per_viz', type=int, default=1024)
+    parser.add_argument('--logging_steps_per_viz', type=int, default=8)
     parser.add_argument('--output_path', type=str, default='./output/')
     parser.add_argument('--frames_per_file', type=int, default=512)
     parser.add_argument('--no_videos', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument('--full_action_space', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument('--reward_function', type=str, default='foraging')
+    parser.add_argument('--validation_seed', type=int, default=777)
 
     args, rest_args = parser.parse_known_args(sys.argv[1:])
     if rest_args:

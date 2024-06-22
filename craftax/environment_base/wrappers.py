@@ -264,8 +264,8 @@ class VideoPlotWrapper(LogWrapper):
 
         # This needs to leave the jax ecosystem so we use callback
         def callback_func(new_obs, t, done):
-            if self.do_videos:
-                self.vis_renderer.add_frame(new_obs, t, done)
+            #if self.do_videos:
+            self.vis_renderer.add_frame(new_obs, t, done)
 
 
         # Alternative to satisfy jax's cond function
@@ -278,8 +278,30 @@ class VideoPlotWrapper(LogWrapper):
             jax.debug.callback(callback_func, new_obs, state.env_state.env_id, done)
             return 1
 
+
+        #is_new_env_id = jnp.logical_or(self.curr_env_id == -9999, self.n_frames_seen >= 10000000)
+
+
+        #self.n_frames_seen = (self.n_frames_seen + 1) % 10000001
         # TODO disable callback for non-rendered envs, it incurs a huge performance penalty
+        # TODO this equality test isn't working for some reason, it always returns true
+        #is_callback = jnp.logical_and(self.do_videos, self.curr_env_id == this_env_id)
+        #is_callback = self.curr_env_id == this_env_id
+
+        def debug_print(array_of_stuff):
+            for thing in array_of_stuff:
+                print(thing)
+            return np.int32(0)
+
+        this_env_id = env_state.env_id.squeeze()
+        # This is false
+        #is_new_env_id = this_env_id == self.curr_env_id
+        # EVALUATES FALSE BRANCH
+        #self.curr_env_id = jax.lax.select(is_new_env_id, this_env_id, self.curr_env_id)
+        # EVALUATES TRUE BRANCH, WTF
         callback_result = jax.lax.cond(self.do_videos, do_callback, null_func, env_state)
+        #result = jax.pure_callback(debug_print, np.int32(0), is_new_env_id, self.curr_env_id, this_env_id])
+
 
 
         # Add fields to be logged
