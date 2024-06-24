@@ -650,7 +650,7 @@ def make_train(config):
             jnp.zeros((config["NUM_ENVS"]), dtype=bool),
             init_hstate,
             _rng,
-            config["VALIDATION_STEP_OFFSET"],
+            0,
         )
 
         # Copy initial runner state for final validation runs
@@ -663,14 +663,21 @@ def make_train(config):
         # Do validation rollouts with a fixed random seed
         # Generate rng from validation-specific random seed
         val_rng_key = jax.random.PRNGKey(config["VALIDATION_SEED"])
+
+        #RE-INIT FOR VAL RUNS
+        rng, _rng = jax.random.split(val_rng_key)
+        obsv, env_state = env.reset(_rng, env_params)
+        init_hstate = ScannedRNN.initialize_carry(
+            config["NUM_ENVS"], config["LAYER_SIZE"]
+        )
         val_runner_state = (
             initial_runner_state[0],
-            initial_runner_state[1],
-            initial_runner_state[2],
+            env_state,
+            obsv,
             initial_runner_state[3],
-            initial_runner_state[4],
-            val_rng_key,
-            0,
+            init_hstate,
+            rng,
+            config['VALIDATION_STEP_OFFSET'],
         )
 
         # Do validation logging iterations
