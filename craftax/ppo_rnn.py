@@ -650,7 +650,7 @@ def make_train(config):
             jnp.zeros((config["NUM_ENVS"]), dtype=bool),
             init_hstate,
             _rng,
-            0,
+            config["VALIDATION_STEP_OFFSET"],
         )
 
         # Copy initial runner state for final validation runs
@@ -780,6 +780,7 @@ if __name__ == "__main__":
     parser.add_argument('--full_action_space', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument('--reward_function', type=str, default='foraging')
     parser.add_argument('--validation_seed', type=int, default=777)
+    parser.add_argument('--validation_step_offset', type=int, default=0)
 
     args, rest_args = parser.parse_known_args(sys.argv[1:])
     if rest_args:
