@@ -683,7 +683,7 @@ def make_train(config):
         # Do validation logging iterations
         # TODO separate command line argument for validation logging step count?
         val_runner_state, empty = jax.lax.scan(
-            _logging_step, val_runner_state, None, config['LOGGING_STEPS_PER_VIZ']
+            _logging_step, val_runner_state, None, config['LOGGING_STEPS_PER_VIZ_VAL']
         )
 
         return {"runner_state": runner_state, "metric": metric}
@@ -781,6 +781,7 @@ if __name__ == "__main__":
     parser.add_argument('--updates_per_viz', type=int, default=1024)
     parser.add_argument('--steps_per_viz', type=int, default=1024)
     parser.add_argument('--logging_steps_per_viz', type=int, default=8)
+    parser.add_argument('--logging_steps_per_viz_val', type=int, default=8)
     parser.add_argument('--output_path', type=str, default='./output/')
     parser.add_argument('--frames_per_file', type=int, default=512)
     parser.add_argument('--no_videos', action=argparse.BooleanOptionalAction, default=False)
