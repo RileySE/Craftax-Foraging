@@ -269,6 +269,21 @@ MOB_TYPE_DAMAGE_MAPPING = jnp.array(
     ],
     dtype=jnp.float32,
 )
+# HACK: Disable enemy damage
+MOB_TYPE_DAMAGE_MAPPING_NODAMAGE = jnp.array(
+    [
+        # (-, melee, -, projectile)
+        [NO_DAMAGE, NO_DAMAGE, NO_DAMAGE, NO_DAMAGE],  # zombie, arrow
+        [NO_DAMAGE, NO_DAMAGE, NO_DAMAGE, NO_DAMAGE],  # gnome, dagger
+        [NO_DAMAGE, NO_DAMAGE, NO_DAMAGE, NO_DAMAGE],  # orc, fireball
+        [NO_DAMAGE, NO_DAMAGE, NO_DAMAGE, NO_DAMAGE],  # lizard, iceball
+        [NO_DAMAGE, NO_DAMAGE, NO_DAMAGE, NO_DAMAGE],  # knight, arrow2
+        [NO_DAMAGE, NO_DAMAGE, NO_DAMAGE, NO_DAMAGE],  # troll, slimeball
+        [NO_DAMAGE, NO_DAMAGE, NO_DAMAGE, NO_DAMAGE],  # pigman, fireball2
+        [NO_DAMAGE, NO_DAMAGE, NO_DAMAGE, NO_DAMAGE],  # ice troll, iceball2
+    ],
+    dtype=jnp.float32,
+)
 
 MOB_TYPE_HEALTH_MAPPING = jnp.array(
     [
