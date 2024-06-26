@@ -626,7 +626,6 @@ def make_train(config):
 
         # Func to interleave update steps and plotting
         def _update_plot(runner_state, unused):
-
             # First, update
             runner_state, metric = jax.lax.scan(
                 _update_step, runner_state, None, config["UPDATES_PER_VIZ"]
@@ -659,11 +658,10 @@ def make_train(config):
         runner_state, metric = jax.lax.scan(
             _update_plot, runner_state, None, config["NUM_UPDATES"]
         )
-
         # Do validation rollouts with a fixed random seed
         # Generate rng from validation-specific random seed
-        val_rng_key = jax.random.PRNGKey(config["VALIDATION_SEED"])
 
+        val_rng_key = jax.random.PRNGKey(config["VALIDATION_SEED"])
         #RE-INIT FOR VAL RUNS
         rng, _rng = jax.random.split(val_rng_key)
         obsv, env_state = env.reset(_rng, env_params)
@@ -677,7 +675,7 @@ def make_train(config):
             initial_runner_state[3],
             init_hstate,
             rng,
-            config['VALIDATION_STEP_OFFSET'],
+            config['VALIDATION_STEP_OFFSET'] + runner_state[-1],
         )
 
         # Do validation logging iterations
