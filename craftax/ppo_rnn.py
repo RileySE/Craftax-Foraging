@@ -669,7 +669,7 @@ def make_train(config):
             config["NUM_ENVS"], config["LAYER_SIZE"]
         )
         val_runner_state = (
-            initial_runner_state[0],
+            runner_state[0],
             env_state,
             obsv,
             initial_runner_state[3],
