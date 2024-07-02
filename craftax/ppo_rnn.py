@@ -2,7 +2,7 @@ import argparse
 import os
 import sys
 from math import ceil, sqrt
-
+from functools import partial
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
@@ -536,7 +536,7 @@ def make_train(config):
             # Do one "step" of logging, writing the result to a file.
             # Several steps can be run in series using --logging_steps_per_viz to do long rollouts without hitting memory limits
 
-        def _logging_step(runner_state, unused):
+        def _logging_step(runner_state, unused, logging_threads):
             # Visualization rollouts
             runner_state, traj_batch = jax.lax.scan(
                 _env_step_viz, runner_state, None, config['STEPS_PER_VIZ']
@@ -570,28 +570,29 @@ def make_train(config):
             # Callback function for logging hidden states
             def write_rnn_hstate(hstate, scalars, increment=0):
                 # We save to temp files and then append to the target file since numpy apparently cannot write files in append mode for some reason
-                out_filename_hstates = os.path.join(config['OUTPUT_PATH'], 'hstates_' + str(increment) + '.csv')
-                temp_filename = os.path.join(config['OUTPUT_PATH'], 'temp.csv')
-                np.savetxt(temp_filename,
-                           hstate[:, 0, :], delimiter=',')
-                temp_file = open(temp_filename, 'r')
-                out_file_hstates = open(out_filename_hstates, 'a+')
-                out_file_hstates.write(temp_file.read())
-                out_file_hstates.close()
-                temp_file.close()
-                # Then do the same thing for the scalars
-                out_filename_scalars = os.path.join(config['OUTPUT_PATH'], 'scalars_' + str(increment) + '.csv')
-                np.savetxt(temp_filename,
-                           scalars[:, 0, :], delimiter=',', fmt='%f',
-                           header='action,health,food,drink,energy,done,is_sleeping,is_resting,player_position_x,'
-                                  'player_position_y,recover,hunger,thirst,fatigue,light_level,dist_to_melee_l1,melee_on_screen,dist_to_passive_l1,passive_on_screen,episode_id'
-                           )
-                temp_file = open(temp_filename, 'r')
-                out_file_scalars = open(out_filename_scalars, 'a+')
-                out_file_scalars.write(temp_file.read())
-                temp_file.close()
-                out_file_scalars.close()
-                print('Writing log file', out_filename_hstates)
+                for i in range(logging_threads):
+                    out_filename_hstates = os.path.join(config['OUTPUT_PATH'], 'hstates_{}_{}.csv'.format(increment, i))
+                    temp_filename = os.path.join(config['OUTPUT_PATH'], 'temp.csv')
+                    np.savetxt(temp_filename,
+                               hstate[:, i, :], delimiter=',')
+                    temp_file = open(temp_filename, 'r')
+                    out_file_hstates = open(out_filename_hstates, 'a+')
+                    out_file_hstates.write(temp_file.read())
+                    out_file_hstates.close()
+                    temp_file.close()
+                    # Then do the same thing for the scalars
+                    out_filename_scalars = os.path.join(config['OUTPUT_PATH'], 'scalars_{}_{}.csv'.format(increment, i))
+                    np.savetxt(temp_filename,
+                               scalars[:, i, :], delimiter=',', fmt='%f',
+                               header='action,health,food,drink,energy,done,is_sleeping,is_resting,player_position_x,'
+                                      'player_position_y,recover,hunger,thirst,fatigue,light_level,dist_to_melee_l1,melee_on_screen,dist_to_passive_l1,passive_on_screen,episode_id'
+                               )
+                    temp_file = open(temp_filename, 'r')
+                    out_file_scalars = open(out_filename_scalars, 'a+')
+                    out_file_scalars.write(temp_file.read())
+                    temp_file.close()
+                    out_file_scalars.close()
+                    print('Writing log file', out_filename_hstates)
 
             # Reshape logging arrays and concat
             new_shape = actions.shape + (1,)
@@ -636,7 +637,7 @@ def make_train(config):
 
             # Then do iterations of logging
             runner_state, empty = jax.lax.scan(
-                _logging_step, runner_state, None, config['LOGGING_STEPS_PER_VIZ']
+                partial(_logging_step, logging_threads = config["LOGGING_THREADS_PER_VIZ"]), runner_state, None, config['LOGGING_STEPS_PER_VIZ']
             )
 
             return runner_state, metric
@@ -665,15 +666,13 @@ def make_train(config):
         #RE-INIT FOR VAL RUNS
         rng, _rng = jax.random.split(val_rng_key)
         obsv, env_state = env.reset(_rng, env_params)
-        init_hstate = ScannedRNN.initialize_carry(
-            config["NUM_ENVS"], config["LAYER_SIZE"]
-        )
+
         val_runner_state = (
             runner_state[0],
             env_state,
             obsv,
             initial_runner_state[3],
-            init_hstate,
+            runner_state[4],
             rng,
             config['VALIDATION_STEP_OFFSET'] + runner_state[-1],
         )
@@ -681,9 +680,8 @@ def make_train(config):
         # Do validation logging iterations
         # TODO separate command line argument for validation logging step count?
         val_runner_state, empty = jax.lax.scan(
-            _logging_step, val_runner_state, None, config['LOGGING_STEPS_PER_VIZ_VAL']
+            partial(_logging_step, logging_threads = config["LOGGING_THREADS_PER_VIZ_VAL"]), val_runner_state, None, config['LOGGING_STEPS_PER_VIZ_VAL']
         )
-
         return {"runner_state": runner_state, "metric": metric}
 
     return train
@@ -787,6 +785,8 @@ if __name__ == "__main__":
     parser.add_argument('--reward_function', type=str, default='foraging')
     parser.add_argument('--validation_seed', type=int, default=777)
     parser.add_argument('--validation_step_offset', type=int, default=0)
+    parser.add_argument('--logging_threads_per_viz',type=int, default=1)
+    parser.add_argument('--logging_threads_per_viz_val', type=int, default=1)
 
     args, rest_args = parser.parse_known_args(sys.argv[1:])
     if rest_args:
