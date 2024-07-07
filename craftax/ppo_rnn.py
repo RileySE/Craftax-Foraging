@@ -671,7 +671,7 @@ def make_train(config):
             runner_state[0],
             env_state,
             obsv,
-            initial_runner_state[3],
+            runner_state[3],
             runner_state[4],
             rng,
             config['VALIDATION_STEP_OFFSET'] + runner_state[-1],
