@@ -667,12 +667,16 @@ def make_train(config):
         rng, _rng = jax.random.split(val_rng_key)
         obsv, env_state = env.reset(_rng, env_params)
 
+        init_hstate = ScannedRNN.initialize_carry(
+            config["NUM_ENVS"], config["LAYER_SIZE"]
+        )
+
         val_runner_state = (
             runner_state[0],
             env_state,
             obsv,
-            runner_state[3],
-            runner_state[4],
+            jnp.zeros((config["NUM_ENVS"]), dtype=bool),
+            init_hstate,
             rng,
             config['VALIDATION_STEP_OFFSET'] + runner_state[-1],
         )
