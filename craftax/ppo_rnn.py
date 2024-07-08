@@ -663,20 +663,22 @@ def make_train(config):
         # Generate rng from validation-specific random seed
 
         val_rng_key = jax.random.PRNGKey(config["VALIDATION_SEED"])
-        #RE-INIT FOR VAL RUNS
+
         rng, _rng = jax.random.split(val_rng_key)
+
+        #RE-INIT FOR VAL RUNS
         obsv, env_state = env.reset(_rng, env_params)
 
-        init_hstate = ScannedRNN.initialize_carry(
-            config["NUM_ENVS"], config["LAYER_SIZE"]
-        )
+        # init_hstate = ScannedRNN.initialize_carry(
+        #     config["NUM_ENVS"], config["LAYER_SIZE"]
+        # )
 
         val_runner_state = (
             runner_state[0],
             env_state,
             obsv,
-            jnp.zeros((config["NUM_ENVS"]), dtype=bool),
-            init_hstate,
+            jnp.ones((config["NUM_ENVS"]), dtype=bool),
+            runner_state[4],
             rng,
             config['VALIDATION_STEP_OFFSET'] + runner_state[-1],
         )
