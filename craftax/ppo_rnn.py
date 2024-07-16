@@ -638,6 +638,9 @@ def run_ppo(config):
             + "M",
         )
 
+    else:
+        wandb.init(mode="disabled")
+
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_REPEATS"])
 
