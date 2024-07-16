@@ -264,8 +264,8 @@ class VideoPlotWrapper(LogWrapper):
 
         # This needs to leave the jax ecosystem so we use callback
         def callback_func(new_obs, t, done):
-            if self.do_videos:
-                self.vis_renderer.add_frame(new_obs, t, done)
+            #if self.do_videos:
+            self.vis_renderer.add_frame(new_obs, t, done)
 
 
         # Alternative to satisfy jax's cond function
@@ -278,8 +278,30 @@ class VideoPlotWrapper(LogWrapper):
             jax.debug.callback(callback_func, new_obs, state.env_state.env_id, done)
             return 1
 
+
+        #is_new_env_id = jnp.logical_or(self.curr_env_id == -9999, self.n_frames_seen >= 10000000)
+
+
+        #self.n_frames_seen = (self.n_frames_seen + 1) % 10000001
         # TODO disable callback for non-rendered envs, it incurs a huge performance penalty
+        # TODO this equality test isn't working for some reason, it always returns true
+        #is_callback = jnp.logical_and(self.do_videos, self.curr_env_id == this_env_id)
+        #is_callback = self.curr_env_id == this_env_id
+
+        def debug_print(array_of_stuff):
+            for thing in array_of_stuff:
+                print(thing)
+            return np.int32(0)
+
+        this_env_id = env_state.env_id.squeeze()
+        # This is false
+        #is_new_env_id = this_env_id == self.curr_env_id
+        # EVALUATES FALSE BRANCH
+        #self.curr_env_id = jax.lax.select(is_new_env_id, this_env_id, self.curr_env_id)
+        # EVALUATES TRUE BRANCH, WTF
         callback_result = jax.lax.cond(self.do_videos, do_callback, null_func, env_state)
+        #result = jax.pure_callback(debug_print, np.int32(0), is_new_env_id, self.curr_env_id, this_env_id])
+
 
 
         # Add fields to be logged
@@ -306,17 +328,27 @@ class VideoPlotWrapper(LogWrapper):
 
         dists_to_melee = jnp.linalg.norm(env_state.player_position - melee_pos, ord=1, axis = -1)
         dists_to_melee = jnp.where(melee_mask, dists_to_melee, jnp.inf)
-        dist_to_melee = jnp.min(dists_to_melee)
+        closest_melee_idx = jnp.argmin(dists_to_melee)
+        closest_melee_dist_xy = env_state.player_position - melee_pos[closest_melee_idx]
+        melee_on_screen = jnp.logical_and(jnp.abs(closest_melee_dist_xy[0]) <= 5, jnp.abs(closest_melee_dist_xy[1]) <= 4)
+        melee_on_screen = jnp.logical_and(melee_on_screen, melee_mask[closest_melee_idx])
+        dist_to_melee = dists_to_melee[closest_melee_idx]
 
         passive_pos = env_state.passive_mobs.position[env_state.player_level]
         passive_mask = env_state.passive_mobs.mask[env_state.player_level]
 
         dists_to_passive = jnp.linalg.norm(env_state.player_position - passive_pos, ord=1, axis = -1)
         dists_to_passive = jnp.where(passive_mask, dists_to_passive, jnp.inf)
-        dist_to_passive = jnp.min(dists_to_passive)
+        closest_passive_idx = jnp.argmin(dists_to_passive)
+        closest_passive_dist_xy = env_state.player_position - passive_pos[closest_passive_idx]
+        passive_on_screen = jnp.logical_and(jnp.abs(closest_passive_dist_xy[0]) <= 5, jnp.abs(closest_passive_dist_xy[1]) <= 4)
+        passive_on_screen = jnp.logical_and(passive_on_screen, passive_mask[closest_passive_idx])
+        dist_to_passive = dists_to_passive[closest_passive_idx]
 
         info['dist_to_melee_l1'] = dist_to_melee
         info['dist_to_passive_l1'] = dist_to_passive
+        info['melee_on_screen'] = melee_on_screen
+        info['passive_on_screen'] = passive_on_screen
         return obs, state, reward, done, info
 
 

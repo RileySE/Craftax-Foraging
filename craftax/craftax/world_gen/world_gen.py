@@ -552,11 +552,6 @@ def generate_world(rng, params, static_params):
     player_position = jnp.array(
         [static_params.map_size[0] // 2, static_params.map_size[1] // 2]
     )
-
-    # Select whether to do patchy or normal worldgen based on env params
-    # TODO make this work, somehow jax doesn't like this
-    #world_configs = jax.lax.select(static_params.is_patchy, PATCHY_SMOOTHGEN_CONFIGS, ALL_SMOOTHGEN_CONFIGS)
-    #world_configs = PATCHY_SMOOTHGEN_CONFIGS
     world_configs = ALL_SMOOTHGEN_CONFIGS
 
     # Generate smoothgens (overworld, caves, elemental levels, boss level)
