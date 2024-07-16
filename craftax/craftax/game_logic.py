@@ -1672,9 +1672,10 @@ def update_mobs(rng, state, params, static_params):
             hit_bench_or_furnace, projectiles.mask[state.player_level, projectile_index]
         )
 
+        # HACK: Ensure that destroyed furnace and table do not leave behind path terrain (instead is grass)
         new_block = jax.lax.select(
             removing_block,
-            BlockType.PATH.value,
+            BlockType.GRASS.value,
             state.map[state.player_level, position[0], position[1]],
         )
 
