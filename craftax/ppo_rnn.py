@@ -5,7 +5,7 @@ import sys
 # from functools import partial
 import jax
 import jax.numpy as jnp
-# import flax.linen as nn
+import flax.linen as nn
 import numpy as np
 # import optax
 # import time
