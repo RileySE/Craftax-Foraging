@@ -1,15 +1,15 @@
 import argparse
-# import os
+import os
 import sys
-# from math import ceil, sqrt
-# from functools import partial
+from math import ceil, sqrt
+from functools import partial
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
 import numpy as np
-# import optax
-# import time
-#
+import optax
+import time
+
 # from flax.training import orbax_utils
 # from matplotlib import pyplot as plt, animation
 # from orbax.checkpoint import (
