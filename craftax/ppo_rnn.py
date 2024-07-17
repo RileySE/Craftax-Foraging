@@ -18,12 +18,12 @@ from orbax.checkpoint import (
     CheckpointManager,
 )
 
-# import wandb
+import wandb
 # from flax.linen.initializers import constant, orthogonal
 # from typing import Sequence, NamedTuple, Dict
 # from flax.training.train_state import TrainState
-# import distrax
-# import functools
+import distrax
+import functools
 #
 # from craftax.craftax import craftax_state
 # from craftax.environment_base.wrappers import (
