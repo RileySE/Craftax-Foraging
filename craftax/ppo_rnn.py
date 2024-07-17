@@ -28,10 +28,11 @@ import functools
 from craftax.craftax import craftax_state
 from craftax.environment_base.wrappers import (
     LogWrapper,
-    OptimisticResetVecEnvWrapper,
-    AutoResetEnvWrapper,
-    BatchEnvWrapper,
-    VideoPlotWrapper, ReduceActionSpaceWrapper,
+    # OptimisticResetVecEnvWrapper,
+    # AutoResetEnvWrapper,
+    # BatchEnvWrapper,
+    # VideoPlotWrapper,
+    # ReduceActionSpaceWrapper,
 )
 # from craftax.logz.batch_logging import create_log_dict, batch_log
 
