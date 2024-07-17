@@ -4,7 +4,7 @@ import sys
 # from math import ceil, sqrt
 # from functools import partial
 import jax
-# import jax.numpy as jnp
+import jax.numpy as jnp
 # import flax.linen as nn
 import numpy as np
 # import optax
