@@ -10,14 +10,14 @@ import numpy as np
 import optax
 import time
 
-# from flax.training import orbax_utils
-# from matplotlib import pyplot as plt, animation
-# from orbax.checkpoint import (
-#     PyTreeCheckpointer,
-#     CheckpointManagerOptions,
-#     CheckpointManager,
-# )
-#
+from flax.training import orbax_utils
+from matplotlib import pyplot as plt, animation
+from orbax.checkpoint import (
+    PyTreeCheckpointer,
+    CheckpointManagerOptions,
+    CheckpointManager,
+)
+
 # import wandb
 # from flax.linen.initializers import constant, orthogonal
 # from typing import Sequence, NamedTuple, Dict
