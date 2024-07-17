@@ -20,20 +20,20 @@ from orbax.checkpoint import (
 
 import wandb
 from flax.linen.initializers import constant, orthogonal
-# from typing import Sequence, NamedTuple, Dict
+from typing import Sequence, NamedTuple, Dict
 from flax.training.train_state import TrainState
 import distrax
 import functools
 
 from craftax.craftax import craftax_state
-from craftax.environment_base.wrappers import (
-    LogWrapper,
-    OptimisticResetVecEnvWrapper,
-    AutoResetEnvWrapper,
-    BatchEnvWrapper,
-    VideoPlotWrapper, ReduceActionSpaceWrapper,
-)
-from craftax.logz.batch_logging import create_log_dict, batch_log
+# from craftax.environment_base.wrappers import (
+#     LogWrapper,
+#     OptimisticResetVecEnvWrapper,
+#     AutoResetEnvWrapper,
+#     BatchEnvWrapper,
+#     VideoPlotWrapper, ReduceActionSpaceWrapper,
+# )
+# from craftax.logz.batch_logging import create_log_dict, batch_log
 
 #
 # class ScannedRNN(nn.Module):
