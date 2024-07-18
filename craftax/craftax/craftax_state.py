@@ -119,7 +119,6 @@ class EnvState:
 @struct.dataclass
 class EnvParams:
 
-
     max_timesteps: int = 100000
     day_length: int = 300
 
