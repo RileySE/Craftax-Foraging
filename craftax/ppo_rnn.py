@@ -188,6 +188,12 @@ def make_train(config):
     # TODO why do I need to put this wrapper early in the stack? It can't just layer on top
     env_viz = VideoPlotWrapper(env, config['OUTPUT_PATH'], config['FRAMES_PER_FILE'], not config['NO_VIDEOS'])
 
+    if config["CURRICULUM"]:
+        env = CurriculumWrapper(env, num_envs=config["NUM_ENVS"],
+                                num_steps=config["NUM_STEPS"],
+                                num_levels=config["NUM_LEVELS"],
+                                total_timesteps=config["TOTAL_TIMESTEPS"])
+
     env = LogWrapper(env)
 
     if not os.path.isdir(config['OUTPUT_PATH']):
