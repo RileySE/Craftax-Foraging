@@ -112,11 +112,14 @@ class EnvState:
 
     timestep: int
 
-    fractal_noise_angles: tuple[int, int, int, int] = (None, None, None, None)
+    level: int
 
+    fractal_noise_angles: tuple[int, int, int, int] = (None, None, None, None)
 
 @struct.dataclass
 class EnvParams:
+
+
     max_timesteps: int = 100000
     day_length: int = 300
 
