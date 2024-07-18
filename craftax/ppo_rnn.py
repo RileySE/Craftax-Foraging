@@ -31,7 +31,9 @@ from craftax.environment_base.wrappers import (
     OptimisticResetVecEnvWrapper,
     AutoResetEnvWrapper,
     BatchEnvWrapper,
-    VideoPlotWrapper, ReduceActionSpaceWrapper,
+    VideoPlotWrapper,
+    ReduceActionSpaceWrapper,
+    CurriculumWrapper
 )
 from craftax.logz.batch_logging import create_log_dict, batch_log
 
@@ -748,6 +750,7 @@ if __name__ == "__main__":
         type=int,
         default=1024,
     )
+    parser.add_argument("--num_levels", type=int, default=10)
     parser.add_argument("--total_timesteps", type=int, default=1e9)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--num_steps", type=int, default=64)
@@ -793,7 +796,7 @@ if __name__ == "__main__":
     parser.add_argument('--validation_step_offset', type=int, default=0)
     parser.add_argument('--logging_threads_per_viz',type=int, default=1)
     parser.add_argument('--logging_threads_per_viz_val', type=int, default=1)
-
+    parser.add_argument('--curriculum', type=bool, default=True)
     args, rest_args = parser.parse_known_args(sys.argv[1:])
     if rest_args:
         raise ValueError(f"Unknown args {rest_args}")
