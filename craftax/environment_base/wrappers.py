@@ -1,4 +1,4 @@
-from math import ceil, sqrt
+from math import ceil, sqrt, floor
 
 import jax
 import jax.numpy as jnp
@@ -22,6 +22,40 @@ class GymnaxWrapper(object):
     # provide proxy access to regular attributes of wrapped object
     def __getattr__(self, name):
         return getattr(self._env, name)
+
+class CurriculumWrapper(GymnaxWrapper):
+    """Schedules curriculum"""
+
+    def __init__(self, env: environment.Environment,
+                 num_envs: int,
+                 num_steps: int,
+                 num_levels: int,
+                 total_timesteps: int
+                 ):
+        super().__init__(env)
+
+        self.num_envs = num_envs
+        self.num_steps = num_steps
+        self.num_levels = num_levels
+        self.total_timesteps = total_timesteps
+        self.timestep = 0
+
+    def step(
+            self,
+            key: chex.PRNGKey,
+            state: environment.EnvState,
+            action: Union[int, float],
+            params: Optional[environment.EnvParams] = None,
+    ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
+
+        level = floor(self.timestep * self.num_levels / self.total_timesteps) + 1
+        state = state.replace(level=level)
+
+        obs, state, reward, done, info = self._env.step(key, state, action, params)
+
+        self.timestep += (self.num_envs * self.num_steps)
+
+        return obs, state, reward, done, info
 
 
 class BatchEnvWrapper(GymnaxWrapper):
