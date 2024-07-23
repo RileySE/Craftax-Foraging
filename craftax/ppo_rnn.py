@@ -119,7 +119,6 @@ class ActorCriticRNN(nn.Module):
 
         return hidden, pi, jnp.squeeze(critic, axis=-1)
 
-
 class Transition(NamedTuple):
     done: jnp.ndarray
     action: jnp.ndarray
@@ -188,12 +187,6 @@ def make_train(config):
     # TODO why do I need to put this wrapper early in the stack? It can't just layer on top
     env_viz = VideoPlotWrapper(env, config['OUTPUT_PATH'], config['FRAMES_PER_FILE'], not config['NO_VIDEOS'])
 
-    if config["CURRICULUM"]:
-        env = CurriculumWrapper(env, num_envs=config["NUM_ENVS"],
-                                num_steps=config["NUM_STEPS"],
-                                num_levels=config["NUM_LEVELS"],
-                                total_timesteps=config["TOTAL_TIMESTEPS"])
-
     env = LogWrapper(env)
 
     if not os.path.isdir(config['OUTPUT_PATH']):
@@ -215,6 +208,12 @@ def make_train(config):
         env = BatchEnvWrapper(env, num_envs=config["NUM_ENVS"])
         env_viz = AutoResetEnvWrapper(env_viz)
         env_viz = BatchEnvWrapper(env_viz, num_envs=config["NUM_ENVS"])
+
+    if config["CURRICULUM"]:
+        env = CurriculumWrapper(env, num_envs=config["NUM_ENVS"],
+                                num_steps=config["NUM_STEPS"],
+                                num_levels=config["NUM_UPDATES"],
+                                num_updates=config["NUM_UPDATES"])
 
     def linear_schedule(count):
         frac = (
@@ -294,7 +293,7 @@ def make_train(config):
                 # STEP ENV
                 rng, _rng = jax.random.split(rng)
                 obsv, env_state, reward, done, info = env.step(
-                    _rng, env_state, action, env_params
+                    _rng, env_state, action, update_step, env_params
                 )
 
                 transition = Transition(
@@ -756,7 +755,7 @@ if __name__ == "__main__":
         type=int,
         default=1024,
     )
-    parser.add_argument("--num_levels", type=int, default=10)
+    parser.add_argument("--num_levels", type=int, default=1e8)
     parser.add_argument("--total_timesteps", type=int, default=1e9)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--num_steps", type=int, default=64)
@@ -802,7 +801,7 @@ if __name__ == "__main__":
     parser.add_argument('--validation_step_offset', type=int, default=0)
     parser.add_argument('--logging_threads_per_viz',type=int, default=1)
     parser.add_argument('--logging_threads_per_viz_val', type=int, default=1)
-    parser.add_argument('--curriculum', type=bool, default=True)
+    parser.add_argument('--curriculum', action=argparse.BooleanOptionalAction, default=True)
     args, rest_args = parser.parse_known_args(sys.argv[1:])
     if rest_args:
         raise ValueError(f"Unknown args {rest_args}")
