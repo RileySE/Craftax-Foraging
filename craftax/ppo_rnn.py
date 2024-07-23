@@ -65,7 +65,6 @@ class ScannedRNN(nn.Module):
         cell = nn.GRUCell(features=hidden_size)
         return cell.initialize_carry(jax.random.PRNGKey(0), (batch_size, hidden_size))
 
-
 class ActorCriticRNN(nn.Module):
     action_dim: Sequence[int]
     config: Dict
@@ -133,6 +132,7 @@ def make_train(config):
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"] // config['UPDATES_PER_VIZ']
     )
+    print(config["NUM_UPDATES"])
     # HACK: We have to use the original formula for num_updates for LR annealing,
     # modifying it breaks training due to its effect on LR scheduling
     config['NUM_UPDATES_FOR_LR_ANNEALING'] = (
