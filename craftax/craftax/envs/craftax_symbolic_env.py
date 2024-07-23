@@ -38,6 +38,7 @@ class CraftaxSymbolicEnv(EnvironmentNoAutoReset):
         done = self.is_terminal(state, params)
         info = compute_score(state, done)
         info["discount"] = self.discount(state, params)
+        info["level"] = state.level
 
         return (
             lax.stop_gradient(self.get_obs(state)),
