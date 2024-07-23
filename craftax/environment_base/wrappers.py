@@ -23,39 +23,6 @@ class GymnaxWrapper(object):
     def __getattr__(self, name):
         return getattr(self._env, name)
 
-class CurriculumWrapper(GymnaxWrapper):
-    """Schedules curriculum"""
-
-    def __init__(self, env: environment.Environment,
-                 num_envs: int,
-                 num_steps: int,
-                 num_levels: int,
-                 total_timesteps: int
-                 ):
-        super().__init__(env)
-
-        self.num_envs = num_envs
-        self.num_steps = num_steps
-        self.num_levels = num_levels
-        self.total_timesteps = total_timesteps
-        self.timestep = 0
-
-    def step(
-            self,
-            key: chex.PRNGKey,
-            state: environment.EnvState,
-            action: Union[int, float],
-            params: Optional[environment.EnvParams] = None,
-    ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
-
-        level = floor(self.timestep * self.num_levels / self.total_timesteps) + 1
-        state = state.replace(level=level)
-
-        obs, state, reward, done, info = self._env.step(key, state, action, params)
-
-        self.timestep += (self.num_envs * self.num_steps)
-
-        return obs, state, reward, done, info
 
 
 class BatchEnvWrapper(GymnaxWrapper):
@@ -221,7 +188,7 @@ class LogWrapper(GymnaxWrapper):
     def reset(
         self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
     ) -> Tuple[chex.Array, environment.EnvState]:
-        obs, env_state = self._env.reset(key, params)
+        obs, env_state = self._env.reset(key, params
         state = LogEnvState(env_state, 0.0, 0, 0.0, 0, 0)
 
         return obs, state
@@ -253,7 +220,7 @@ class LogWrapper(GymnaxWrapper):
         info["returned_episode_lengths"] = state.returned_episode_lengths
         info["timestep"] = state.timestep
         info["returned_episode"] = done
-
+        info["level"] = env_state.level
         return obs, state, reward, done, info
 
 
@@ -351,7 +318,7 @@ class VideoPlotWrapper(LogWrapper):
         info['player_position_y'] = env_state.player_position[1]
         info['recover'] = env_state.player_recover
         info['hunger'] = env_state.player_hunger
-        info['thirst'] = env_state.player_thirst
+        info['thirst'] = env_state.player_thirst        # print("A " + str(type(log_state)))
         info['fatigue'] = env_state.player_fatigue
         info['light_level'] = env_state.light_level
         # TODO why is this an array? It's supposed to be an int...
@@ -473,3 +440,52 @@ class VisualizationRenderer(object):
         self.fig = plt.figure(figsize=(ceil(self.obs_y / 100), ceil(self.obs_x / 100)))
         self.axs = self.fig.subplots(self.side_length, self.side_length, squeeze=(not self.draw_only_first))
         self.n_videos_logged += 1
+
+class CurriculumWrapper(GymnaxWrapper):
+    """Schedules curriculum"""
+
+    def __init__(self, env: environment.Environment,
+                 num_envs: int,
+                 num_steps: int,
+                 num_levels: int,
+                 num_updates: int
+                 ):
+        super().__init__(env)
+
+        self.num_envs = num_envs
+        self.num_steps = num_steps
+        self.num_levels = num_levels
+        self.total_steps = num_updates
+
+    def step(
+            self,
+            key: chex.PRNGKey,
+            log_state: LogEnvState,
+            action: Union[int, float],
+            update_step: int,
+            params: Optional[environment.EnvParams] = None,
+    ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
+
+        obs, log_state, reward, done, info = self._env.step(key, log_state, action, params)
+
+        level = jnp.floor(update_step * self.num_levels / self.total_steps)
+        level = jnp.full((self.num_envs,), level, dtype=jnp.int32)
+        env_state = log_state.env_state
+        env_state = env_state.replace(level=level)
+        log_state = log_state.replace(env_state=env_state)
+
+        return obs, log_state, reward, done, info
+
+    def reset(
+        self, key, params: Optional[environment.EnvParams] = None
+    ) -> Tuple[chex.Array, environment.EnvState]:
+
+        obsv, log_state = self._env.reset(key, params)
+
+        level = jnp.floor(log_state.timestep * self.num_levels / self.total_steps)
+        level = jnp.full((self.num_envs,), level, dtype=jnp.int32)
+        env_state = log_state.env_state
+        env_state = env_state.replace(level=level)
+        log_state = log_state.replace(env_state=env_state)
+
+        return obsv, log_state
