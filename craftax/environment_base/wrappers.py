@@ -446,16 +446,16 @@ class CurriculumWrapper(GymnaxWrapper):
 
     def __init__(self, env: environment.Environment,
                  num_envs: int,
-                 num_steps: int,
                  num_levels: int,
-                 num_updates: int
+                 num_updates: int,
+                 use_curriculum: bool,
                  ):
         super().__init__(env)
 
         self.num_envs = num_envs
-        self.num_steps = num_steps
         self.num_levels = num_levels
         self.total_steps = num_updates
+        self.use_curriculum = use_curriculum
 
     def step(
             self,
@@ -468,24 +468,22 @@ class CurriculumWrapper(GymnaxWrapper):
 
         obs, log_state, reward, done, info = self._env.step(key, log_state, action, params)
 
-        level = jnp.floor(update_step * self.num_levels / self.total_steps)
-        level = jnp.full((self.num_envs,), level, dtype=jnp.int32)
-        env_state = log_state.env_state
-        env_state = env_state.replace(level=level)
-        log_state = log_state.replace(env_state=env_state)
+        if self.use_curriculum:
+            # Update the level
+            level = jnp.floor(update_step * self.num_levels / self.total_steps)
+            batched_level = jnp.full((self.num_envs,), level, dtype=jnp.int32)
+            env_state = log_state.env_state
+            env_state = env_state.replace(level=batched_level)
+            log_state = log_state.replace(env_state=env_state)
+
+            # Update spawn percentages
+            env_state = log_state.env_state
+            spawn_chances = env_state.floor_mob_spawn_chance
+            spawn_chances.at[0].set(jnp.array([.1,  # passive
+                level / self.num_levels * .04,  # melee
+                level / self.num_levels * .1,  # ranged
+                0]))  # melee-night
+            env_state = env_state.replace(floor_mob_spawn_chance=spawn_chances)
+            log_state = log_state.replace(env_state=env_state)
 
         return obs, log_state, reward, done, info
-
-    def reset(
-        self, key, params: Optional[environment.EnvParams] = None
-    ) -> Tuple[chex.Array, environment.EnvState]:
-
-        obsv, log_state = self._env.reset(key, params)
-
-        level = jnp.floor(log_state.timestep * self.num_levels / self.total_steps)
-        level = jnp.full((self.num_envs,), level, dtype=jnp.int32)
-        env_state = log_state.env_state
-        env_state = env_state.replace(level=level)
-        log_state = log_state.replace(env_state=env_state)
-
-        return obsv, log_state
