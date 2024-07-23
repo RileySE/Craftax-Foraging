@@ -37,6 +37,9 @@ from craftax.environment_base.wrappers import (
 )
 from craftax.logz.batch_logging import create_log_dict, batch_log
 
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
 
 class ScannedRNN(nn.Module):
     @functools.partial(
@@ -132,7 +135,6 @@ def make_train(config):
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"] // config['UPDATES_PER_VIZ']
     )
-    print(config["NUM_UPDATES"])
     # HACK: We have to use the original formula for num_updates for LR annealing,
     # modifying it breaks training due to its effect on LR scheduling
     config['NUM_UPDATES_FOR_LR_ANNEALING'] = (
@@ -209,11 +211,12 @@ def make_train(config):
         env_viz = AutoResetEnvWrapper(env_viz)
         env_viz = BatchEnvWrapper(env_viz, num_envs=config["NUM_ENVS"])
 
-    if config["CURRICULUM"]:
-        env = CurriculumWrapper(env, num_envs=config["NUM_ENVS"],
-                                num_steps=config["NUM_STEPS"],
-                                num_levels=config["NUM_UPDATES"],
-                                num_updates=config["NUM_UPDATES"])
+
+    env = CurriculumWrapper(env, num_envs=config["NUM_ENVS"],
+                            num_levels=10,
+                            # num_levels=config["NUM_UPDATES"] * config["UPDATES_PER_VIZ"] * config["NUM_STEPS"] / 10,
+                            num_updates=config["NUM_UPDATES"] * config["UPDATES_PER_VIZ"] * config["NUM_STEPS"],
+                            use_curriculum=config["USE_CURRICULUM"])
 
     def linear_schedule(count):
         frac = (
@@ -755,7 +758,7 @@ if __name__ == "__main__":
         type=int,
         default=1024,
     )
-    parser.add_argument("--num_levels", type=int, default=1e8)
+    parser.add_argument("--num_levels", type=int, default=10)
     parser.add_argument("--total_timesteps", type=int, default=1e9)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--num_steps", type=int, default=64)
@@ -801,7 +804,7 @@ if __name__ == "__main__":
     parser.add_argument('--validation_step_offset', type=int, default=0)
     parser.add_argument('--logging_threads_per_viz',type=int, default=1)
     parser.add_argument('--logging_threads_per_viz_val', type=int, default=1)
-    parser.add_argument('--curriculum', action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--use_curriculum', action=argparse.BooleanOptionalAction, default=True)
     args, rest_args = parser.parse_known_args(sys.argv[1:])
     if rest_args:
         raise ValueError(f"Unknown args {rest_args}")
