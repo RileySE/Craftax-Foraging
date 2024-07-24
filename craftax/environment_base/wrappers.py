@@ -447,14 +447,14 @@ class CurriculumWrapper(GymnaxWrapper):
     def __init__(self, env: environment.Environment,
                  num_envs: int,
                  num_levels: int,
-                 num_updates: int,
+                 num_steps: int,
                  use_curriculum: bool,
                  ):
         super().__init__(env)
 
         self.num_envs = num_envs
         self.num_levels = num_levels
-        self.total_steps = num_updates
+        self.total_steps = num_steps
         self.use_curriculum = use_curriculum
 
     def step(
@@ -470,19 +470,18 @@ class CurriculumWrapper(GymnaxWrapper):
 
         if self.use_curriculum:
             # Update the level
-            level = jnp.floor(update_step * self.num_levels / self.total_steps)
-            batched_level = jnp.full((self.num_envs,), level, dtype=jnp.int32)
+            level = jnp.floor(update_step * self.num_levels / self.total_steps).astype(jnp.int32)
+            batched_level = jnp.full((self.num_envs,), level)
             env_state = log_state.env_state
             env_state = env_state.replace(level=batched_level)
             log_state = log_state.replace(env_state=env_state)
 
             # Update spawn percentages
-            env_state = log_state.env_state
             spawn_chances = env_state.floor_mob_spawn_chance
-            spawn_chances.at[0].set(jnp.array([.1,  # passive
+            spawn_chances.at[:,0].set(jnp.array([.1,  # passive
                 level / self.num_levels * .04,  # melee
                 level / self.num_levels * .1,  # ranged
-                0]))  # melee-night
+                .0]))  # melee-night
             env_state = env_state.replace(floor_mob_spawn_chance=spawn_chances)
             log_state = log_state.replace(env_state=env_state)
 
