@@ -37,9 +37,6 @@ from craftax.environment_base.wrappers import (
 )
 from craftax.logz.batch_logging import create_log_dict, batch_log
 
-import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-
 
 class ScannedRNN(nn.Module):
     @functools.partial(
@@ -133,16 +130,19 @@ class Transition(NamedTuple):
 
 def make_train(config):
     config["NUM_UPDATES"] = (
-        config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"] // config['UPDATES_PER_VIZ']
+        config["TOTAL_TIMESTEPS"] // config["NUM_ENV_STEPS"] // config["NUM_ENVS"] // config['UPDATES_PER_VIZ']
     )
+
+    config["NUM_LOG_STEPS"] = config["NUM_UPDATES"] * config["UPDATES_PER_VIZ"] * config["NUM_ENV_STEPS"]
+
     # HACK: We have to use the original formula for num_updates for LR annealing,
     # modifying it breaks training due to its effect on LR scheduling
     config['NUM_UPDATES_FOR_LR_ANNEALING'] = (
-        config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
+        config["TOTAL_TIMESTEPS"] // config["NUM_ENV_STEPS"] // config["NUM_ENVS"]
     )
 
     config["MINIBATCH_SIZE"] = (
-        config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
+        config["NUM_ENVS"] * config["NUM_ENV_STEPS"] // config["NUM_MINIBATCHES"]
     )
 
     # Define static params, modify based on command line flags and pass to env object to hold during runtime
@@ -211,12 +211,13 @@ def make_train(config):
         env_viz = AutoResetEnvWrapper(env_viz)
         env_viz = BatchEnvWrapper(env_viz, num_envs=config["NUM_ENVS"])
 
-
     env = CurriculumWrapper(env, num_envs=config["NUM_ENVS"],
+                            # num_levels=10,
                             num_levels=10,
-                            # num_levels=config["NUM_UPDATES"] * config["UPDATES_PER_VIZ"] * config["NUM_STEPS"] / 10,
-                            num_updates=config["NUM_UPDATES"] * config["UPDATES_PER_VIZ"] * config["NUM_STEPS"],
+                            num_steps=config["NUM_LOG_STEPS"],
                             use_curriculum=config["USE_CURRICULUM"])
+
+
 
     def linear_schedule(count):
         frac = (
@@ -315,7 +316,7 @@ def make_train(config):
 
             initial_hstate = runner_state[-3]
             runner_state, traj_batch = jax.lax.scan(
-                _env_step, runner_state, None, config["NUM_STEPS"]
+                _env_step, runner_state, None, config["NUM_ENV_STEPS"]
             )
 
             # CALCULATE ADVANTAGE
@@ -761,7 +762,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_levels", type=int, default=10)
     parser.add_argument("--total_timesteps", type=int, default=1e9)
     parser.add_argument("--lr", type=float, default=2e-4)
-    parser.add_argument("--num_steps", type=int, default=64)
+    parser.add_argument("--num_env_steps", type=int, default=64)
     parser.add_argument("--update_epochs", type=int, default=4)
     parser.add_argument("--num_minibatches", type=int, default=8)
     parser.add_argument("--gamma", type=float, default=0.99)

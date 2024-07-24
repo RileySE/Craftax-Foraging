@@ -90,7 +90,7 @@ def batch_log(update_step, log, config):
             elif len(log_times) > 1:
                 dt = log_times[-1] - log_times[-2]
                 steps_between_updates = (
-                    config["NUM_STEPS"] * config["NUM_ENVS"] * config["NUM_REPEATS"]
+                    config["NUM_ENV_STEPS"] * config["NUM_ENVS"] * config["NUM_REPEATS"]
                 )
                 sps = steps_between_updates / dt
                 agg_logs["sps"] = sps
