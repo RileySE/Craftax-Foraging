@@ -212,10 +212,9 @@ def make_train(config):
         env_viz = BatchEnvWrapper(env_viz, num_envs=config["NUM_ENVS"])
 
     env = CurriculumWrapper(env, num_envs=config["NUM_ENVS"],
-                            # num_levels=10,
                             num_levels=10,
                             num_steps=config["NUM_LOG_STEPS"],
-                            use_curriculum=config["USE_CURRICULUM"])
+                            use_curriculum=config["CURRICULUM"])
 
 
 
@@ -805,7 +804,7 @@ if __name__ == "__main__":
     parser.add_argument('--validation_step_offset', type=int, default=0)
     parser.add_argument('--logging_threads_per_viz',type=int, default=1)
     parser.add_argument('--logging_threads_per_viz_val', type=int, default=1)
-    parser.add_argument('--use_curriculum', action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--curriculum', action=argparse.BooleanOptionalAction, default=True)
     args, rest_args = parser.parse_known_args(sys.argv[1:])
     if rest_args:
         raise ValueError(f"Unknown args {rest_args}")
