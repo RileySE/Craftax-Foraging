@@ -115,7 +115,7 @@ class EnvState:
         default_factory=lambda: jnp.array(
             [
                 # (passive, melee, ranged, melee-night)
-                jnp.array([0.1, 0.04, 0.1, 0.1]),  # Floor 0 (overworld)
+                jnp.array([0.1, 0.32, 0.8, 0.2]),  # Floor 0 (overworld)
                 jnp.array([0.1, 0.06, 0.05, 0.0]),  # Floor 1 (gnomish mines)
                 jnp.array([0.1, 0.06, 0.05, 0.0]),  # Floor 2 (dungeon)
                 jnp.array([0.1, 0.06, 0.05, 0.0]),  # Floor 3 (sewers)
