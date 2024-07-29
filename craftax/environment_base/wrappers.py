@@ -466,8 +466,6 @@ class CurriculumWrapper(GymnaxWrapper):
             params: Optional[environment.EnvParams] = None,
     ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
 
-        obs, log_state, reward, done, info = self._env.step(key, log_state, action, params)
-
         if self.use_curriculum:
             # Update the level
             level = jnp.floor(update_step * self.num_levels / self.total_steps).astype(jnp.int32)
@@ -477,12 +475,25 @@ class CurriculumWrapper(GymnaxWrapper):
             log_state = log_state.replace(env_state=env_state)
 
             # Update spawn percentages
-            spawn_chances = env_state.floor_mob_spawn_chance
-            spawn_chances.at[:,0].set(jnp.array([.1,  # passive
-                level / self.num_levels * .04,  # melee
-                level / self.num_levels * .1,  # ranged
-                .0]))  # melee-night
-            env_state = env_state.replace(floor_mob_spawn_chance=spawn_chances)
+            melee_spawn_chance = level / self.num_levels * .4
+            ranged_spawn_chance = level / self.num_levels * .5
+            spawn_chances = jnp.array(
+            [
+                jnp.array([0.1, melee_spawn_chance, ranged_spawn_chance, 0.0]),
+                jnp.array([0.1, 0.06, 0.05, 0.0]),
+                jnp.array([0.1, 0.06, 0.05, 0.0]),
+                jnp.array([0.1, 0.06, 0.05, 0.0]),
+                jnp.array([0.1, 0.06, 0.05, 0.0]),
+                jnp.array([0.1, 0.06, 0.05, 0.0]),
+                jnp.array([0.1, 0.06, 0.05, 0.0]),
+                jnp.array([0.0, 0.06, 0.05, 0.0]),
+                jnp.array([0.1, 0.06, 0.05, 0.0]),
+            ])
+            batched_spawn_chances = jnp.full((self.num_envs, 9, 4), spawn_chances)
+            env_state = env_state.replace(floor_mob_spawn_chance=batched_spawn_chances)
             log_state = log_state.replace(env_state=env_state)
+
+        obs, log_state, reward, done, info = self._env.step(key, log_state, action, params)
+
 
         return obs, log_state, reward, done, info
