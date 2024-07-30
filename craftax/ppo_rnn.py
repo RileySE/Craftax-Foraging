@@ -133,7 +133,7 @@ def make_train(config):
         config["TOTAL_TIMESTEPS"] // config["NUM_ENV_STEPS"] // config["NUM_ENVS"] // config['UPDATES_PER_VIZ']
     )
 
-    config["NUM_LOG_STEPS"] = config["NUM_UPDATES"] * config["UPDATES_PER_VIZ"] * config["NUM_ENV_STEPS"]
+    config["NUM_LOG_STEPS"] = config["NUM_UPDATES"] * config["UPDATES_PER_VIZ"]
 
     # HACK: We have to use the original formula for num_updates for LR annealing,
     # modifying it breaks training due to its effect on LR scheduling
@@ -758,7 +758,7 @@ if __name__ == "__main__":
         type=int,
         default=1024,
     )
-    parser.add_argument("--num_levels", type=int, default=10)
+    parser.add_argument("--num_levels", type=int, default=5)
     parser.add_argument("--total_timesteps", type=int, default=1e9)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--num_env_steps", type=int, default=64)
