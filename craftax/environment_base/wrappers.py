@@ -457,6 +457,7 @@ class CurriculumWrapper(GymnaxWrapper):
         self.total_steps = num_steps
         self.use_curriculum = use_curriculum
 
+    @partial(jax.jit, static_argnums=(0, 5))
     def step(
             self,
             key: chex.PRNGKey,
@@ -466,34 +467,37 @@ class CurriculumWrapper(GymnaxWrapper):
             params: Optional[environment.EnvParams] = None,
     ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
 
-        if self.use_curriculum:
-            # Update the level
-            level = jnp.floor(update_step * self.num_levels / self.total_steps).astype(jnp.int32)
-            batched_level = jnp.full((self.num_envs,), level)
+        def update_curriculum(log_state, update_step):
+            level = jnp.floor(update_step * self.num_levels / self.total_steps)
+            batched_level = jnp.full((self.num_envs,), level, dtype=jnp.int32)
             env_state = log_state.env_state
             env_state = env_state.replace(level=batched_level)
             log_state = log_state.replace(env_state=env_state)
 
-            # Update spawn percentages
-            melee_spawn_chance = level / self.num_levels * .4
-            ranged_spawn_chance = level / self.num_levels * .5
-            spawn_chances = jnp.array(
-            [
-                jnp.array([0.1, melee_spawn_chance, ranged_spawn_chance, 0.0]),
-                jnp.array([0.1, 0.06, 0.05, 0.0]),
-                jnp.array([0.1, 0.06, 0.05, 0.0]),
-                jnp.array([0.1, 0.06, 0.05, 0.0]),
-                jnp.array([0.1, 0.06, 0.05, 0.0]),
-                jnp.array([0.1, 0.06, 0.05, 0.0]),
-                jnp.array([0.1, 0.06, 0.05, 0.0]),
-                jnp.array([0.0, 0.06, 0.05, 0.0]),
-                jnp.array([0.1, 0.06, 0.05, 0.0]),
+            melee_spawn_chance = level / self.num_levels * 0.4
+            ranged_spawn_chance = level / self.num_levels * 0.5
+            spawn_chances = jnp.array([
+                [0.1, melee_spawn_chance, ranged_spawn_chance, 0.0],
+                [0.1, 0.06, 0.05, 0.0],
+                [0.1, 0.06, 0.05, 0.0],
+                [0.1, 0.06, 0.05, 0.0],
+                [0.1, 0.06, 0.05, 0.0],
+                [0.1, 0.06, 0.05, 0.0],
+                [0.1, 0.06, 0.05, 0.0],
+                [0.0, 0.06, 0.05, 0.0],
+                [0.1, 0.06, 0.05, 0.0],
             ])
-            batched_spawn_chances = jnp.full((self.num_envs, 9, 4), spawn_chances)
+            batched_spawn_chances = jnp.tile(spawn_chances, (self.num_envs, 1, 1))
             env_state = env_state.replace(floor_mob_spawn_chance=batched_spawn_chances)
-            log_state = log_state.replace(env_state=env_state)
+            return log_state.replace(env_state=env_state)
+
+        log_state = jax.lax.cond(
+            self.use_curriculum,
+            lambda ls: update_curriculum(ls, update_step),
+            lambda ls: ls,
+            log_state
+        )
 
         obs, log_state, reward, done, info = self._env.step(key, log_state, action, params)
-
 
         return obs, log_state, reward, done, info
