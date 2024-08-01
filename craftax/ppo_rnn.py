@@ -212,7 +212,7 @@ def make_train(config):
         env_viz = BatchEnvWrapper(env_viz, num_envs=config["NUM_ENVS"])
 
     env = CurriculumWrapper(env, num_envs=config["NUM_ENVS"],
-                            num_levels=10,
+                            num_levels=config["NUM_LEVELS"],
                             num_steps=config["NUM_LOG_STEPS"],
                             use_curriculum=config["CURRICULUM"])
 
@@ -227,6 +227,8 @@ def make_train(config):
         return config["LR"] * frac
 
     def train(rng):
+
+        jax.debug.print('Training')
         # INIT NETWORK
         if config['FULL_ACTION_SPACE']:
             action_space_size = env.action_space(env_params).n
@@ -539,7 +541,7 @@ def make_train(config):
                 done,
                 hstate,
                 rng,
-                update_step + 1,
+                update_step,
             )
             return runner_state, transition
 
@@ -581,7 +583,7 @@ def make_train(config):
             def write_rnn_hstate(hstate, scalars, increment=0):
                 # We save to temp files and then append to the target file since numpy apparently cannot write files in append mode for some reason
                 for i in range(logging_threads):
-                    out_filename_hstates = os.path.join(config['OUTPUT_PATH'], 'hstates_{}_{}.csv'.format(increment, i))
+                    out_filename_hstates = os.path.join(config['OUTPUT_PATH'], str(config["curriculum"]), 'hstates_{}_{}.csv'.format(increment, i))
                     temp_filename = os.path.join(config['OUTPUT_PATH'], 'temp.csv')
                     np.savetxt(temp_filename,
                                hstate[:, i, :], delimiter=',')
@@ -591,7 +593,7 @@ def make_train(config):
                     out_file_hstates.close()
                     temp_file.close()
                     # Then do the same thing for the scalars
-                    out_filename_scalars = os.path.join(config['OUTPUT_PATH'], 'scalars_{}_{}.csv'.format(increment, i))
+                    out_filename_scalars = os.path.join(config['OUTPUT_PATH'], str(config["curriculum"]), 'scalars_{}_{}.csv'.format(increment, i))
                     np.savetxt(temp_filename,
                                scalars[:, i, :], delimiter=',', fmt='%f',
                                header='action,health,food,drink,energy,done,is_sleeping,is_resting,player_position_x,'
