@@ -651,7 +651,7 @@ def generate_world(rng, params, static_params):
     rng, _rng = jax.random.split(rng)
 
     state = EnvState(
-        level=1,
+        level=jnp.asarray(1, dtype=jnp.int32),
         env_id=jax.random.randint(rng, shape=(1,), minval=0, maxval=999999),
         map=map,
         item_map=item_map,
