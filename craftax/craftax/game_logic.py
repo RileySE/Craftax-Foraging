@@ -3110,23 +3110,27 @@ def craftax_step(rng, state, action, params, static_params):
     # Adding reward terms for keeping food, drink, energy, above 50%
     #food_reward = jnp.clip(state.player_food - init_food, -1., 1.) / (init_food + 1.)
     #food_reward = 1 - (state.player_food / get_max_food(state))
+    vanilla_food_reward = state.player_food - init_food
     food_reward = jax.lax.select(state.player_food / get_max_food(state) > 0.5, 0.1, -0.1)
     #food_reward = jax.lax.select(state.player_food > 0., 0.1, -0.1)
 
     #drink_reward = jnp.clip(state.player_drink - init_drink, -1., 1.) / (init_drink + 1.)
     #drink_reward = (state.player_drink / get_max_drink(state) - 0.5)
+    vanilla_drink_reward = state.player_drink - init_drink
     drink_reward = jax.lax.select(state.player_drink / get_max_drink(state) > 0.5, 0.1, -0.1)
     #drink_reward = jax.lax.select(state.player_drink > 0., 0.1, -0.1)
 
     #energy_reward = jnp.clip(state.player_energy - init_energy, -1., 1.) / (init_energy + 1.)
     #energy_reward = (state.player_energy / get_max_energy(state) - 0.5)
+    vanilla_energy_reward = state.player_energy - init_energy
     energy_reward = jax.lax.select(state.player_energy / get_max_energy(state) > 0.5, 0.1, -0.1)
     #energy_reward = jax.lax.select(state.player_energy > 0., 0.1, -0.1)
 
     vanilla_reward = achievement_reward + vanilla_health_reward
     foraging_reward = health_reward + food_reward + drink_reward + energy_reward + alive_reward
+    foraging_instant_reward = vanilla_health_reward + vanilla_food_reward + vanilla_drink_reward + vanilla_energy_reward
     reward = jax.lax.select(static_params.reward_func == 'foraging', foraging_reward, vanilla_reward)
-
+    reward = jax.lax.select(static_params.reward_func == 'foraging_instant', foraging_instant_reward, reward)
 
     rng, _rng = jax.random.split(rng)
 
