@@ -13,6 +13,8 @@ def create_log_dict(info, config):
         "episode_return": info["returned_episode_returns"],
         "episode_length": info["returned_episode_lengths"],
         "level": info["level"],
+        "num_melee_mobs": info["num_melee_mobs"],
+        "num_ranged_mobs": info["num_ranged_mobs"],
         #'hidden_state': info['hidden_state'],
     }
 

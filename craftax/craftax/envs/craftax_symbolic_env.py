@@ -39,6 +39,8 @@ class CraftaxSymbolicEnv(EnvironmentNoAutoReset):
         info = compute_score(state, done)
         info["discount"] = self.discount(state, params)
         info["level"] = state.level
+        info["num_melee_mobs"] = state.melee_mobs.mask[state.player_level].sum()
+        info["num_ranged_mobs"] = state.ranged_mobs.mask[state.player_level].sum()
 
         return (
             lax.stop_gradient(self.get_obs(state)),
