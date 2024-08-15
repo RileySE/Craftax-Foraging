@@ -12,6 +12,8 @@ from craftax.environment_base.util import load_compressed_pickle, save_compresse
 OBS_DIM = (9, 11)
 assert OBS_DIM[0] % 2 == 1 and OBS_DIM[1] % 2 == 1
 MAX_OBS_DIM = max(OBS_DIM)
+OBS_DIM_PIXELS = (49, 49)
+MAX_OBS_DIM_PIXELS = max(OBS_DIM_PIXELS)
 BLOCK_PIXEL_SIZE_HUMAN = 64
 BLOCK_PIXEL_SIZE_IMG = 16
 BLOCK_PIXEL_SIZE_AGENT = 7

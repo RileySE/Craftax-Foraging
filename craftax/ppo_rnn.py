@@ -388,12 +388,54 @@ def make_train(config):
                         loss_actor = loss_actor.mean()
                         entropy = pi.entropy().mean()
 
+                        def compute_sparse_loss(layer_params):
+                            # For multi-dim this gives us the first dimension, what we want
+                            layer_size = len(layer_params)
+                            inds = jnp.arange(layer_size, 0, -1)
+                            # Simple quadratic curve of ideal weights
+                            ideals = 1 / (inds * inds)
+                            # Use absolute values of the weights so negative weights are allowed
+                            abs_params = jnp.abs(layer_params)
+                            # Sort params based on size
+                            sorted_params = jax.lax.sort(abs_params, 0)
+                            # Think L1 works for now?
+                            #loss = jnp.abs(sorted_params - ideals.reshape(ideals.shape + (1,))).mean()
+                            # Let's try an L2
+                            loss = jnp.pow(sorted_params - ideals.reshape(ideals.shape + (1,)), 2).mean()
+                            #jax.debug.print('top rank is {}, ideal is {}', sorted_params[0,0], ideals[0])
+                            #jax.debug.print('bottom rank is {}, ideal is {}', sorted_params[-1,0], ideals[-1])
+
+                            return loss
+
+                        # Compute sparsity loss for each layer's weights
+                        flat_params = jax.tree.flatten(params)
+                        # HACK: Quick hack for testing, hardcode which param arrays to compute on
+                        # Input layer
+                        #sparse_loss = compute_sparse_loss(flat_params[0][1])
+                        #jax.debug.print('first one is {}', sparse_loss)
+                        sparse_loss = compute_sparse_loss(flat_params[0][5])
+                        # Policy output
+                        #sparse_loss += compute_sparse_loss(flat_params[0][7])
+                        sparse_loss += compute_sparse_loss(flat_params[0][9])
+                        sparse_loss += compute_sparse_loss(flat_params[0][11])
+                        # Value output
+                        #sparse_loss += compute_sparse_loss(flat_params[0][13])
+                        sparse_loss += compute_sparse_loss(flat_params[0][15])
+                        sparse_loss += compute_sparse_loss(flat_params[0][16])
+                        sparse_loss += compute_sparse_loss(flat_params[0][17])
+                        sparse_loss += compute_sparse_loss(flat_params[0][19])
+                        sparse_loss += compute_sparse_loss(flat_params[0][21])
+                        sparse_loss += compute_sparse_loss(flat_params[0][23])
+                        #jax.debug.print('total is {}', sparse_loss)
+
+
                         total_loss = (
                             loss_actor
                             + config["VF_COEF"] * value_loss
                             - config["ENT_COEF"] * entropy
+                            + 1.0 * sparse_loss
                         )
-                        return total_loss, (value_loss, loss_actor, entropy)
+                        return total_loss, (value_loss, loss_actor, entropy, sparse_loss)
 
                     grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
                     total_loss, grads = grad_fn(
@@ -632,12 +674,24 @@ def make_train(config):
                 _update_step, runner_state, None, config["UPDATES_PER_VIZ"]
             )
 
+
+            # Log model weights
+            def save_weights_callback(weights_flat, iter):
+                weight_filename = os.path.join(config['OUTPUT_PATH'], 'weights_{}.csv'.format(iter))
+                weight_file = open(weight_filename, 'a')
+                for weights_set in weights_flat:
+                    np.save(weight_file, weights_set, False)
+                print('Saving weights in file', weight_filename)
+
+            weights_flat = jax.tree.flatten(runner_state[0].params)
+            jax.debug.callback(save_weights_callback, weights_flat[0], runner_state[-1])
+
             # Can we save the environment state and resume training later?
             #runner_state_copy = runner_state
 
             # Then do iterations of logging
             runner_state, empty = jax.lax.scan(
-                partial(_logging_step, logging_threads = config["LOGGING_THREADS_PER_VIZ"]), runner_state, None, config['LOGGING_STEPS_PER_VIZ']
+                partial(_logging_step, logging_threads=config["LOGGING_THREADS_PER_VIZ"]), runner_state, None, config['LOGGING_STEPS_PER_VIZ']
             )
 
             return runner_state, metric

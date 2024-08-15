@@ -189,22 +189,31 @@ def render_craftax_symbolic(state: EnvState):
         2,
     ),
 )
-def render_craftax_pixels(state, block_pixel_size, do_night_noise=True):
+def render_craftax_pixels(state, block_pixel_size, do_night_noise=True, do_human_viz=False):
     textures = TEXTURES[block_pixel_size]
-    obs_dim_array = jnp.array([OBS_DIM[0], OBS_DIM[1]], dtype=jnp.int32)
+
+    obs_dim_to_use = OBS_DIM
+    if do_human_viz:
+        obs_dim_to_use = OBS_DIM_PIXELS
+
+    max_obs_dim_to_use = MAX_OBS_DIM
+    if do_human_viz:
+        max_obs_dim_to_use = MAX_OBS_DIM_PIXELS
+
+    obs_dim_array = jnp.array([obs_dim_to_use[0], obs_dim_to_use[1]], dtype=jnp.int32)
 
     # RENDER MAP
     # Get view of map
     map = state.map[state.player_level]
     padded_grid = jnp.pad(
         map,
-        (MAX_OBS_DIM + 2, MAX_OBS_DIM + 2),
+        (max_obs_dim_to_use + 2, max_obs_dim_to_use + 2),
         constant_values=BlockType.OUT_OF_BOUNDS.value,
     )
 
-    tl_corner = state.player_position - obs_dim_array // 2 + MAX_OBS_DIM + 2
+    tl_corner = state.player_position - obs_dim_array // 2 + max_obs_dim_to_use + 2
 
-    map_view = jax.lax.dynamic_slice(padded_grid, tl_corner, OBS_DIM)
+    map_view = jax.lax.dynamic_slice(padded_grid, tl_corner, obs_dim_to_use)
 
     # Boss
     boss_block = jax.lax.select(
@@ -226,7 +235,7 @@ def render_craftax_pixels(state, block_pixel_size, do_night_noise=True):
     map_pixels_indexes = jnp.repeat(map_pixels_indexes, repeats=3, axis=2)
 
     map_pixels = jnp.zeros(
-        (OBS_DIM[0] * block_pixel_size, OBS_DIM[1] * block_pixel_size, 3),
+        (obs_dim_to_use[0] * block_pixel_size, obs_dim_to_use[1] * block_pixel_size, 3),
         dtype=jnp.float32,
     )
 
@@ -245,11 +254,11 @@ def render_craftax_pixels(state, block_pixel_size, do_night_noise=True):
     # Items
     padded_item_map = jnp.pad(
         state.item_map[state.player_level],
-        (MAX_OBS_DIM + 2, MAX_OBS_DIM + 2),
+        (max_obs_dim_to_use + 2, max_obs_dim_to_use + 2),
         constant_values=ItemType.NONE.value,
     )
 
-    item_map_view = jax.lax.dynamic_slice(padded_item_map, tl_corner, OBS_DIM)
+    item_map_view = jax.lax.dynamic_slice(padded_item_map, tl_corner, obs_dim_to_use)
 
     # Insert blocked ladders
     is_ladder_down_open = (
@@ -491,11 +500,11 @@ def render_craftax_pixels(state, block_pixel_size, do_night_noise=True):
     light_map = state.light_map[state.player_level]
     padded_light_map = jnp.pad(
         light_map,
-        (MAX_OBS_DIM + 2, MAX_OBS_DIM + 2),
+        (max_obs_dim_to_use + 2, max_obs_dim_to_use + 2),
         constant_values=False,
     )
 
-    light_map_view = jax.lax.dynamic_slice(padded_light_map, tl_corner, OBS_DIM)
+    light_map_view = jax.lax.dynamic_slice(padded_light_map, tl_corner, obs_dim_to_use)
     light_map_pixels = light_map_view.repeat(block_pixel_size, axis=0).repeat(
         block_pixel_size, axis=1
     )
@@ -564,7 +573,7 @@ def render_craftax_pixels(state, block_pixel_size, do_night_noise=True):
     )
 
     inv_pixels = jnp.zeros(
-        (INVENTORY_OBS_HEIGHT * block_pixel_size, OBS_DIM[1] * block_pixel_size, 3),
+        (INVENTORY_OBS_HEIGHT * block_pixel_size, obs_dim_to_use[1] * block_pixel_size, 3),
         dtype=jnp.float32,
     )
 
