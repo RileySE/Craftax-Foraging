@@ -110,12 +110,17 @@ class EnvState:
 
     fractal_noise_angles: tuple[int, int, int, int] = (None, None, None, None)
 
-    # moved here for curriculum learning
-    floor_mob_spawn_chance: jnp.ndarray = field(
-        default_factory=lambda: jnp.array(
+    # moved for curriculum
+    level: int = 1
+    max_melee_mobs: int = 2
+    max_ranged_mobs: int = 3
+    max_melee_spawn_chance: float = 0.0  # 0.02
+    max_ranged_spawn_chance: float = 0.0  # 0.05
+    @property
+    def floor_mob_spawn_chance(self) -> jnp.ndarray:
+        return jnp.array(
             [
-                # (passive, melee, ranged, melee-night)
-                jnp.array([0.1, 0.32, 0.8, 0.2]),  # Floor 0 (overworld)
+                jnp.array([0.1, self.max_melee_spawn_chance, self.max_ranged_spawn_chance, 0.0]),  # Floor 0 (overworld)
                 jnp.array([0.1, 0.06, 0.05, 0.0]),  # Floor 1 (gnomish mines)
                 jnp.array([0.1, 0.06, 0.05, 0.0]),  # Floor 2 (dungeon)
                 jnp.array([0.1, 0.06, 0.05, 0.0]),  # Floor 3 (sewers)
@@ -127,7 +132,8 @@ class EnvState:
             ],
             dtype=jnp.float32,
         )
-    )
+
+
 
 @struct.dataclass
 class EnvParams:
@@ -139,7 +145,7 @@ class EnvParams:
     passive_mob_health: int = 3
     ranged_mob_health: int = 3
 
-    mob_despawn_distance: int = 14
+    mob_despawn_distance: int = 20  # increased for curriculum
     max_attribute: int = 5
 
     god_mode: bool = False
@@ -154,10 +160,8 @@ class StaticEnvParams:
     reward_func: str = 'foraging'
 
     # Mobs
-    max_melee_mobs: int = 3
     # HACK: Doubled to 18 for patch depletion stuff
     max_passive_mobs: int = 18
     max_growing_plants: int = 30
-    max_ranged_mobs: int = 2
     max_mob_projectiles: int = 3
     max_player_projectiles: int = 3
