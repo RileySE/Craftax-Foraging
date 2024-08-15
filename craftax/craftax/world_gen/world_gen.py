@@ -609,8 +609,8 @@ def generate_world(rng, params, static_params):
             type_id=jnp.zeros((static_params.num_levels, max_mobs), dtype=jnp.int32),
         )
 
-    melee_mobs = generate_empty_mobs(static_params.max_melee_mobs)
-    ranged_mobs = generate_empty_mobs(static_params.max_ranged_mobs)
+    melee_mobs = generate_empty_mobs(20)  # make space for changing curriculum
+    ranged_mobs = generate_empty_mobs(20)
     passive_mobs = generate_empty_mobs(static_params.max_passive_mobs)
 
     # Projectiles
@@ -651,7 +651,6 @@ def generate_world(rng, params, static_params):
     rng, _rng = jax.random.split(rng)
 
     state = EnvState(
-        level=jnp.asarray(1, dtype=jnp.int32),
         env_id=jax.random.randint(rng, shape=(1,), minval=0, maxval=999999),
         map=map,
         item_map=item_map,
