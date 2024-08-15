@@ -24,7 +24,6 @@ class GymnaxWrapper(object):
         return getattr(self._env, name)
 
 
-
 class BatchEnvWrapper(GymnaxWrapper):
     """Batches reset and step functions"""
 
@@ -68,7 +67,6 @@ class AutoResetEnvWrapper(GymnaxWrapper):
 
     @partial(jax.jit, static_argnums=(0, 4))
     def step(self, rng, state, action, params=None):
-
         rng, _rng = jax.random.split(rng)
         obs_st, state_st, reward, done, info = self._env.step(
             _rng, state, action, params
@@ -123,7 +121,6 @@ class OptimisticResetVecEnvWrapper(GymnaxWrapper):
 
     @partial(jax.jit, static_argnums=(0, 4))
     def step(self, rng, state, action, params=None):
-
         rng, _rng = jax.random.split(rng)
         rngs = jax.random.split(_rng, self.num_envs)
         obs_st, state_st, reward, done, info = self.step_fn(rngs, state, action, params)
@@ -211,9 +208,9 @@ class LogWrapper(GymnaxWrapper):
             episode_returns=new_episode_return * (1 - done),
             episode_lengths=new_episode_length * (1 - done),
             returned_episode_returns=state.returned_episode_returns * (1 - done)
-            + new_episode_return * done,
+                                     + new_episode_return * done,
             returned_episode_lengths=state.returned_episode_lengths * (1 - done)
-            + new_episode_length * done,
+                                     + new_episode_length * done,
             timestep=state.timestep + 1,
         )
         info["returned_episode_returns"] = state.returned_episode_returns
@@ -268,7 +265,6 @@ class VideoPlotWrapper(LogWrapper):
             #if self.do_videos:
             self.vis_renderer.add_frame(new_obs, t, done)
 
-
         # Alternative to satisfy jax's cond function
         # TODO is there a builtin no-op function I could use instead?
         def null_func(env_state):
@@ -279,9 +275,7 @@ class VideoPlotWrapper(LogWrapper):
             jax.debug.callback(callback_func, new_obs, state.env_state.env_id, done)
             return 1
 
-
         #is_new_env_id = jnp.logical_or(self.curr_env_id == -9999, self.n_frames_seen >= 10000000)
-
 
         #self.n_frames_seen = (self.n_frames_seen + 1) % 10000001
         # TODO disable callback for non-rendered envs, it incurs a huge performance penalty
@@ -303,8 +297,6 @@ class VideoPlotWrapper(LogWrapper):
         callback_result = jax.lax.cond(self.do_videos, do_callback, null_func, env_state)
         #result = jax.pure_callback(debug_print, np.int32(0), is_new_env_id, self.curr_env_id, this_env_id])
 
-
-
         # Add fields to be logged
         info['action'] = action
         info['health'] = env_state.player_health
@@ -318,7 +310,7 @@ class VideoPlotWrapper(LogWrapper):
         info['player_position_y'] = env_state.player_position[1]
         info['recover'] = env_state.player_recover
         info['hunger'] = env_state.player_hunger
-        info['thirst'] = env_state.player_thirst        # print("A " + str(type(log_state)))
+        info['thirst'] = env_state.player_thirst  # print("A " + str(type(log_state)))
         info['fatigue'] = env_state.player_fatigue
         info['light_level'] = env_state.light_level
         # TODO why is this an array? It's supposed to be an int...
@@ -327,22 +319,24 @@ class VideoPlotWrapper(LogWrapper):
         melee_pos = env_state.melee_mobs.position[env_state.player_level]
         melee_mask = env_state.melee_mobs.mask[env_state.player_level]
 
-        dists_to_melee = jnp.linalg.norm(env_state.player_position - melee_pos, ord=1, axis = -1)
+        dists_to_melee = jnp.linalg.norm(env_state.player_position - melee_pos, ord=1, axis=-1)
         dists_to_melee = jnp.where(melee_mask, dists_to_melee, jnp.inf)
         closest_melee_idx = jnp.argmin(dists_to_melee)
         closest_melee_dist_xy = env_state.player_position - melee_pos[closest_melee_idx]
-        melee_on_screen = jnp.logical_and(jnp.abs(closest_melee_dist_xy[0]) <= 5, jnp.abs(closest_melee_dist_xy[1]) <= 4)
+        melee_on_screen = jnp.logical_and(jnp.abs(closest_melee_dist_xy[0]) <= 5,
+                                          jnp.abs(closest_melee_dist_xy[1]) <= 4)
         melee_on_screen = jnp.logical_and(melee_on_screen, melee_mask[closest_melee_idx])
         dist_to_melee = dists_to_melee[closest_melee_idx]
 
         passive_pos = env_state.passive_mobs.position[env_state.player_level]
         passive_mask = env_state.passive_mobs.mask[env_state.player_level]
 
-        dists_to_passive = jnp.linalg.norm(env_state.player_position - passive_pos, ord=1, axis = -1)
+        dists_to_passive = jnp.linalg.norm(env_state.player_position - passive_pos, ord=1, axis=-1)
         dists_to_passive = jnp.where(passive_mask, dists_to_passive, jnp.inf)
         closest_passive_idx = jnp.argmin(dists_to_passive)
         closest_passive_dist_xy = env_state.player_position - passive_pos[closest_passive_idx]
-        passive_on_screen = jnp.logical_and(jnp.abs(closest_passive_dist_xy[0]) <= 5, jnp.abs(closest_passive_dist_xy[1]) <= 4)
+        passive_on_screen = jnp.logical_and(jnp.abs(closest_passive_dist_xy[0]) <= 5,
+                                            jnp.abs(closest_passive_dist_xy[1]) <= 4)
         passive_on_screen = jnp.logical_and(passive_on_screen, passive_mask[closest_passive_idx])
         dist_to_passive = dists_to_passive[closest_passive_idx]
 
@@ -441,21 +435,21 @@ class VisualizationRenderer(object):
         self.axs = self.fig.subplots(self.side_length, self.side_length, squeeze=(not self.draw_only_first))
         self.n_videos_logged += 1
 
+
 class CurriculumWrapper(GymnaxWrapper):
-    """Schedules curriculum"""
 
     def __init__(self, env: environment.Environment,
                  num_envs: int,
-                 num_levels: int,
                  num_steps: int,
                  use_curriculum: bool,
                  ):
         super().__init__(env)
 
         self.num_envs = num_envs
-        self.num_levels = num_levels
         self.total_steps = num_steps
         self.use_curriculum = use_curriculum
+
+        self.num_levels = 5
 
     @partial(jax.jit, static_argnums=(0, 5))
     def step(
@@ -466,38 +460,37 @@ class CurriculumWrapper(GymnaxWrapper):
             update_step: int,
             params: Optional[environment.EnvParams] = None,
     ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
+        obs, log_state, reward, done, info = self._env.step(key, log_state, action, params)
 
         def update_curriculum(log_state, update_step):
-            level = jnp.floor(update_step * self.num_levels / self.total_steps)
-            batched_level = jnp.full((self.num_envs,), level, dtype=jnp.int32)
-            env_state = log_state.env_state
-            env_state = env_state.replace(level=batched_level)
-            log_state = log_state.replace(env_state=env_state)
+            state = log_state.env_state
 
-            melee_spawn_chance = level / self.num_levels * 0.4
-            ranged_spawn_chance = level / self.num_levels * 0.5
-            spawn_chances = jnp.array([
-                [0.1, melee_spawn_chance, ranged_spawn_chance, 0.0],
-                [0.1, 0.06, 0.05, 0.0],
-                [0.1, 0.06, 0.05, 0.0],
-                [0.1, 0.06, 0.05, 0.0],
-                [0.1, 0.06, 0.05, 0.0],
-                [0.1, 0.06, 0.05, 0.0],
-                [0.1, 0.06, 0.05, 0.0],
-                [0.0, 0.06, 0.05, 0.0],
-                [0.1, 0.06, 0.05, 0.0],
-            ])
-            batched_spawn_chances = jnp.tile(spawn_chances, (self.num_envs, 1, 1))
-            env_state = env_state.replace(floor_mob_spawn_chance=batched_spawn_chances)
-            return log_state.replace(env_state=env_state)
+            # update level
+            level = jnp.floor(update_step * self.num_levels / self.total_steps + 1)
+            batched_level = jnp.full((self.num_envs,), level, dtype=jnp.int32)
+            state = state.replace(level=batched_level)
+
+            # update spawn chances
+            level_melee_spawn_chance = level / self.num_levels * state.max_melee_spawn_chance
+            level_ranged_spawn_chance = level / self.num_levels * state.max_ranged_spawn_chance
+            state = state.replace(max_melee_spawn_chance=level_melee_spawn_chance,
+                                  max_ranged_spawn_chance=level_ranged_spawn_chance)
+
+            # update max mobs
+            max_melee_mobs = level / self.num_levels * 10
+            max_ranged_mobs = level / self.num_levels * 10
+            batched_max_melee_mobs = jnp.full((self.num_envs,), max_melee_mobs, dtype=jnp.int32)
+            batched_max_ranged_mobs = jnp.full((self.num_envs,), max_ranged_mobs, dtype=jnp.int32)
+            state = state.replace(max_melee_mobs=batched_max_melee_mobs,
+                                  max_ranged_mobs=batched_max_ranged_mobs)
+
+            return log_state.replace(env_state=state)
 
         log_state = jax.lax.cond(
             self.use_curriculum,
-            lambda ls: update_curriculum(ls, update_step),
-            lambda ls: ls,
+            lambda ls: update_curriculum(log_state, update_step),
+            lambda ls: log_state,
             log_state
         )
-
-        obs, log_state, reward, done, info = self._env.step(key, log_state, action, params)
 
         return obs, log_state, reward, done, info
