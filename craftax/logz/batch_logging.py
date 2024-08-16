@@ -44,6 +44,11 @@ def create_log_dict(info, config):
 
     return to_log
 
+def reset_batch_logs():
+    global batch_logs
+    global log_times
+    log_times = []
+    batch_logs = {}
 
 def batch_log(update_step, log, config):
     update_step = int(update_step)

@@ -1288,7 +1288,7 @@ def update_mobs(rng, state, params, static_params):
 
     rng, _rng = jax.random.split(rng)
     (rng, state), _ = jax.lax.scan(
-        _move_melee_mob, (rng, state), jnp.arange(static_params.max_melee_mobs)
+        _move_melee_mob, (rng, state), jnp.arange(20)  # make space for curriculum
     )
 
     # Move passive_mobs
@@ -1606,7 +1606,7 @@ def update_mobs(rng, state, params, static_params):
 
     rng, _rng = jax.random.split(rng)
     (rng, state), _ = jax.lax.scan(
-        _move_ranged_mob, (rng, state), jnp.arange(static_params.max_ranged_mobs)
+        _move_ranged_mob, (rng, state), jnp.arange(20) # make space for curriculum
     )
 
     # Move projectiles
@@ -2058,10 +2058,11 @@ def spawn_mobs(state, rng, params, static_params):
     )
 
     monster_spawn_coeff = (
-        1
-        + (state.monsters_killed[state.player_level] < MONSTERS_KILLED_TO_CLEAR_LEVEL)
+        1 +
+        (state.monsters_killed[state.player_level] < MONSTERS_KILLED_TO_CLEAR_LEVEL)
         * 2
-    )  # Triple spawn rate if we are on an uncleared level
+    )
+
 
     monster_spawn_coeff *= jax.lax.select(
         is_fighting_boss(state, static_params),
@@ -2202,7 +2203,7 @@ def spawn_mobs(state, rng, params, static_params):
 
     # Melee mobs
     can_spawn_melee_mob = (
-        state.melee_mobs.mask[state.player_level].sum() < static_params.max_melee_mobs
+        state.melee_mobs.mask[state.player_level].sum() < state.max_melee_mobs
     )
 
     new_melee_mob_type = FLOOR_MOB_MAPPING[state.player_level, MobType.MELEE.value]
@@ -2315,7 +2316,7 @@ def spawn_mobs(state, rng, params, static_params):
 
     # Ranged mobs
     can_spawn_ranged_mob = (
-        state.ranged_mobs.mask[state.player_level].sum() < static_params.max_ranged_mobs
+        state.ranged_mobs.mask[state.player_level].sum() < state.max_ranged_mobs
     )
 
     new_ranged_mob_type = FLOOR_MOB_MAPPING[state.player_level, MobType.RANGED.value]

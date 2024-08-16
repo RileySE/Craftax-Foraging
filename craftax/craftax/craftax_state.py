@@ -114,8 +114,8 @@ class EnvState:
     level: int = 1
     max_melee_mobs: int = 2
     max_ranged_mobs: int = 3
-    max_melee_spawn_chance: float = 0.0  # 0.02
-    max_ranged_spawn_chance: float = 0.0  # 0.05
+    max_melee_spawn_chance: float = 0.02  # 0.02
+    max_ranged_spawn_chance: float = 0.05  # 0.05
     @property
     def floor_mob_spawn_chance(self) -> jnp.ndarray:
         return jnp.array(

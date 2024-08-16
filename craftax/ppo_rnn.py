@@ -6,6 +6,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
+import jaxpruner
 import numpy as np
 import optax
 import time
@@ -35,7 +36,7 @@ from craftax.environment_base.wrappers import (
     ReduceActionSpaceWrapper,
     CurriculumWrapper
 )
-from craftax.logz.batch_logging import create_log_dict, batch_log
+from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
 
 
 class ScannedRNN(nn.Module):
@@ -212,10 +213,8 @@ def make_train(config):
         env_viz = BatchEnvWrapper(env_viz, num_envs=config["NUM_ENVS"])
 
     env = CurriculumWrapper(env, num_envs=config["NUM_ENVS"],
-                            num_levels=config["NUM_LEVELS"],
                             num_steps=config["NUM_LOG_STEPS"],
                             use_curriculum=config["CURRICULUM"])
-
 
 
     def linear_schedule(count):
@@ -256,6 +255,21 @@ def make_train(config):
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
                 optax.adam(config["LR"], eps=1e-5),
             )
+
+        sparsity_distribution = functools.partial(
+            jaxpruner.sparsity_distributions.uniform, sparsity=config["SPARSITY"])
+        if config["ALG"] == "MagnitudePruning":
+            pruner = jaxpruner.MagnitudePruning(sparsity_distribution_fn=sparsity_distribution)
+        elif config["ALG"] == "RandomPruning":
+            pruner = jaxpruner.RandomPruning(sparsity_distribution_fn=sparsity_distribution)
+        elif config["ALG"] == "SaliencyPruning":
+            pruner = jaxpruner.SaliencyPruning(sparsity_distribution_fn=sparsity_distribution)
+        elif config["ALG"] == "SET":
+            pruner = jaxpruner.SET(sparsity_distribution_fn=sparsity_distribution)
+        elif config["ALG"] == "RigL":
+            pruner = jaxpruner.RigL(sparsity_distribution_fn=sparsity_distribution)
+        tx = pruner.wrap_optax(tx)
+
         train_state = TrainState.create(
             apply_fn=network.apply,
             params=network_params,
@@ -297,7 +311,7 @@ def make_train(config):
 
                 # STEP ENV
                 rng, _rng = jax.random.split(rng)
-                obsv, env_state, reward, done, info = env.step(
+                obsv, env_state, reward, done, info, = env.step(
                     _rng, env_state, action, update_step, env_params
                 )
 
@@ -581,30 +595,36 @@ def make_train(config):
 
             # Callback function for logging hidden states
             def write_rnn_hstate(hstate, scalars, increment=0):
-                # We save to temp files and then append to the target file since numpy apparently cannot write files in append mode for some reason
-                for i in range(logging_threads):
-                    out_filename_hstates = os.path.join(config['OUTPUT_PATH'], str(config["curriculum"]), 'hstates_{}_{}.csv'.format(increment, i))
-                    temp_filename = os.path.join(config['OUTPUT_PATH'], 'temp.csv')
-                    np.savetxt(temp_filename,
-                               hstate[:, i, :], delimiter=',')
-                    temp_file = open(temp_filename, 'r')
-                    out_file_hstates = open(out_filename_hstates, 'a+')
-                    out_file_hstates.write(temp_file.read())
-                    out_file_hstates.close()
-                    temp_file.close()
-                    # Then do the same thing for the scalars
-                    out_filename_scalars = os.path.join(config['OUTPUT_PATH'], str(config["curriculum"]), 'scalars_{}_{}.csv'.format(increment, i))
-                    np.savetxt(temp_filename,
-                               scalars[:, i, :], delimiter=',', fmt='%f',
-                               header='action,health,food,drink,energy,done,is_sleeping,is_resting,player_position_x,'
-                                      'player_position_y,recover,hunger,thirst,fatigue,light_level,dist_to_melee_l1,melee_on_screen,dist_to_passive_l1,passive_on_screen,episode_id'
-                               )
-                    temp_file = open(temp_filename, 'r')
-                    out_file_scalars = open(out_filename_scalars, 'a+')
-                    out_file_scalars.write(temp_file.read())
-                    temp_file.close()
-                    out_file_scalars.close()
-                    print('Writing log file', out_filename_hstates)
+
+                def save_as_wandb_artifact(data, name, type, description, metadata=None):
+                    artifact = wandb.Artifact(name=name, type=type, description=description, metadata=metadata)
+                    with artifact.new_file(f"{name}.csv", mode="w") as f:
+                        np.savetxt(f, data, delimiter=',')
+                    wandb.log_artifact(artifact)
+
+                # For hstates
+                for i in range(hstate.shape[1]):  # Assuming i is the second dimension of hstate
+                    save_as_wandb_artifact(
+                        data=hstate[:, i, :],
+                        name=f"hstates_{increment}_{i}",
+                        type="hidden_states",
+                        description=f"Hidden states for increment {increment}, index {i}",
+                        metadata={"increment": increment, "index": i}
+                    )
+
+                # For scalars
+                header = ('action,health,food,drink,energy,done,is_sleeping,is_resting,player_position_x,'
+                          'player_position_y,recover,hunger,thirst,fatigue,light_level,dist_to_melee_l1,'
+                          'melee_on_screen,dist_to_passive_l1,passive_on_screen,episode_id')
+
+                for i in range(scalars.shape[1]):  # Assuming i is the second dimension of scalars
+                    save_as_wandb_artifact(
+                        data=scalars[:, i, :],
+                        name=f"scalars_{increment}_{i}",
+                        type="scalar_data",
+                        description=f"Scalar data for increment {increment}, index {i}",
+                        metadata={"increment": increment, "index": i, "header": header}
+                    )
 
             # Reshape logging arrays and concat
             new_shape = actions.shape + (1,)
@@ -633,7 +653,9 @@ def make_train(config):
                                          player_position_xs, player_position_ys, recovers, hungers, thirsts, fatigues,
                                          light_levels, dist_to_melees,melee_on_screen, dist_to_passives, passive_on_screen, epi_ids
                                          ], axis=2)
-            jax.debug.callback(write_rnn_hstate, hidden_states, log_array, update_step)
+
+            # dont want to log hstates during sweep
+            # jax.debug.callback(write_rnn_hstate, hidden_states, log_array, update_step)
 
             return runner_state, None
 
@@ -705,19 +727,11 @@ def make_train(config):
     return train
 
 
-def run_ppo(config):
-    config = {k.upper(): v for k, v in config.__dict__.items()}
+def run_ppo():
 
-    if config["USE_WANDB"]:
-        wandb.init(
-            project=config["WANDB_PROJECT"],
-            entity=config["WANDB_ENTITY"],
-            config=config,
-            name=config["ENV_NAME"]
-            + "-PPO_RNN-"
-            + str(int(config["TOTAL_TIMESTEPS"] // 1e6))
-            + "M",
-        )
+    run = wandb.init(project="sparsity")
+    config = wandb.config
+    reset_batch_logs()
 
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_REPEATS"])
@@ -753,69 +767,140 @@ def run_ppo(config):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--env_name", type=str, default="Craftax-Symbolic-v1")
-    parser.add_argument(
-        "--num_envs",
-        type=int,
-        default=1024,
-    )
-    parser.add_argument("--num_levels", type=int, default=5)
-    parser.add_argument("--total_timesteps", type=int, default=1e9)
-    parser.add_argument("--lr", type=float, default=2e-4)
-    parser.add_argument("--num_env_steps", type=int, default=64)
-    parser.add_argument("--update_epochs", type=int, default=4)
-    parser.add_argument("--num_minibatches", type=int, default=8)
-    parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--gae_lambda", type=float, default=0.8)
-    parser.add_argument("--clip_eps", type=float, default=0.2)
-    parser.add_argument("--ent_coef", type=float, default=0.01)
-    parser.add_argument("--vf_coef", type=float, default=0.5)
-    parser.add_argument("--max_grad_norm", type=float, default=1.0)
-    parser.add_argument("--activation", type=str, default="tanh")
-    parser.add_argument(
-        "--anneal_lr", action=argparse.BooleanOptionalAction, default=True
-    )
-    parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--jit", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--seed", type=int, default=np.random.randint(2**31))
-    parser.add_argument(
-        "--use_wandb", action=argparse.BooleanOptionalAction, default=True
-    )
-    parser.add_argument(
-        "--save_policy", action=argparse.BooleanOptionalAction, default=False
-    )
-    parser.add_argument("--num_repeats", type=int, default=1)
-    parser.add_argument("--layer_size", type=int, default=512)
-    parser.add_argument("--wandb_project", type=str)
-    parser.add_argument("--wandb_entity", type=str)
-    parser.add_argument(
-        "--use_optimistic_resets", action=argparse.BooleanOptionalAction, default=True
-    )
-    parser.add_argument("--optimistic_reset_ratio", type=int, default=16)
-    parser.add_argument('--updates_per_viz', type=int, default=1024)
-    parser.add_argument('--steps_per_viz', type=int, default=1024)
-    parser.add_argument('--logging_steps_per_viz', type=int, default=8)
-    parser.add_argument('--logging_steps_per_viz_val', type=int, default=8)
-    parser.add_argument('--output_path', type=str, default='./output/')
-    parser.add_argument('--frames_per_file', type=int, default=512)
-    parser.add_argument('--no_videos', action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument('--full_action_space', action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument('--reward_function', type=str, default='foraging')
-    parser.add_argument('--validation_seed', type=int, default=777)
-    parser.add_argument('--validation_step_offset', type=int, default=0)
-    parser.add_argument('--logging_threads_per_viz',type=int, default=1)
-    parser.add_argument('--logging_threads_per_viz_val', type=int, default=1)
-    parser.add_argument('--curriculum', action=argparse.BooleanOptionalAction, default=True)
-    args, rest_args = parser.parse_known_args(sys.argv[1:])
-    if rest_args:
-        raise ValueError(f"Unknown args {rest_args}")
 
-    if args.seed is None:
-        args.seed = np.random.randint(2**31)
+    sweep_configuration = {
+        "name": "sparsity_sweep",
+        "method": "grid",
+        "metric": {"name": "episode_return", "goal": "maximize"},
+        "parameters": {
+            "ENV_NAME": {
+                "values": ["Craftax-Symbolic-v1"]
+            },
+            "ALG" : {
+                "values": ["MagnitudePruning", "RandomPruning", "SaliencyPruning", "SET", "RigL"]
+            },
+            "SPARSITY" : {
+                "values": [0.4, 0.6, 0.8]
+            },
+            "NUM_ENVS": {
+                "values": [1024] # 1024
+            },
+            "TOTAL_TIMESTEPS": {
+                "values": [1e9]
+            },
+            "LR": {
+                "values": [2e-4]
+            },
+            "NUM_ENV_STEPS": {
+                "values": [64]
+            },
+            "UPDATE_EPOCHS": {
+                "values": [4]
+            },
+            "NUM_MINIBATCHES": {
+                "values": [8]
+            },
+            "GAMMA": {
+                "values": [0.99]
+            },
+            "GAE_LAMBDA": {
+                "values": [0.8]
+            },
+            "CLIP_EPS": {
+                "values": [0.2]
+            },
+            "ENT_COEF": {
+                "values": [0.01]
+            },
+            "VF_COEF": {
+                "values": [0.5]
+            },
+            "MAX_GRAD_NORM": {
+                "values": [1.0]
+            },
+            "ACTIVATION": {
+                "values": ["tanh"]
+            },
+            "ANNEAL_LR": {
+                "values": [True]
+            },
+            "DEBUG": {
+                "values": [True]
+            },
+            "JIT": {
+                "values": [True]
+            },
+            "SEED": {
+                "values": [np.random.randint(2 ** 31)]
+            },
+            "USE_WANDB": {
+                "values": [True]
+            },
+            "SAVE_POLICY": {
+                "values": [True]
+            },
+            "NUM_REPEATS": {
+                "values": [1]
+            },
+            "LAYER_SIZE": {
+                "values": [512]
+            },
+            "WANDB_PROJECT": {
+                "values": [None]  # Adjust with actual project name
+            },
+            "WANDB_ENTITY": {
+                "values": [None]  # Adjust with actual entity name
+            },
+            "USE_OPTIMISTIC_RESETS": {
+                "values": [True]
+            },
+            "OPTIMISTIC_RESET_RATIO": {
+                "values": [16]
+            },
+            "UPDATES_PER_VIZ": {
+                "values": [1024]
+            },
+            "STEPS_PER_VIZ": {
+                "values": [1024]
+            },
+            "LOGGING_STEPS_PER_VIZ": {
+                "values": [8]
+            },
+            "LOGGING_STEPS_PER_VIZ_VAL": {
+                "values": [8]
+            },
+            "OUTPUT_PATH": {
+                "values": ['./output/']
+            },
+            "FRAMES_PER_FILE": {
+                "values": [512]
+            },
+            "NO_VIDEOS": {
+                "values": [True]
+            },
+            "FULL_ACTION_SPACE": {
+                "values": [False]
+            },
+            "REWARD_FUNCTION": {
+                "values": ['foraging']
+            },
+            "VALIDATION_SEED": {
+                "values": [777]
+            },
+            "VALIDATION_STEP_OFFSET": {
+                "values": [0]
+            },
+            "LOGGING_THREADS_PER_VIZ": {
+                "values": [1]
+            },
+            "LOGGING_THREADS_PER_VIZ_VAL": {
+                "values": [1]
+            },
+            "CURRICULUM": {
+                "values": [False]
+            },
+        }
+    }
 
-    if args.jit:
-        run_ppo(args)
-    else:
-        with jax.disable_jit():
-            run_ppo(args)
+    sweep_id = wandb.sweep(sweep=sweep_configuration, project="sparsity")
+    wandb.agent(sweep_id=sweep_id, function=run_ppo)
