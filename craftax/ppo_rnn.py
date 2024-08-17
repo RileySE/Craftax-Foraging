@@ -678,9 +678,11 @@ def make_train(config):
             # Log model weights
             def save_weights_callback(weights_flat, iter):
                 weight_filename = os.path.join(config['OUTPUT_PATH'], 'weights_{}.csv'.format(iter))
-                weight_file = open(weight_filename, 'a')
+                weight_file = open(weight_filename, 'w')
                 for weights_set in weights_flat:
-                    np.save(weight_file, weights_set, False)
+                    if len(weights_set.shape) == 1:
+                        continue
+                    np.savetxt(weight_file, np.transpose(weights_set), delimiter=',', fmt='%f')
                 print('Saving weights in file', weight_filename)
 
             weights_flat = jax.tree.flatten(runner_state[0].params)
