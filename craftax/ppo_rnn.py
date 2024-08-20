@@ -564,6 +564,11 @@ def make_train(config):
             melee_on_screen = traj_batch.info['melee_on_screen']
             dist_to_passives = traj_batch.info['dist_to_passive_l1']
             passive_on_screen = traj_batch.info['passive_on_screen']
+            dist_to_ranged = traj_batch.info['dist_to_ranged_l1']
+            ranged_on_screen = traj_batch.info['ranged_on_screen']
+            num_melee_nearby = traj_batch.info['num_melee_nearby']
+            num_passives_nearby = traj_batch.info['num_passives_nearby']
+            num_ranged_nearby = traj_batch.info['num_ranged_nearby']
             epi_ids = traj_batch.info['episode_id']
             traj_batch.info['hidden_state'] = None
 
@@ -585,7 +590,9 @@ def make_train(config):
                     np.savetxt(temp_filename,
                                scalars[:, i, :], delimiter=',', fmt='%f',
                                header='action,health,food,drink,energy,done,is_sleeping,is_resting,player_position_x,'
-                                      'player_position_y,recover,hunger,thirst,fatigue,light_level,dist_to_melee_l1,melee_on_screen,dist_to_passive_l1,passive_on_screen,episode_id'
+                                      'player_position_y,recover,hunger,thirst,fatigue,light_level,dist_to_melee_l1,'
+                                      'melee_on_screen,dist_to_passive_l1,passive_on_screen,dist_to_ranged_l1,'
+                                      'ranged_on_screen,num_melee_nearby,num_passives_nearby,num_ranged_nearby,episode_id'
                                )
                     temp_file = open(temp_filename, 'r')
                     out_file_scalars = open(out_filename_scalars, 'a+')
@@ -615,11 +622,18 @@ def make_train(config):
             melee_on_screen = melee_on_screen.reshape(new_shape)
             dist_to_passives = dist_to_passives.reshape(new_shape)
             passive_on_screen = passive_on_screen.reshape(new_shape)
+            dist_to_ranged = dist_to_ranged.reshape(new_shape)
+            ranged_on_screen = ranged_on_screen.reshape(new_shape)
+            num_melee_nearby = num_melee_nearby.reshape(new_shape)
+            num_passives_nearby = num_passives_nearby.reshape(new_shape)
+            num_ranged_nearby = num_ranged_nearby.reshape(new_shape)
             epi_ids = epi_ids.reshape(new_shape)
 
             log_array = jnp.concatenate([actions, healths, foods, drinks, energies, dones, is_sleepings, is_restings,
                                          player_position_xs, player_position_ys, recovers, hungers, thirsts, fatigues,
-                                         light_levels, dist_to_melees,melee_on_screen, dist_to_passives, passive_on_screen, epi_ids
+                                         light_levels, dist_to_melees,melee_on_screen, dist_to_passives, passive_on_screen,
+                                         dist_to_ranged, ranged_on_screen, num_melee_nearby, num_passives_nearby,
+                                         num_ranged_nearby, epi_ids
                                          ], axis=2)
             jax.debug.callback(write_rnn_hstate, hidden_states, log_array, update_step)
 
