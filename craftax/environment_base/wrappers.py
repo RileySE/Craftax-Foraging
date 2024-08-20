@@ -340,10 +340,33 @@ class VideoPlotWrapper(LogWrapper):
         passive_on_screen = jnp.logical_and(passive_on_screen, passive_mask[closest_passive_idx])
         dist_to_passive = dists_to_passive[closest_passive_idx]
 
+        ranged_pos = env_state.ranged_mobs.position[env_state.player_level]
+        ranged_mask = env_state.ranged_mobs.mask[env_state.player_level]
+
+        dists_to_ranged = jnp.linalg.norm(env_state.player_position - ranged_pos, ord=1, axis = -1)
+        dists_to_ranged = jnp.where(ranged_mask, dists_to_ranged, jnp.inf)
+        closest_ranged_idx = jnp.argmin(dists_to_ranged)
+        closest_ranged_dist_xy = env_state.player_position - ranged_pos[closest_ranged_idx]
+        ranged_on_screen = jnp.logical_and(jnp.abs(closest_ranged_dist_xy[0]) <= 5, jnp.abs(closest_ranged_dist_xy[1]) <= 4)
+        ranged_on_screen = jnp.logical_and(ranged_on_screen, ranged_mask[closest_ranged_idx])
+        dist_to_ranged = dists_to_ranged[closest_ranged_idx]
+
+        # Slightly bigger radius than the screen, basically what mobs is the agent able to quickly interact with
+        nearby_distance = 9
+        num_melee_nearby = (dists_to_melee <= nearby_distance).sum()
+        num_passives_nearby = (dists_to_passive <= nearby_distance).sum()
+        num_ranged_nearby = (dists_to_ranged <= nearby_distance).sum()
+
         info['dist_to_melee_l1'] = dist_to_melee
         info['dist_to_passive_l1'] = dist_to_passive
+        info['dist_to_ranged_l1'] = dist_to_ranged
         info['melee_on_screen'] = melee_on_screen
         info['passive_on_screen'] = passive_on_screen
+        info['ranged_on_screen'] = ranged_on_screen
+        info['num_melee_nearby'] = num_melee_nearby
+        info['num_passives_nearby'] = num_passives_nearby
+        info['num_ranged_nearby'] = num_ranged_nearby
+
         return obs, state, reward, done, info
 
 

@@ -994,7 +994,9 @@ def place_block(state, action, static_params):
     )
 
     # Plant
-    sapling_key_down = action == Action.PLACE_PLANT.value
+    #sapling_key_down = action == Action.PLACE_PLANT.value
+    # HACK disable planting
+    sapling_key_down = False
     has_sapling = new_inventory.sapling > 0
     is_placing_sapling = jnp.logical_and(
         sapling_key_down,
