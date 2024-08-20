@@ -399,33 +399,47 @@ def make_train(config):
                             # Sort params based on size
                             sorted_params = jax.lax.sort(abs_params, 0)
                             # Think L1 works for now?
-                            #loss = jnp.abs(sorted_params - ideals.reshape(ideals.shape + (1,))).mean()
+                            loss = jnp.abs(sorted_params - ideals.reshape(ideals.shape + (1,))).mean()
                             # Let's try an L2
-                            loss = jnp.pow(sorted_params - ideals.reshape(ideals.shape + (1,)), 2).mean()
+                            #loss = jnp.pow(sorted_params - ideals.reshape(ideals.shape + (1,)), 2).mean()
                             #jax.debug.print('top rank is {}, ideal is {}', sorted_params[0,0], ideals[0])
                             #jax.debug.print('bottom rank is {}, ideal is {}', sorted_params[-1,0], ideals[-1])
 
                             return loss
 
+                        # Simple L1 magnitude penalty, as a baseline
+                        def compute_l1_sparse_loss(layer_params):
+                            return jnp.abs(layer_params).sum()
+
                         # Compute sparsity loss for each layer's weights
                         flat_params = jax.tree.flatten(params)
                         # HACK: Quick hack for testing, hardcode which param arrays to compute on
                         # Input layer
-                        #sparse_loss = compute_sparse_loss(flat_params[0][1])
+                        sparse_loss = compute_sparse_loss(flat_params[0][1])
+                        l1_loss = compute_l1_sparse_loss(flat_params[0][1])
                         #jax.debug.print('first one is {}', sparse_loss)
-                        sparse_loss = compute_sparse_loss(flat_params[0][5])
+                        sparse_loss += compute_sparse_loss(flat_params[0][5])
+                        l1_loss += compute_l1_sparse_loss(flat_params[0][5])
                         # Policy output
                         #sparse_loss += compute_sparse_loss(flat_params[0][7])
                         sparse_loss += compute_sparse_loss(flat_params[0][9])
+                        l1_loss += compute_l1_sparse_loss(flat_params[0][9])
                         sparse_loss += compute_sparse_loss(flat_params[0][11])
+                        l1_loss += compute_l1_sparse_loss(flat_params[0][11])
                         # Value output
                         #sparse_loss += compute_sparse_loss(flat_params[0][13])
                         sparse_loss += compute_sparse_loss(flat_params[0][15])
+                        l1_loss += compute_l1_sparse_loss(flat_params[0][15])
                         sparse_loss += compute_sparse_loss(flat_params[0][16])
+                        l1_loss += compute_l1_sparse_loss(flat_params[0][16])
                         sparse_loss += compute_sparse_loss(flat_params[0][17])
+                        l1_loss += compute_l1_sparse_loss(flat_params[0][17])
                         sparse_loss += compute_sparse_loss(flat_params[0][19])
+                        l1_loss += compute_l1_sparse_loss(flat_params[0][19])
                         sparse_loss += compute_sparse_loss(flat_params[0][21])
+                        l1_loss += compute_l1_sparse_loss(flat_params[0][21])
                         sparse_loss += compute_sparse_loss(flat_params[0][23])
+                        l1_loss += compute_l1_sparse_loss(flat_params[0][23])
                         #jax.debug.print('total is {}', sparse_loss)
 
 
@@ -433,7 +447,8 @@ def make_train(config):
                             loss_actor
                             + config["VF_COEF"] * value_loss
                             - config["ENT_COEF"] * entropy
-                            + 1.0 * sparse_loss
+                            + 0.0 * sparse_loss
+                            + 0.01 * l1_loss
                         )
                         return total_loss, (value_loss, loss_actor, entropy, sparse_loss)
 
