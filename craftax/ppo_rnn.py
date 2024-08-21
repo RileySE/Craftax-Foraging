@@ -448,7 +448,7 @@ def make_train(config):
                             + config["VF_COEF"] * value_loss
                             - config["ENT_COEF"] * entropy
                             + 0.0 * sparse_loss
-                            + 0.01 * l1_loss
+                            + 0.00001 * l1_loss
                         )
                         return total_loss, (value_loss, loss_actor, entropy, sparse_loss)
 
