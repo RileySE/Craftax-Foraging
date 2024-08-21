@@ -6,6 +6,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
+import jaxpruner
 import numpy as np
 import optax
 import time
@@ -31,9 +32,11 @@ from craftax.environment_base.wrappers import (
     OptimisticResetVecEnvWrapper,
     AutoResetEnvWrapper,
     BatchEnvWrapper,
-    VideoPlotWrapper, ReduceActionSpaceWrapper,
+    VideoPlotWrapper,
+    ReduceActionSpaceWrapper,
+    CurriculumWrapper
 )
-from craftax.logz.batch_logging import create_log_dict, batch_log
+from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
 
 
 class ScannedRNN(nn.Module):
@@ -62,7 +65,6 @@ class ScannedRNN(nn.Module):
         # Use a dummy key since the default state init fn is just zeros.
         cell = nn.GRUCell(features=hidden_size)
         return cell.initialize_carry(jax.random.PRNGKey(0), (batch_size, hidden_size))
-
 
 class ActorCriticRNN(nn.Module):
     action_dim: Sequence[int]
@@ -117,7 +119,6 @@ class ActorCriticRNN(nn.Module):
 
         return hidden, pi, jnp.squeeze(critic, axis=-1)
 
-
 class Transition(NamedTuple):
     done: jnp.ndarray
     action: jnp.ndarray
@@ -130,16 +131,19 @@ class Transition(NamedTuple):
 
 def make_train(config):
     config["NUM_UPDATES"] = (
-        config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"] // config['UPDATES_PER_VIZ']
+        config["TOTAL_TIMESTEPS"] // config["NUM_ENV_STEPS"] // config["NUM_ENVS"] // config['UPDATES_PER_VIZ']
     )
+
+    config["NUM_LOG_STEPS"] = config["NUM_UPDATES"] * config["UPDATES_PER_VIZ"]
+
     # HACK: We have to use the original formula for num_updates for LR annealing,
     # modifying it breaks training due to its effect on LR scheduling
     config['NUM_UPDATES_FOR_LR_ANNEALING'] = (
-        config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
+        config["TOTAL_TIMESTEPS"] // config["NUM_ENV_STEPS"] // config["NUM_ENVS"]
     )
 
     config["MINIBATCH_SIZE"] = (
-        config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
+        config["NUM_ENVS"] * config["NUM_ENV_STEPS"] // config["NUM_MINIBATCHES"]
     )
 
     # Define static params, modify based on command line flags and pass to env object to hold during runtime
@@ -208,6 +212,12 @@ def make_train(config):
         env_viz = AutoResetEnvWrapper(env_viz)
         env_viz = BatchEnvWrapper(env_viz, num_envs=config["NUM_ENVS"])
 
+    env = CurriculumWrapper(env, num_envs=config["NUM_ENVS"],
+                            num_steps=config["NUM_LOG_STEPS"],
+                            use_curriculum=config["CURRICULUM"],
+                            predators=config["PREDATORS"])
+
+
     def linear_schedule(count):
         frac = (
             1.0
@@ -217,6 +227,8 @@ def make_train(config):
         return config["LR"] * frac
 
     def train(rng):
+
+        jax.debug.print('Training')
         # INIT NETWORK
         if config['FULL_ACTION_SPACE']:
             action_space_size = env.action_space(env_params).n
@@ -244,6 +256,23 @@ def make_train(config):
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
                 optax.adam(config["LR"], eps=1e-5),
             )
+
+        sparsity_distribution = functools.partial(
+            jaxpruner.sparsity_distributions.uniform, sparsity=config["SPARSITY"])
+        if config["ALG"] == "MagnitudePruning":
+            pruner = jaxpruner.MagnitudePruning(sparsity_distribution_fn=sparsity_distribution)
+        elif config["ALG"] == "RandomPruning":
+            pruner = jaxpruner.RandomPruning(sparsity_distribution_fn=sparsity_distribution)
+        elif config["ALG"] == "SaliencyPruning":
+            pruner = jaxpruner.SaliencyPruning(sparsity_distribution_fn=sparsity_distribution)
+        elif config["ALG"] == "SET":
+            pruner = jaxpruner.SET(sparsity_distribution_fn=sparsity_distribution)
+        elif config["ALG"] == "RigL":
+            pruner = jaxpruner.RigL(sparsity_distribution_fn=sparsity_distribution)
+        else:
+            pruner = jaxpruner.NoPruning()
+        tx = pruner.wrap_optax(tx)
+
         train_state = TrainState.create(
             apply_fn=network.apply,
             params=network_params,
@@ -252,7 +281,7 @@ def make_train(config):
 
         # INIT ENV
         rng, _rng = jax.random.split(rng)
-        obsv, env_state = env.reset(_rng, env_params)
+        obsv, log_state = env.reset(_rng, env_params)
         init_hstate = ScannedRNN.initialize_carry(
             config["NUM_ENVS"], config["LAYER_SIZE"]
         )
@@ -285,8 +314,8 @@ def make_train(config):
 
                 # STEP ENV
                 rng, _rng = jax.random.split(rng)
-                obsv, env_state, reward, done, info = env.step(
-                    _rng, env_state, action, env_params
+                obsv, env_state, reward, done, info, = env.step(
+                    _rng, env_state, action, update_step, env_params
                 )
 
                 transition = Transition(
@@ -305,7 +334,7 @@ def make_train(config):
 
             initial_hstate = runner_state[-3]
             runner_state, traj_batch = jax.lax.scan(
-                _env_step, runner_state, None, config["NUM_STEPS"]
+                _env_step, runner_state, None, config["NUM_ENV_STEPS"]
             )
 
             # CALCULATE ADVANTAGE
@@ -529,7 +558,7 @@ def make_train(config):
                 done,
                 hstate,
                 rng,
-                update_step + 1,
+                update_step,
             )
             return runner_state, transition
 
@@ -659,7 +688,7 @@ def make_train(config):
         rng, _rng = jax.random.split(rng)
         runner_state = (
             train_state,
-            env_state,
+            log_state,
             obsv,
             jnp.zeros((config["NUM_ENVS"]), dtype=bool),
             init_hstate,
@@ -681,7 +710,7 @@ def make_train(config):
         rng, _rng = jax.random.split(val_rng_key)
 
         #RE-INIT FOR VAL RUNS
-        obsv, env_state = env.reset(_rng, env_params)
+        obsv, log_state = env.reset(_rng, env_params)
 
         # init_hstate = ScannedRNN.initialize_carry(
         #     config["NUM_ENVS"], config["LAYER_SIZE"]
@@ -689,7 +718,7 @@ def make_train(config):
 
         val_runner_state = (
             runner_state[0],
-            env_state,
+            log_state,
             obsv,
             jnp.ones((config["NUM_ENVS"]), dtype=bool),
             runner_state[4],
@@ -707,22 +736,11 @@ def make_train(config):
     return train
 
 
-def run_ppo(config):
-    config = {k.upper(): v for k, v in config.__dict__.items()}
+def run_ppo():
 
-    if config["USE_WANDB"]:
-        wandb.init(
-            project=config["WANDB_PROJECT"],
-            entity=config["WANDB_ENTITY"],
-            config=config,
-            name=config["ENV_NAME"]
-            + "-PPO_RNN-"
-            + str(int(config["TOTAL_TIMESTEPS"] // 1e6))
-            + "M",
-        )
-
-    else:
-        wandb.init(mode="disabled")
+    run = wandb.init(project="sparsity")
+    config = wandb.config
+    reset_batch_logs()
 
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_REPEATS"])
@@ -758,68 +776,143 @@ def run_ppo(config):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--env_name", type=str, default="Craftax-Symbolic-v1")
-    parser.add_argument(
-        "--num_envs",
-        type=int,
-        default=1024,
-    )
-    parser.add_argument("--total_timesteps", type=int, default=1e9)
-    parser.add_argument("--lr", type=float, default=2e-4)
-    parser.add_argument("--num_steps", type=int, default=64)
-    parser.add_argument("--update_epochs", type=int, default=4)
-    parser.add_argument("--num_minibatches", type=int, default=8)
-    parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--gae_lambda", type=float, default=0.8)
-    parser.add_argument("--clip_eps", type=float, default=0.2)
-    parser.add_argument("--ent_coef", type=float, default=0.01)
-    parser.add_argument("--vf_coef", type=float, default=0.5)
-    parser.add_argument("--max_grad_norm", type=float, default=1.0)
-    parser.add_argument("--activation", type=str, default="tanh")
-    parser.add_argument(
-        "--anneal_lr", action=argparse.BooleanOptionalAction, default=True
-    )
-    parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--jit", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--seed", type=int, default=np.random.randint(2**31))
-    parser.add_argument(
-        "--use_wandb", action=argparse.BooleanOptionalAction, default=True
-    )
-    parser.add_argument(
-        "--save_policy", action=argparse.BooleanOptionalAction, default=False
-    )
-    parser.add_argument("--num_repeats", type=int, default=1)
-    parser.add_argument("--layer_size", type=int, default=512)
-    parser.add_argument("--wandb_project", type=str)
-    parser.add_argument("--wandb_entity", type=str)
-    parser.add_argument(
-        "--use_optimistic_resets", action=argparse.BooleanOptionalAction, default=True
-    )
-    parser.add_argument("--optimistic_reset_ratio", type=int, default=16)
-    parser.add_argument('--updates_per_viz', type=int, default=1024)
-    parser.add_argument('--steps_per_viz', type=int, default=1024)
-    parser.add_argument('--logging_steps_per_viz', type=int, default=8)
-    parser.add_argument('--logging_steps_per_viz_val', type=int, default=8)
-    parser.add_argument('--output_path', type=str, default='./output/')
-    parser.add_argument('--frames_per_file', type=int, default=512)
-    parser.add_argument('--no_videos', action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument('--full_action_space', action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument('--reward_function', type=str, default='foraging')
-    parser.add_argument('--validation_seed', type=int, default=777)
-    parser.add_argument('--validation_step_offset', type=int, default=0)
-    parser.add_argument('--logging_threads_per_viz',type=int, default=1)
-    parser.add_argument('--logging_threads_per_viz_val', type=int, default=1)
 
-    args, rest_args = parser.parse_known_args(sys.argv[1:])
-    if rest_args:
-        raise ValueError(f"Unknown args {rest_args}")
+    sweep_configuration = {
+        "name": "predators_sweep",
+        "method": "grid",
+        "metric": {"name": "episode_return", "goal": "maximize"},
+        "parameters": {
+            "ENV_NAME": {
+                "values": ["Craftax-Symbolic-v1"]
+            },
+            "ALG" : {
+                "values": ["NoPruning"]
+            },
+            "PREDATORS": {
+                "values": [False]
+            },
+            "SPARSITY" : {
+                "values": [None]
+            },
+            "NUM_ENVS": {
+                "values": [1024] # 1024
+            },
+            "TOTAL_TIMESTEPS": {
+                "values": [1e9]
+            },
+            "LR": {
+                "values": [2e-4]
+            },
+            "NUM_ENV_STEPS": {
+                "values": [64]
+            },
+            "UPDATE_EPOCHS": {
+                "values": [4]
+            },
+            "NUM_MINIBATCHES": {
+                "values": [8]
+            },
+            "GAMMA": {
+                "values": [0.99]
+            },
+            "GAE_LAMBDA": {
+                "values": [0.8]
+            },
+            "CLIP_EPS": {
+                "values": [0.2]
+            },
+            "ENT_COEF": {
+                "values": [0.01]
+            },
+            "VF_COEF": {
+                "values": [0.5]
+            },
+            "MAX_GRAD_NORM": {
+                "values": [1.0]
+            },
+            "ACTIVATION": {
+                "values": ["tanh"]
+            },
+            "ANNEAL_LR": {
+                "values": [True]
+            },
+            "DEBUG": {
+                "values": [True]
+            },
+            "JIT": {
+                "values": [True]
+            },
+            "SEED": {
+                "values": [np.random.randint(2 ** 31)]
+            },
+            "USE_WANDB": {
+                "values": [True]
+            },
+            "SAVE_POLICY": {
+                "values": [True]
+            },
+            "NUM_REPEATS": {
+                "values": [1]
+            },
+            "LAYER_SIZE": {
+                "values": [512]
+            },
+            "WANDB_PROJECT": {
+                "values": [None]  # Adjust with actual project name
+            },
+            "WANDB_ENTITY": {
+                "values": [None]  # Adjust with actual entity name
+            },
+            "USE_OPTIMISTIC_RESETS": {
+                "values": [True]
+            },
+            "OPTIMISTIC_RESET_RATIO": {
+                "values": [16]
+            },
+            "UPDATES_PER_VIZ": {
+                "values": [1024]
+            },
+            "STEPS_PER_VIZ": {
+                "values": [1024]
+            },
+            "LOGGING_STEPS_PER_VIZ": {
+                "values": [8]
+            },
+            "LOGGING_STEPS_PER_VIZ_VAL": {
+                "values": [8]
+            },
+            "OUTPUT_PATH": {
+                "values": ['./output/']
+            },
+            "FRAMES_PER_FILE": {
+                "values": [512]
+            },
+            "NO_VIDEOS": {
+                "values": [True]
+            },
+            "FULL_ACTION_SPACE": {
+                "values": [False]
+            },
+            "REWARD_FUNCTION": {
+                "values": ['foraging']
+            },
+            "VALIDATION_SEED": {
+                "values": [777]
+            },
+            "VALIDATION_STEP_OFFSET": {
+                "values": [0]
+            },
+            "LOGGING_THREADS_PER_VIZ": {
+                "values": [1]
+            },
+            "LOGGING_THREADS_PER_VIZ_VAL": {
+                "values": [1]
+            },
+            "CURRICULUM": {
+                "values": [False]
+            },
+        }
+    }
 
-    if args.seed is None:
-        args.seed = np.random.randint(2**31)
-
-    if args.jit:
-        run_ppo(args)
-    else:
-        with jax.disable_jit():
-            run_ppo(args)
+    sweep_id = wandb.sweep(sweep=sweep_configuration, project="predators_sweep")
+    wandb.agent(sweep_id=sweep_id, function=run_ppo)
