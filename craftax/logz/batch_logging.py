@@ -15,6 +15,7 @@ def create_log_dict(info, config):
         "level": info["level"],
         "num_melee_mobs": info["num_melee_mobs"],
         "num_ranged_mobs": info["num_ranged_mobs"],
+        "total_sparsity": info["total_sparsity"],
         #'hidden_state': info['hidden_state'],
     }
 

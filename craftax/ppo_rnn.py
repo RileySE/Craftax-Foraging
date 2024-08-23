@@ -25,6 +25,7 @@ from typing import Sequence, NamedTuple, Dict
 from flax.training.train_state import TrainState
 import distrax
 import functools
+from ml_collections import ConfigDict
 
 from craftax.craftax import craftax_state
 from craftax.environment_base.wrappers import (
@@ -37,6 +38,11 @@ from craftax.environment_base.wrappers import (
     CurriculumWrapper
 )
 from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
+
+import logging
+
+logging.basicConfig(level=logging.INFO, filename='output.log', filemode='w',
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 class ScannedRNN(nn.Module):
@@ -228,7 +234,6 @@ def make_train(config):
 
     def train(rng):
 
-        jax.debug.print('Training')
         # INIT NETWORK
         if config['FULL_ACTION_SPACE']:
             action_space_size = env.action_space(env_params).n
@@ -257,21 +262,20 @@ def make_train(config):
                 optax.adam(config["LR"], eps=1e-5),
             )
 
-        sparsity_distribution = functools.partial(
-            jaxpruner.sparsity_distributions.uniform, sparsity=config["SPARSITY"])
-        if config["ALG"] == "MagnitudePruning":
-            pruner = jaxpruner.MagnitudePruning(sparsity_distribution_fn=sparsity_distribution)
-        elif config["ALG"] == "RandomPruning":
-            pruner = jaxpruner.RandomPruning(sparsity_distribution_fn=sparsity_distribution)
-        elif config["ALG"] == "SaliencyPruning":
-            pruner = jaxpruner.SaliencyPruning(sparsity_distribution_fn=sparsity_distribution)
-        elif config["ALG"] == "SET":
-            pruner = jaxpruner.SET(sparsity_distribution_fn=sparsity_distribution)
-        elif config["ALG"] == "RigL":
-            pruner = jaxpruner.RigL(sparsity_distribution_fn=sparsity_distribution)
+        sparsity_config = ConfigDict()
+        sparsity_config.sparsity = config["SPARSITY"]
+        sparsity_config.algorithm = config["ALG"]
+        sparsity_config.dist_type = "erk"
+        if sparsity_config.algorithm in ['rigl', 'set']: # alg is dynamic
+            sparsity_config.update_freq = 1000 * config["UPDATE_EPOCHS"] * config["NUM_MINIBATCHES"]
+            sparsity_config.drop_fraction = 0.1
         else:
-            pruner = jaxpruner.NoPruning()
-        tx = pruner.wrap_optax(tx)
+            sparsity_config.update_start_step = 10000 * config["UPDATE_EPOCHS"] * config["NUM_MINIBATCHES"]
+            sparsity_config.update_end_step = 10000 * config["UPDATE_EPOCHS"] * config["NUM_MINIBATCHES"]
+
+        sparsity_config = sparsity_config.unlock()
+        updater = jaxpruner.create_updater_from_config(sparsity_config)
+        tx = updater.wrap_optax(tx)
 
         train_state = TrainState.create(
             apply_fn=network.apply,
@@ -290,6 +294,7 @@ def make_train(config):
         def _update_step(runner_state, unused):
             # COLLECT TRAJECTORIES
             def _env_step(runner_state, unused):
+
                 (
                     train_state,
                     env_state,
@@ -331,6 +336,8 @@ def make_train(config):
                     update_step,
                 )
                 return runner_state, transition
+
+            train_state = runner_state[0]
 
             initial_hstate = runner_state[-3]
             runner_state, traj_batch = jax.lax.scan(
@@ -425,11 +432,20 @@ def make_train(config):
                         return total_loss, (value_loss, loss_actor, entropy)
 
                     grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
-                    total_loss, grads = grad_fn(
-                        train_state.params, init_hstate, traj_batch, advantages, targets
+
+                    updated_params = updater.pre_forward_update(
+                        train_state.params, train_state.opt_state
                     )
+
+                    total_loss, grads = grad_fn(
+                        updated_params, init_hstate, traj_batch, advantages, targets
+                    )
+
                     train_state = train_state.apply_gradients(grads=grads)
-                    return train_state, total_loss
+
+                    post_grad_params = updater.post_gradient_update(train_state.params, train_state.opt_state)
+
+                    return train_state.replace(params=post_grad_params), total_loss
 
                 (
                     train_state,
@@ -493,6 +509,11 @@ def make_train(config):
                 / traj_batch.info["returned_episode"].sum(),
                 traj_batch.info,
             )
+
+            metric["total_sparsity"] = jaxpruner.utils.summarize_sparsity(
+                train_state.params, only_total_sparsity=True
+            )["_total_sparsity"]
+
             to_log = metric
 
             rng = update_state[-1]
@@ -603,10 +624,13 @@ def make_train(config):
 
             # Callback function for logging hidden states
             def write_rnn_hstate(hstate, scalars, increment=0):
+
+                run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
+                os.makedirs(run_out_path, exist_ok=True)
                 # We save to temp files and then append to the target file since numpy apparently cannot write files in append mode for some reason
                 for i in range(logging_threads):
-                    out_filename_hstates = os.path.join(config['OUTPUT_PATH'], 'hstates_{}_{}.csv'.format(increment, i))
-                    temp_filename = os.path.join(config['OUTPUT_PATH'], 'temp.csv')
+                    out_filename_hstates = os.path.join(run_out_path, 'hstates_{}_{}.csv'.format(increment, i))
+                    temp_filename = os.path.join(run_out_path, 'temp.csv')
                     np.savetxt(temp_filename,
                                hstate[:, i, :], delimiter=',')
                     temp_file = open(temp_filename, 'r')
@@ -615,7 +639,7 @@ def make_train(config):
                     out_file_hstates.close()
                     temp_file.close()
                     # Then do the same thing for the scalars
-                    out_filename_scalars = os.path.join(config['OUTPUT_PATH'], 'scalars_{}_{}.csv'.format(increment, i))
+                    out_filename_scalars = os.path.join(run_out_path, 'scalars_{}_{}.csv'.format(increment, i))
                     np.savetxt(temp_filename,
                                scalars[:, i, :], delimiter=',', fmt='%f',
                                header='action,health,food,drink,energy,done,is_sleeping,is_resting,player_position_x,'
@@ -677,7 +701,9 @@ def make_train(config):
 
             # Log model weights
             def save_weights_callback(weights_flat, iter):
-                weight_filename = os.path.join(config['OUTPUT_PATH'], 'weights_{}.csv'.format(iter))
+                run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
+                os.makedirs(run_out_path, exist_ok=True)
+                weight_filename = os.path.join(run_out_path, 'weights_{}.csv'.format(iter))
                 weight_file = open(weight_filename, 'w')
                 for weights_set in weights_flat:
                     if len(weights_set.shape) == 1:
@@ -755,8 +781,9 @@ def run_ppo():
     config = wandb.config
     reset_batch_logs()
 
-    else:
-        wandb.init(mode="disabled")
+    if not config["JIT"]:
+        jax.config.update("jax_disable_jit", True)
+        print('JIT disabled')
 
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_REPEATS"])
@@ -770,31 +797,29 @@ def run_ppo():
     print("Time to run experiment", t1 - t0)
     print("SPS: ", config["TOTAL_TIMESTEPS"] / (t1 - t0))
 
-    if config["USE_WANDB"]:
+    def _save_network(rs_index, dir_name):
+        train_states = out["runner_state"][rs_index]
+        train_state = jax.tree_map(lambda x: x[0], train_states)
+        orbax_checkpointer = PyTreeCheckpointer()
+        options = CheckpointManagerOptions(max_to_keep=1, create=True)
+        path = os.path.join(wandb.run.dir, dir_name)
+        checkpoint_manager = CheckpointManager(path, orbax_checkpointer, options)
+        print(f"saved runner state to {path}")
+        save_args = orbax_utils.save_args_from_target(train_state)
+        checkpoint_manager.save(
+            config["TOTAL_TIMESTEPS"],
+            train_state,
+            save_kwargs={"save_args": save_args},
+        )
 
-        def _save_network(rs_index, dir_name):
-            train_states = out["runner_state"][rs_index]
-            train_state = jax.tree_map(lambda x: x[0], train_states)
-            orbax_checkpointer = PyTreeCheckpointer()
-            options = CheckpointManagerOptions(max_to_keep=1, create=True)
-            path = os.path.join(wandb.run.dir, dir_name)
-            checkpoint_manager = CheckpointManager(path, orbax_checkpointer, options)
-            print(f"saved runner state to {path}")
-            save_args = orbax_utils.save_args_from_target(train_state)
-            checkpoint_manager.save(
-                config["TOTAL_TIMESTEPS"],
-                train_state,
-                save_kwargs={"save_args": save_args},
-            )
-
-        if config["SAVE_POLICY"]:
-            _save_network(0, "policies")
+    if config["SAVE_POLICY"]:
+        _save_network(0, "policies")
 
 
 if __name__ == "__main__":
 
     sweep_configuration = {
-        "name": "predators_sweep",
+        "name": "sparsity_sweep",
         "method": "grid",
         "metric": {"name": "episode_return", "goal": "maximize"},
         "parameters": {
@@ -802,16 +827,16 @@ if __name__ == "__main__":
                 "values": ["Craftax-Symbolic-v1"]
             },
             "ALG" : {
-                "values": ["NoPruning"]
+                "values": ["magnitude", "set", "rigl", "saliency"] # 'no_prune'
             },
             "PREDATORS": {
-                "values": [False]
+                "values": [True]
             },
             "SPARSITY" : {
-                "values": [None]
+                "values": [.4, .8]
             },
             "NUM_ENVS": {
-                "values": [1024] # 1024
+                "values": [1024] # 1024 1
             },
             "TOTAL_TIMESTEPS": {
                 "values": [1e9]
@@ -820,13 +845,13 @@ if __name__ == "__main__":
                 "values": [2e-4]
             },
             "NUM_ENV_STEPS": {
-                "values": [64]
+                "values": [64] # 64 # 1
             },
             "UPDATE_EPOCHS": {
                 "values": [4]
             },
             "NUM_MINIBATCHES": {
-                "values": [8]
+                "values": [8] # 8 # 1
             },
             "GAMMA": {
                 "values": [0.99]
@@ -930,5 +955,5 @@ if __name__ == "__main__":
         }
     }
 
-    sweep_id = wandb.sweep(sweep=sweep_configuration, project="predators_sweep")
+    sweep_id = wandb.sweep(sweep=sweep_configuration, project="sparsity_sweep")
     wandb.agent(sweep_id=sweep_id, function=run_ppo)

@@ -485,30 +485,6 @@ class CurriculumWrapper(GymnaxWrapper):
                                       max_ranged_mobs=batched_max_ranged_mobs)
         return log_state.replace(env_state=env_state)
 
-    def update_curriculum(self, log_state, update_step):
-        state = log_state.env_state
-
-        # update level
-        level = jnp.floor(update_step * self.num_levels / self.total_steps + 1)
-        batched_level = jnp.full((self.num_envs,), level, dtype=jnp.int32)
-        state = state.replace(level=batched_level)
-
-        # update spawn chances
-        level_melee_spawn_chance = level / self.num_levels * state.max_melee_spawn_chance
-        level_ranged_spawn_chance = level / self.num_levels * state.max_ranged_spawn_chance
-        state = state.replace(max_melee_spawn_chance=level_melee_spawn_chance,
-                              max_ranged_spawn_chance=level_ranged_spawn_chance)
-
-        # update max mobs
-        max_melee_mobs = level / self.num_levels * 10
-        max_ranged_mobs = level / self.num_levels * 10
-        batched_max_melee_mobs = jnp.full((self.num_envs,), max_melee_mobs, dtype=jnp.int32)
-        batched_max_ranged_mobs = jnp.full((self.num_envs,), max_ranged_mobs, dtype=jnp.int32)
-        state = state.replace(max_melee_mobs=batched_max_melee_mobs,
-                              max_ranged_mobs=batched_max_ranged_mobs)
-
-        return log_state.replace(env_state=state)
-
     def reset(
             self, rng, params: Optional[environment.EnvParams] = None
     ) -> Tuple[chex.Array, LogEnvState]:
@@ -535,9 +511,33 @@ class CurriculumWrapper(GymnaxWrapper):
 
         obs, log_state, reward, done, info = self._env.step(key, log_state, action, params)
 
+        def update_curriculum(log_state, update_step):
+            state = log_state.env_state
+
+            # update level
+            level = jnp.floor(update_step * self.num_levels / self.total_steps + 1)
+            batched_level = jnp.full((self.num_envs,), level, dtype=jnp.int32)
+            state = state.replace(level=batched_level)
+
+            # update spawn chances
+            level_melee_spawn_chance = level / self.num_levels * state.max_melee_spawn_chance
+            level_ranged_spawn_chance = level / self.num_levels * state.max_ranged_spawn_chance
+            state = state.replace(max_melee_spawn_chance=level_melee_spawn_chance,
+                                  max_ranged_spawn_chance=level_ranged_spawn_chance)
+
+            # update max mobs
+            max_melee_mobs = level / self.num_levels * 10
+            max_ranged_mobs = level / self.num_levels * 10
+            batched_max_melee_mobs = jnp.full((self.num_envs,), max_melee_mobs, dtype=jnp.int32)
+            batched_max_ranged_mobs = jnp.full((self.num_envs,), max_ranged_mobs, dtype=jnp.int32)
+            state = state.replace(max_melee_mobs=batched_max_melee_mobs,
+                                  max_ranged_mobs=batched_max_ranged_mobs)
+
+            return log_state.replace(env_state=state)
+
         log_state = jax.lax.cond(
             self.use_curriculum,
-            lambda ls: self.update_curriculum(log_state, update_step),
+            lambda ls: update_curriculum(log_state, update_step),
             lambda ls: log_state,
             log_state
         )
