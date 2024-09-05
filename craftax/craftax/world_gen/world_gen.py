@@ -665,6 +665,7 @@ def generate_world(rng, params, static_params):
         .at[0]
         .set(10),  # First ladder starts open
         player_position=player_position,
+        player_starting_position=player_position,
         player_direction=jnp.asarray(Action.UP.value, dtype=jnp.int32),
         player_level=jnp.asarray(0, dtype=jnp.int32),
         player_health=jnp.asarray(9.0, dtype=jnp.float32),

@@ -115,7 +115,23 @@ class ActorCriticRNN(nn.Module):
             critic
         )
 
-        return hidden, pi, jnp.squeeze(critic, axis=-1)
+        aux = nn.Dense(
+            self.config["LAYER_SIZE"],
+            kernel_init=orthogonal(2),
+            bias_init=constant(0.0),
+        )(embedding)
+        aux = nn.relu(aux)
+        aux = nn.Dense(
+            self.config["LAYER_SIZE"],
+            kernel_init=orthogonal(2),
+            bias_init=constant(0.0),
+        )(aux)
+        aux = nn.relu(aux)
+        aux = nn.Dense(2, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
+            aux
+        )
+
+        return hidden, pi, jnp.squeeze(critic, axis=-1), aux
 
 
 class Transition(NamedTuple):
@@ -126,6 +142,7 @@ class Transition(NamedTuple):
     log_prob: jnp.ndarray
     obs: jnp.ndarray
     info: jnp.ndarray
+    deltas_to_start: jnp.ndarray
 
 
 def make_train(config):
@@ -274,7 +291,7 @@ def make_train(config):
 
                 # SELECT ACTION
                 ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-                hstate, pi, value = network.apply(train_state.params, hstate, ac_in)
+                hstate, pi, value, aux = network.apply(train_state.params, hstate, ac_in)
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
                 value, action, log_prob = (
@@ -289,8 +306,13 @@ def make_train(config):
                     _rng, env_state, action, env_params
                 )
 
+                # Compute distance to origin for aux loss
+                starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
+                # dists_to_start = jnp.linalg.norm(env_state.player_position - starting_pos, ord=1, axis=-1)
+                deltas_to_start = env_state.env_state.player_position - starting_pos
+
                 transition = Transition(
-                    last_done, action, value, reward, log_prob, last_obs, info
+                    last_done, action, value, reward, log_prob, last_obs, info, deltas_to_start
                 )
                 runner_state = (
                     train_state,
@@ -319,7 +341,7 @@ def make_train(config):
                 update_step,
             ) = runner_state
             ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-            _, _, last_val = network.apply(train_state.params, hstate, ac_in)
+            _, _, last_val, _ = network.apply(train_state.params, hstate, ac_in)
             last_val = last_val.squeeze(0)
 
             def _calculate_gae(traj_batch, last_val, last_done):
@@ -357,7 +379,7 @@ def make_train(config):
 
                     def _loss_fn(params, init_hstate, traj_batch, gae, targets):
                         # RERUN NETWORK
-                        _, pi, value = network.apply(
+                        _, pi, value, aux = network.apply(
                             params, init_hstate[0], (traj_batch.obs, traj_batch.done)
                         )
                         log_prob = pi.log_prob(traj_batch.action)
@@ -388,12 +410,18 @@ def make_train(config):
                         loss_actor = loss_actor.mean()
                         entropy = pi.entropy().mean()
 
+                        # Calculate auxiliary loss (predict distance to origin)
+                        # Simple L2
+                        aux_loss = jnp.square(aux - traj_batch.deltas_to_start).mean()
+
                         total_loss = (
                             loss_actor
                             + config["VF_COEF"] * value_loss
                             - config["ENT_COEF"] * entropy
+                            + config["AUX_COEF"] * aux_loss
                         )
-                        return total_loss, (value_loss, loss_actor, entropy)
+
+                        return total_loss, (value_loss, loss_actor, entropy, aux_loss)
 
                     grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
                     total_loss, grads = grad_fn(
@@ -459,6 +487,10 @@ def make_train(config):
             )
             train_state = update_state[0]
 
+            # TODO figure out how to log loss data, it's not syncronized with env steps so this is annoying
+            #traj_batch.info['total_loss'] = loss_info[0].mean()
+            #traj_batch.info['aux_loss'] = loss_info[1][-1].mean()
+
             metric = jax.tree_map(
                 lambda x: (x * traj_batch.info["returned_episode"]).sum()
                 / traj_batch.info["returned_episode"].sum(),
@@ -503,7 +535,7 @@ def make_train(config):
 
             # SELECT ACTION
             ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-            hstate, pi, value = network.apply(train_state.params, hstate, ac_in)
+            hstate, pi, value, aux = network.apply(train_state.params, hstate, ac_in)
             action = pi.sample(seed=_rng)
             log_prob = pi.log_prob(action)
             value, action, log_prob = (
@@ -517,10 +549,18 @@ def make_train(config):
             obsv, env_state, reward, done, info = env_viz.step(
                 _rng, env_state, action, env_params
             )
+
+            # Compute distance to origin for aux loss
+            starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
+            deltas_to_start = env_state.env_state.player_position - starting_pos
+
             # HACK: Add hstate to info for future logging
             info['hidden_state'] = hstate
+            info['pred_delta'] = aux
+            info['delta'] = deltas_to_start
+
             transition = Transition(
-                last_done, action, value, reward, log_prob, last_obs, info
+                last_done, action, value, reward, log_prob, last_obs, info, deltas_to_start,
             )
             runner_state = (
                 train_state,
@@ -569,6 +609,8 @@ def make_train(config):
             num_melee_nearby = traj_batch.info['num_melee_nearby']
             num_passives_nearby = traj_batch.info['num_passives_nearby']
             num_ranged_nearby = traj_batch.info['num_ranged_nearby']
+            delta = traj_batch.info['delta']
+            pred_delta = traj_batch.info['pred_delta']
             epi_ids = traj_batch.info['episode_id']
             traj_batch.info['hidden_state'] = None
 
@@ -592,7 +634,8 @@ def make_train(config):
                                header='action,health,food,drink,energy,done,is_sleeping,is_resting,player_position_x,'
                                       'player_position_y,recover,hunger,thirst,fatigue,light_level,dist_to_melee_l1,'
                                       'melee_on_screen,dist_to_passive_l1,passive_on_screen,dist_to_ranged_l1,'
-                                      'ranged_on_screen,num_melee_nearby,num_passives_nearby,num_ranged_nearby,episode_id'
+                                      'ranged_on_screen,num_melee_nearby,num_passives_nearby,num_ranged_nearby,delta_x,'
+                                      'delta_y,pred_delta_x,pred_delta_y,episode_id'
                                )
                     temp_file = open(temp_filename, 'r')
                     out_file_scalars = open(out_filename_scalars, 'a+')
@@ -603,6 +646,7 @@ def make_train(config):
 
             # Reshape logging arrays and concat
             new_shape = actions.shape + (1,)
+            new_shape_2 = actions.shape + (2,)
             actions = actions.reshape(new_shape)
             healths = healths.reshape(new_shape)
             foods = foods.reshape(new_shape)
@@ -627,13 +671,16 @@ def make_train(config):
             num_melee_nearby = num_melee_nearby.reshape(new_shape)
             num_passives_nearby = num_passives_nearby.reshape(new_shape)
             num_ranged_nearby = num_ranged_nearby.reshape(new_shape)
+            delta = delta.reshape(new_shape_2)
+            pred_delta = pred_delta.reshape(new_shape_2)
             epi_ids = epi_ids.reshape(new_shape)
 
             log_array = jnp.concatenate([actions, healths, foods, drinks, energies, dones, is_sleepings, is_restings,
                                          player_position_xs, player_position_ys, recovers, hungers, thirsts, fatigues,
                                          light_levels, dist_to_melees,melee_on_screen, dist_to_passives, passive_on_screen,
                                          dist_to_ranged, ranged_on_screen, num_melee_nearby, num_passives_nearby,
-                                         num_ranged_nearby, epi_ids
+                                         num_ranged_nearby, delta, pred_delta,
+                                         epi_ids,
                                          ], axis=2)
             jax.debug.callback(write_rnn_hstate, hidden_states, log_array, update_step)
 
@@ -788,6 +835,7 @@ if __name__ == "__main__":
     parser.add_argument("--clip_eps", type=float, default=0.2)
     parser.add_argument("--ent_coef", type=float, default=0.01)
     parser.add_argument("--vf_coef", type=float, default=0.5)
+    parser.add_argument("--aux_coef", type=float, default=0.1)
     parser.add_argument("--max_grad_norm", type=float, default=1.0)
     parser.add_argument("--activation", type=str, default="tanh")
     parser.add_argument(
