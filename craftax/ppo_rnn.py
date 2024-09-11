@@ -447,8 +447,8 @@ def make_train(config):
                             loss_actor
                             + config["VF_COEF"] * value_loss
                             - config["ENT_COEF"] * entropy
-                            + 0.0 * sparse_loss
-                            + 0.00001 * l1_loss
+                            + config['SPARSE_COEF'] * sparse_loss
+                            + config['L1_DECAY_COEF'] * l1_loss
                         )
                         return total_loss, (value_loss, loss_actor, entropy, sparse_loss)
 
@@ -832,6 +832,8 @@ if __name__ == "__main__":
     parser.add_argument("--clip_eps", type=float, default=0.2)
     parser.add_argument("--ent_coef", type=float, default=0.01)
     parser.add_argument("--vf_coef", type=float, default=0.5)
+    parser.add_argument("--sparse_coef", type=float, default=1.0)
+    parser.add_argument("--l1_decay_coef", type=float, default=0.0)
     parser.add_argument("--max_grad_norm", type=float, default=1.0)
     parser.add_argument("--activation", type=str, default="tanh")
     parser.add_argument(
