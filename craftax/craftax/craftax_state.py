@@ -56,6 +56,8 @@ class EnvState:
     player_position: jnp.ndarray
     player_level: int
     player_direction: int
+    # Initial coordinates of the player at start of the episode
+    player_starting_position: jnp.ndarray
 
     # Intrinsics
     player_health: float
