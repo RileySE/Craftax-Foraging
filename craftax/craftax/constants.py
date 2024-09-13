@@ -152,8 +152,6 @@ FLOOR_MOB_MAPPING = jnp.array(
 )
 
 
-
-
 # Path blocks, water, lava  (everything collides with solid blocks)
 COLLISION_LAND_CREATURE = [False, True, True]
 COLLISION_FLYING = [False, False, False]
