@@ -626,7 +626,7 @@ def make_train(config):
                 done,
                 hstate,
                 rng,
-                update_step + 1,
+                update_step,
             )
             return runner_state, transition
 
