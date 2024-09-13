@@ -136,14 +136,17 @@ class EnvParams:
 
 # HACK: Removed the static "struct.dataclass" declaration. Hope that didn't break any optimizations!
 class StaticEnvParams:
-    map_size: Tuple[int, int] = (48, 48)
+    # HACK: Increased arena size to 96-square
+    # TODO expose arena size as a hyperparameter
+    map_size: Tuple[int, int] = (96, 96)
     num_levels: int = 9
     reward_func: str = 'foraging'
 
     # Mobs
     max_melee_mobs: int = 3
     # HACK: Doubled to 18 for patch depletion stuff
-    max_passive_mobs: int = 18
+    # TODO make passive max scale with arena size to maintain constant density
+    max_passive_mobs: int = 72
     max_growing_plants: int = 30
     max_ranged_mobs: int = 2
     max_mob_projectiles: int = 3
