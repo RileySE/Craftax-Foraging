@@ -443,29 +443,43 @@ def make_train(config):
                         # Input layer
                         sparse_loss = compute_sparse_loss(flat_params[0][1])
                         l1_loss = compute_l1_sparse_loss(flat_params[0][1])
+
+                        sparse_loss += compute_sparse_loss(flat_params[0][3])
+                        l1_loss += compute_l1_sparse_loss(flat_params[0][3])
                         #jax.debug.print('first one is {}', sparse_loss)
                         sparse_loss += compute_sparse_loss(flat_params[0][5])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][5])
                         # Policy output
                         #sparse_loss += compute_sparse_loss(flat_params[0][7])
+
                         sparse_loss += compute_sparse_loss(flat_params[0][9])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][9])
                         sparse_loss += compute_sparse_loss(flat_params[0][11])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][11])
                         # Value output
                         #sparse_loss += compute_sparse_loss(flat_params[0][13])
+
                         sparse_loss += compute_sparse_loss(flat_params[0][15])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][15])
-                        sparse_loss += compute_sparse_loss(flat_params[0][16])
-                        l1_loss += compute_l1_sparse_loss(flat_params[0][16])
+
                         sparse_loss += compute_sparse_loss(flat_params[0][17])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][17])
-                        sparse_loss += compute_sparse_loss(flat_params[0][19])
-                        l1_loss += compute_l1_sparse_loss(flat_params[0][19])
+                        # Aux output
+                        #sparse_loss += compute_sparse_loss(flat_params[0][19])
+                        #l1_loss += compute_l1_sparse_loss(flat_params[0][19])
+
                         sparse_loss += compute_sparse_loss(flat_params[0][21])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][21])
+                        sparse_loss += compute_sparse_loss(flat_params[0][22])
+                        l1_loss += compute_l1_sparse_loss(flat_params[0][22])
                         sparse_loss += compute_sparse_loss(flat_params[0][23])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][23])
+                        sparse_loss += compute_sparse_loss(flat_params[0][25])
+                        l1_loss += compute_l1_sparse_loss(flat_params[0][25])
+                        sparse_loss += compute_sparse_loss(flat_params[0][27])
+                        l1_loss += compute_l1_sparse_loss(flat_params[0][27])
+                        sparse_loss += compute_sparse_loss(flat_params[0][29])
+                        l1_loss += compute_l1_sparse_loss(flat_params[0][29])
                         #jax.debug.print('total is {}', sparse_loss)
 
 
