@@ -830,7 +830,7 @@ def run_ppo():
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_REPEATS"])
 
-    train_jit = jax.jit(make_train(config))
+    train_jit = jax.jit(make_train(config), device=jax.devices()[config['GPU_ID']])
     train_vmap = jax.vmap(train_jit)
 
     t0 = time.time()
@@ -870,6 +870,9 @@ if __name__ == "__main__":
             },
             "SPARSE_ALG" : {
                 "values": ["magnitude", "set", "rigl", "saliency"] # 'no_prune'
+            },
+            "GPU_ID": {
+                "values": [0]
             },
             "PREDATORS": {
                 "values": [True]
