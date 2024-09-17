@@ -53,7 +53,7 @@ make_histogram(max_weights_np, 'Max weight of each neuron', ylabel='% of Neurons
 
 non_0_np = np.asarray(non_0_counts)
 
-make_histogram(non_0_np, 'Fraction of non-0 weights per neuron', '# Non-0 weights', '% of Neurons', count, 100)
+make_histogram(non_0_np, 'Fraction of non-0 weights per neuron', '# Non-0 weights', '% of Neurons', count, 500)
 
 for layer in range(len(non_0_per_layer)):
     make_histogram(non_0_per_layer[layer], 'Fraction of non-0 weights per neuron, layer ' + str(layer+1), '# Non-0 weights', '% of Neurons', layer_size, 100)

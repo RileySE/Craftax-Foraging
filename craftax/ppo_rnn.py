@@ -435,7 +435,7 @@ def make_train(config):
 
                         # Simple L1 magnitude penalty, as a baseline
                         def compute_l1_sparse_loss(layer_params):
-                            return jnp.abs(layer_params).sum()
+                            return jnp.abs(layer_params).mean()
 
                         # Compute sparsity loss for each layer's weights
                         flat_params = jax.tree.flatten(params)
