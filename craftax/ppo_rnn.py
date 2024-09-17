@@ -787,7 +787,7 @@ def run_ppo(config):
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_REPEATS"])
 
-    train_jit = jax.jit(make_train(config))
+    train_jit = jax.jit(make_train(config), device=jax.devices()[config['GPU_ID']])
     train_vmap = jax.vmap(train_jit)
 
     t0 = time.time()
@@ -850,6 +850,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--save_policy", action=argparse.BooleanOptionalAction, default=False
     )
+    parser.add_argument('--gpu_id', type=int, default=0)
     parser.add_argument("--num_repeats", type=int, default=1)
     parser.add_argument("--layer_size", type=int, default=512)
     parser.add_argument("--wandb_project", type=str)
