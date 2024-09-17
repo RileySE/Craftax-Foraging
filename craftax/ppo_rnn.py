@@ -37,7 +37,7 @@ from craftax.environment_base.wrappers import (
     ReduceActionSpaceWrapper,
     CurriculumWrapper
 )
-from craftax.logz.batch_logging import create_log_dict, batch_log
+from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
 
 
 class ScannedRNN(nn.Module):
@@ -910,7 +910,10 @@ if __name__ == "__main__":
             "VF_COEF": {
                 "values": [0.5]
             },
-            "MAX_GRAD_NORM": {
+            "AUX_COEF": {
+                "values": [.1]
+            },
+            "MAX_GRAD_NORM":{
                 "values": [1.0]
             },
             "ACTIVATION": {
@@ -994,6 +997,7 @@ if __name__ == "__main__":
             "CURRICULUM": {
                 "values": [False]
             },
+
         }
     }
 
