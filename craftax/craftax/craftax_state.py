@@ -50,6 +50,8 @@ class EnvState:
     player_position: jnp.ndarray
     player_level: int
     player_direction: int
+    # Initial coordinates of the player at start of the episode
+    player_starting_position: jnp.ndarray
 
     # Intrinsics
     player_health: float
@@ -155,13 +157,16 @@ class EnvParams:
 
 # HACK: Removed the static "struct.dataclass" declaration. Hope that didn't break any optimizations!
 class StaticEnvParams:
-    map_size: Tuple[int, int] = (48, 48)
+    # HACK: Increased arena size to 96-square
+    # TODO expose arena size as a hyperparameter
+    map_size: Tuple[int, int] = (96, 96)
     num_levels: int = 9
     reward_func: str = 'foraging'
 
     # Mobs
     # HACK: Doubled to 18 for patch depletion stuff
-    max_passive_mobs: int = 18
+    # TODO make passive max scale with arena size to maintain constant density
+    max_passive_mobs: int = 72
     max_growing_plants: int = 30
     max_mob_projectiles: int = 3
     max_player_projectiles: int = 3
