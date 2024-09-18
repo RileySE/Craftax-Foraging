@@ -39,6 +39,167 @@ from craftax.environment_base.wrappers import (
 )
 from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
 
+def main():
+
+    def parse_args():
+        parser = argparse.ArgumentParser(description="Script for running sweeps and experiments.")
+        parser.add_argument("--gpu_id", type=int, default=1, help="ID of the GPU to use")
+        parser.add_argument("--prune_alg", type=str, nargs='+', default=["no_prune"], help="Algorithms to use for sparsity sweep")
+        parser.add_argument("--predators", type=bool, default=[True], help="Whether to use predators in the environment")
+        parser.add_argument("--sparsity", type=float, nargs='+', default=[0.8], help="Sparsity levels for sweep")
+        # Add other parameters as needed
+
+        return parser.parse_args()
+
+    args = parse_args()
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu_id)
+
+    sweep_configuration = {
+        "name": "sparsity_sweep",
+        "method": "grid",
+        "metric": {"name": "episode_return", "goal": "maximize"},
+        "parameters": {
+            "ENV_NAME": {
+                "values": ["Craftax-Symbolic-v1"]
+            },
+            "GPU_ID": {
+                "values": [args.gpu_id]
+            },
+            "ALG" : {
+                "values": args.prune_alg
+            },
+            "PREDATORS": {
+                "values": [args.predators]
+            },
+            "SPARSITY" : {
+                "values": args.sparsity
+            },
+            "NUM_ENVS": {
+                "values": [1024] # 1024 1
+            },
+            "TOTAL_TIMESTEPS": {
+                "values": [1e9]
+            },
+            "LR": {
+                "values": [2e-4]
+            },
+            "NUM_ENV_STEPS": {
+                "values": [64] # 64 # 1
+            },
+            "UPDATE_EPOCHS": {
+                "values": [4]
+            },
+            "NUM_MINIBATCHES": {
+                "values": [8] # 8 # 1
+            },
+            "GAMMA": {
+                "values": [0.99]
+            },
+            "GAE_LAMBDA": {
+                "values": [0.8]
+            },
+            "CLIP_EPS": {
+                "values": [0.2]
+            },
+            "ENT_COEF": {
+                "values": [0.01]
+            },
+            "VF_COEF": {
+                "values": [0.5]
+            },
+            "AUX_COEF": {
+                "values": [.1]
+            },
+            "MAX_GRAD_NORM":{
+                "values": [1.0]
+            },
+            "ACTIVATION": {
+                "values": ["tanh"]
+            },
+            "ANNEAL_LR": {
+                "values": [True]
+            },
+            "DEBUG": {
+                "values": [True]
+            },
+            "JIT": {
+                "values": [True]
+            },
+            "SEED": {
+                "values": [np.random.randint(2 ** 31)]
+            },
+            "USE_WANDB": {
+                "values": [True]
+            },
+            "SAVE_POLICY": {
+                "values": [True]
+            },
+            "NUM_REPEATS": {
+                "values": [1]
+            },
+            "LAYER_SIZE": {
+                "values": [512]
+            },
+            "WANDB_PROJECT": {
+                "values": [None]  # Adjust with actual project name
+            },
+            "WANDB_ENTITY": {
+                "values": [None]  # Adjust with actual entity name
+            },
+            "USE_OPTIMISTIC_RESETS": {
+                "values": [True]
+            },
+            "OPTIMISTIC_RESET_RATIO": {
+                "values": [16]
+            },
+            "UPDATES_PER_VIZ": {
+                "values": [1024]
+            },
+            "STEPS_PER_VIZ": {
+                "values": [1024]
+            },
+            "LOGGING_STEPS_PER_VIZ": {
+                "values": [8]
+            },
+            "LOGGING_STEPS_PER_VIZ_VAL": {
+                "values": [8]
+            },
+            "OUTPUT_PATH": {
+                "values": ['./output/']
+            },
+            "FRAMES_PER_FILE": {
+                "values": [512]
+            },
+            "NO_VIDEOS": {
+                "values": [True]
+            },
+            "FULL_ACTION_SPACE": {
+                "values": [False]
+            },
+            "REWARD_FUNCTION": {
+                "values": ['foraging']
+            },
+            "VALIDATION_SEED": {
+                "values": [777]
+            },
+            "VALIDATION_STEP_OFFSET": {
+                "values": [0]
+            },
+            "LOGGING_THREADS_PER_VIZ": {
+                "values": [1]
+            },
+            "LOGGING_THREADS_PER_VIZ_VAL": {
+                "values": [1]
+            },
+            "CURRICULUM": {
+                "values": [False]
+            },
+
+        }
+    }
+
+    sweep_id = wandb.sweep(sweep=sweep_configuration, project="sparsity_sweep")
+    wandb.agent(sweep_id=sweep_id, function=run_ppo)
 
 class ScannedRNN(nn.Module):
     @functools.partial(
@@ -857,149 +1018,5 @@ def run_ppo():
     if config["SAVE_POLICY"]:
         _save_network(0, "policies")
 
-
 if __name__ == "__main__":
-
-    sweep_configuration = {
-        "name": "sparsity_sweep",
-        "method": "grid",
-        "metric": {"name": "episode_return", "goal": "maximize"},
-        "parameters": {
-            "ENV_NAME": {
-                "values": ["Craftax-Symbolic-v1"]
-            },
-            "ALG" : {
-                "values": ["magnitude", "set", "rigl", "saliency"] # 'no_prune'
-            },
-            "PREDATORS": {
-                "values": [True]
-            },
-            "SPARSITY" : {
-                "values": [.4, .8]
-            },
-            "NUM_ENVS": {
-                "values": [1024] # 1024 1
-            },
-            "TOTAL_TIMESTEPS": {
-                "values": [1e9]
-            },
-            "LR": {
-                "values": [2e-4]
-            },
-            "NUM_ENV_STEPS": {
-                "values": [64] # 64 # 1
-            },
-            "UPDATE_EPOCHS": {
-                "values": [4]
-            },
-            "NUM_MINIBATCHES": {
-                "values": [8] # 8 # 1
-            },
-            "GAMMA": {
-                "values": [0.99]
-            },
-            "GAE_LAMBDA": {
-                "values": [0.8]
-            },
-            "CLIP_EPS": {
-                "values": [0.2]
-            },
-            "ENT_COEF": {
-                "values": [0.01]
-            },
-            "VF_COEF": {
-                "values": [0.5]
-            },
-            "AUX_COEF": {
-                "values": [.1]
-            },
-            "MAX_GRAD_NORM":{
-                "values": [1.0]
-            },
-            "ACTIVATION": {
-                "values": ["tanh"]
-            },
-            "ANNEAL_LR": {
-                "values": [True]
-            },
-            "DEBUG": {
-                "values": [True]
-            },
-            "JIT": {
-                "values": [True]
-            },
-            "SEED": {
-                "values": [np.random.randint(2 ** 31)]
-            },
-            "USE_WANDB": {
-                "values": [True]
-            },
-            "SAVE_POLICY": {
-                "values": [True]
-            },
-            "NUM_REPEATS": {
-                "values": [1]
-            },
-            "LAYER_SIZE": {
-                "values": [512]
-            },
-            "WANDB_PROJECT": {
-                "values": [None]  # Adjust with actual project name
-            },
-            "WANDB_ENTITY": {
-                "values": [None]  # Adjust with actual entity name
-            },
-            "USE_OPTIMISTIC_RESETS": {
-                "values": [True]
-            },
-            "OPTIMISTIC_RESET_RATIO": {
-                "values": [16]
-            },
-            "UPDATES_PER_VIZ": {
-                "values": [1024]
-            },
-            "STEPS_PER_VIZ": {
-                "values": [1024]
-            },
-            "LOGGING_STEPS_PER_VIZ": {
-                "values": [8]
-            },
-            "LOGGING_STEPS_PER_VIZ_VAL": {
-                "values": [8]
-            },
-            "OUTPUT_PATH": {
-                "values": ['./output/']
-            },
-            "FRAMES_PER_FILE": {
-                "values": [512]
-            },
-            "NO_VIDEOS": {
-                "values": [True]
-            },
-            "FULL_ACTION_SPACE": {
-                "values": [False]
-            },
-            "REWARD_FUNCTION": {
-                "values": ['foraging']
-            },
-            "VALIDATION_SEED": {
-                "values": [777]
-            },
-            "VALIDATION_STEP_OFFSET": {
-                "values": [0]
-            },
-            "LOGGING_THREADS_PER_VIZ": {
-                "values": [1]
-            },
-            "LOGGING_THREADS_PER_VIZ_VAL": {
-                "values": [1]
-            },
-            "CURRICULUM": {
-                "values": [False]
-            },
-
-        }
-    }
-
-    sweep_id = wandb.sweep(sweep=sweep_configuration, project="sparsity_sweep")
-    wandb.agent(sweep_id=sweep_id, function=run_ppo)
+    main()
