@@ -34,7 +34,7 @@ from craftax.environment_base.wrappers import (
     AutoResetEnvWrapper,
     BatchEnvWrapper,
     VideoPlotWrapper,
-    ReduceActionSpaceWrapper,
+    ReduceActionSpaceWrapper, AppendActionToObsWrapper,
     CurriculumWrapper
 )
 from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
@@ -210,6 +210,9 @@ def make_train(config):
     if not config['FULL_ACTION_SPACE']:
         env = ReduceActionSpaceWrapper(env)
 
+    if config['ACTION_IN_OBS']:
+        env = AppendActionToObsWrapper(env)
+
     # Env version to log videos, use only for occasional visualization as plotting is expensive/slow
     # TODO why do I need to put this wrapper early in the stack? It can't just layer on top
     env_viz = VideoPlotWrapper(env, config['OUTPUT_PATH'], config['FRAMES_PER_FILE'], not config['NO_VIDEOS'])
@@ -258,9 +261,12 @@ def make_train(config):
             action_space_size = 17
         network = ActorCriticRNN(action_space_size, config=config)
         rng, _rng = jax.random.split(rng)
+        # We have to do this here because I can't figure out how to wrap the observation_space function (it's not defined in Gymnax, seemingly)
+        if config['ACTION_IN_OBS']:
+            obs_shape = env.observation_space(env_params).shape[:-1] + (env.observation_space(env_params).shape[-1] + 1,)
         init_x = (
             jnp.zeros(
-                (1, config["NUM_ENVS"], *env.observation_space(env_params).shape)
+                (1, config["NUM_ENVS"], *obs_shape)
             ),
             jnp.zeros((1, config["NUM_ENVS"])),
         )
@@ -930,6 +936,9 @@ if __name__ == "__main__":
             },
             "JIT": {
                 "values": [True]
+            },
+            "ACTION_IN_OBS": {
+                "values": [False]
             },
             "SEED": {
                 "values": [np.random.randint(2 ** 31)]
