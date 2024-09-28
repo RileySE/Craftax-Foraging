@@ -31,7 +31,7 @@ from craftax.environment_base.wrappers import (
     OptimisticResetVecEnvWrapper,
     AutoResetEnvWrapper,
     BatchEnvWrapper,
-    VideoPlotWrapper, ReduceActionSpaceWrapper,
+    VideoPlotWrapper, ReduceActionSpaceWrapper, AppendActionToObsWrapper,
 )
 from craftax.logz.batch_logging import create_log_dict, batch_log
 
@@ -199,6 +199,9 @@ def make_train(config):
     if not config['FULL_ACTION_SPACE']:
         env = ReduceActionSpaceWrapper(env)
 
+    if config['ACTION_IN_OBS']:
+        env = AppendActionToObsWrapper(env)
+
     # Env version to log videos, use only for occasional visualization as plotting is expensive/slow
     # TODO why do I need to put this wrapper early in the stack? It can't just layer on top
     env_viz = VideoPlotWrapper(env, config['OUTPUT_PATH'], config['FRAMES_PER_FILE'], not config['NO_VIDEOS'])
@@ -241,9 +244,12 @@ def make_train(config):
             action_space_size = 17
         network = ActorCriticRNN(action_space_size, config=config)
         rng, _rng = jax.random.split(rng)
+        # We have to do this here because I can't figure out how to wrap the observation_space function (it's not defined in Gymnax, seemingly)
+        if config['ACTION_IN_OBS']:
+            obs_shape = env.observation_space(env_params).shape[:-1] + (env.observation_space(env_params).shape[-1] + 1,)
         init_x = (
             jnp.zeros(
-                (1, config["NUM_ENVS"], *env.observation_space(env_params).shape)
+                (1, config["NUM_ENVS"], *obs_shape)
             ),
             jnp.zeros((1, config["NUM_ENVS"])),
         )
@@ -872,6 +878,7 @@ if __name__ == "__main__":
     parser.add_argument('--validation_step_offset', type=int, default=0)
     parser.add_argument('--logging_threads_per_viz',type=int, default=1)
     parser.add_argument('--logging_threads_per_viz_val', type=int, default=1)
+    parser.add_argument('--action_in_obs', action=argparse.BooleanOptionalAction, default=False)
 
     args, rest_args = parser.parse_known_args(sys.argv[1:])
     if rest_args:

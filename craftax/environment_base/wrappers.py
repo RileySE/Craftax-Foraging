@@ -176,6 +176,35 @@ class ReduceActionSpaceWrapper(GymnaxWrapper):
         super().__init__(env)
         self.action_space().n = 17
 
+# Wrapper to add the action to the observation vector. Simple(?)
+class AppendActionToObsWrapper(GymnaxWrapper):
+
+    @partial(jax.jit, static_argnums=(0, 4))
+    def step(
+        self,
+        key: chex.PRNGKey,
+        state: environment.EnvState,
+        action: Union[int, float],
+        params: Optional[environment.EnvParams] = None,
+        ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
+
+        obs, env_state, reward, done, info = self._env.step(key, state, action, params)
+
+        obs = jnp.concatenate([obs, action.reshape(action.shape + (1,))], axis=0)
+
+        return obs, env_state, reward, done, info
+
+    @partial(jax.jit, static_argnums=(0, 2))
+    def reset(
+        self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
+    ) -> Tuple[chex.Array, environment.EnvState]:
+
+        obs, env_state = self._env.reset(key, params)
+        obs = jnp.concatenate([obs, jnp.zeros((1,))], axis=0)
+
+        return obs, env_state
+
+
 
 class LogWrapper(GymnaxWrapper):
     """Log the episode returns and lengths."""
