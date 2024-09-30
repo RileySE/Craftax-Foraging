@@ -760,7 +760,7 @@ def make_train(config):
             starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
             deltas_to_start = env_state.env_state.player_position - starting_pos
 
-            # HACK: Add hstate to info for future logging
+            # Add hstate and other non-env metrics to info so they can be logged
             info['hidden_state'] = hstate
             info['pred_delta'] = aux
             info['delta'] = deltas_to_start
@@ -791,40 +791,26 @@ def make_train(config):
             # Finally, log data associated with the visualization runs
             update_step = runner_state[-1]
             hidden_states = traj_batch.info['hidden_state']
-            actions = traj_batch.info['action']
-            healths = traj_batch.info['health']
-            foods = traj_batch.info['food']
-            drinks = traj_batch.info['drink']
-            energies = traj_batch.info['energy']
-            dones = traj_batch.info['done']
-            is_sleepings = traj_batch.info['is_sleeping']
-            is_restings = traj_batch.info['is_resting']
-            player_position_xs = traj_batch.info['player_position_x']
-            player_position_ys = traj_batch.info['player_position_y']
-            recovers = traj_batch.info['recover']
-            hungers = traj_batch.info['hunger']
-            thirsts = traj_batch.info['thirst']
-            fatigues = traj_batch.info['fatigue']
-            light_levels = traj_batch.info['light_level']
-            dist_to_melees = traj_batch.info['dist_to_melee_l1']
-            melee_on_screen = traj_batch.info['melee_on_screen']
-            dist_to_passives = traj_batch.info['dist_to_passive_l1']
-            passive_on_screen = traj_batch.info['passive_on_screen']
-            dist_to_ranged = traj_batch.info['dist_to_ranged_l1']
-            ranged_on_screen = traj_batch.info['ranged_on_screen']
-            num_melee_nearby = traj_batch.info['num_melee_nearby']
-            num_passives_nearby = traj_batch.info['num_passives_nearby']
-            num_ranged_nearby = traj_batch.info['num_ranged_nearby']
-            delta = traj_batch.info['delta']
-            pred_delta = traj_batch.info['pred_delta']
-            epi_ids = traj_batch.info['episode_id']
+            # Null this for memory savings
             traj_batch.info['hidden_state'] = None
+
+            # Add new logging fields here
+            fields_to_log = ['health','food','drink','energy','done','is_sleeping','is_resting','player_position_x',
+                                      'player_position_y','recover','hunger','thirst','fatigue','light_level','dist_to_melee_l1',
+                                      'melee_on_screen','dist_to_passive_l1','passive_on_screen','dist_to_ranged_l1',
+                                      'ranged_on_screen','num_melee_nearby','num_passives_nearby','num_ranged_nearby','delta',
+                                      'pred_delta','episode_id']
 
             # Callback function for logging hidden states
             def write_rnn_hstate(hstate, scalars, increment=0):
 
                 run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
                 os.makedirs(run_out_path, exist_ok=True)
+                # Assemble header for the scalar file(s)
+                scalar_file_header = 'action'
+                for key in fields_to_log:
+                    scalar_file_header += ',' + key
+
                 # We save to temp files and then append to the target file since numpy apparently cannot write files in append mode for some reason
                 for i in range(logging_threads):
                     out_filename_hstates = os.path.join(run_out_path, 'hstates_{}_{}.csv'.format(increment, i))
@@ -840,11 +826,7 @@ def make_train(config):
                     out_filename_scalars = os.path.join(run_out_path, 'scalars_{}_{}.csv'.format(increment, i))
                     np.savetxt(temp_filename,
                                scalars[:, i, :], delimiter=',', fmt='%f',
-                               header='action,health,food,drink,energy,done,is_sleeping,is_resting,player_position_x,'
-                                      'player_position_y,recover,hunger,thirst,fatigue,light_level,dist_to_melee_l1,'
-                                      'melee_on_screen,dist_to_passive_l1,passive_on_screen,dist_to_ranged_l1,'
-                                      'ranged_on_screen,num_melee_nearby,num_passives_nearby,num_ranged_nearby,delta_x,'
-                                      'delta_y,pred_delta_x,pred_delta_y,episode_id'
+                               header=scalar_file_header
                                )
                     temp_file = open(temp_filename, 'r')
                     out_file_scalars = open(out_filename_scalars, 'a+')
@@ -853,44 +835,26 @@ def make_train(config):
                     out_file_scalars.close()
                     print('Writing log file', out_filename_hstates)
 
-            # Reshape logging arrays and concat
-            new_shape = actions.shape + (1,)
-            new_shape_2 = actions.shape + (2,)
-            actions = actions.reshape(new_shape)
-            healths = healths.reshape(new_shape)
-            foods = foods.reshape(new_shape)
-            drinks = drinks.reshape(new_shape)
-            energies = energies.reshape(new_shape)
-            dones = dones.reshape(new_shape)
-            is_sleepings = is_sleepings.reshape(new_shape)
-            is_restings = is_restings.reshape(new_shape)
-            player_position_xs = player_position_xs.reshape(new_shape)
-            player_position_ys = player_position_ys.reshape(new_shape)
-            recovers = recovers.reshape(new_shape)
-            hungers = hungers.reshape(new_shape)
-            thirsts = thirsts.reshape(new_shape)
-            fatigues = fatigues.reshape(new_shape)
-            light_levels = light_levels.reshape(new_shape)
-            dist_to_melees = dist_to_melees.reshape(new_shape)
-            melee_on_screen = melee_on_screen.reshape(new_shape)
-            dist_to_passives = dist_to_passives.reshape(new_shape)
-            passive_on_screen = passive_on_screen.reshape(new_shape)
-            dist_to_ranged = dist_to_ranged.reshape(new_shape)
-            ranged_on_screen = ranged_on_screen.reshape(new_shape)
-            num_melee_nearby = num_melee_nearby.reshape(new_shape)
-            num_passives_nearby = num_passives_nearby.reshape(new_shape)
-            num_ranged_nearby = num_ranged_nearby.reshape(new_shape)
-            delta = delta.reshape(new_shape_2)
-            pred_delta = pred_delta.reshape(new_shape_2)
-            epi_ids = epi_ids.reshape(new_shape)
 
-            log_array = jnp.concatenate([actions, healths, foods, drinks, energies, dones, is_sleepings, is_restings,
-                                         player_position_xs, player_position_ys, recovers, hungers, thirsts, fatigues,
-                                         light_levels, dist_to_melees,melee_on_screen, dist_to_passives, passive_on_screen,
-                                         dist_to_ranged, ranged_on_screen, num_melee_nearby, num_passives_nearby,
-                                         num_ranged_nearby, delta, pred_delta,
-                                         epi_ids,
-                                         ], axis=2)
+            # Add the specified field to the logging array
+            # Also assembles the header for the log file itself
+            def add_field_to_log_array(info_dict, log_array, field_key):
+                field_value = info_dict[field_key]
+                if len(field_value.shape) < 3:
+                    new_shape = field_value.shape + (1,)
+                    field_value = field_value.reshape(new_shape)
+                else:
+                    field_value = field_value.squeeze()
+                log_array = jnp.concatenate([log_array, field_value], axis=2)
+
+                return log_array
+
+            # Assemble logging variable array
+            log_array = traj_batch.info['action'].reshape(traj_batch.info['action'].shape + (1,))
+            # Yes this is a for loop in the JAX code but this stuff was getting done in serial before anyway and it's cheap operations
+            for field_to_log in fields_to_log:
+                log_array = add_field_to_log_array(traj_batch.info, log_array, field_to_log)
+
             jax.debug.callback(write_rnn_hstate, hidden_states, log_array, update_step)
 
             return runner_state, None
