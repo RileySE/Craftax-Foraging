@@ -247,6 +247,8 @@ def make_train(config):
         # We have to do this here because I can't figure out how to wrap the observation_space function (it's not defined in Gymnax, seemingly)
         if config['ACTION_IN_OBS']:
             obs_shape = env.observation_space(env_params).shape[:-1] + (env.observation_space(env_params).shape[-1] + 1,)
+        else:
+            obs_shape = env.observation_space(env_params).shape
         init_x = (
             jnp.zeros(
                 (1, config["NUM_ENVS"], *obs_shape)
