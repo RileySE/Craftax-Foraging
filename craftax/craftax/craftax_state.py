@@ -162,6 +162,7 @@ class StaticEnvParams:
     map_size: Tuple[int, int] = (96, 96)
     num_levels: int = 9
     reward_func: str = 'foraging'
+    map_type: str = 'normal'
 
     # Mobs
     # HACK: Doubled to 18 for patch depletion stuff
