@@ -34,13 +34,13 @@ class SmoothGenConfig:
     tree_threshold_perlin: float
 
 
-# Config for "patchy" world where grass (containing cows) is sparse and localized
-OVERWORLD_PATCHY_CONFIG = SmoothGenConfig(
-    default_block=BlockType.PATH.value,
+# Config for "featureless" world where navigation is harder due to lack of landmarks
+OVERWORLD_FEATURELESS_CONFIG = SmoothGenConfig(
+    default_block=BlockType.GRASS.value,
     sea_block=BlockType.WATER.value,
-    coast_block=BlockType.SAND.value,
-    mountain_block=BlockType.STONE.value,
-    path_block=BlockType.GRASS.value,
+    coast_block=BlockType.GRASS.value,
+    mountain_block=BlockType.GRASS.value,
+    path_block=BlockType.PATH.value,
     inner_mountain_block=BlockType.PATH.value,
     ore_requirement_blocks=jnp.array([BlockType.STONE.value] * 5),
     ores=jnp.array(
@@ -54,12 +54,12 @@ OVERWORLD_PATCHY_CONFIG = SmoothGenConfig(
     ),
     ore_chances=jnp.array([0.03, 0.02, 0.001, 0.0, 0.0]),
     tree_requirement_block=BlockType.GRASS.value,
-    tree=BlockType.TREE.value,
-    lava=BlockType.LAVA.value,
+    tree=BlockType.GRASS.value,
+    lava=BlockType.GRASS.value,
     player_spawn=BlockType.GRASS.value,
     valid_ladder=BlockType.PATH.value,
     ladder_up=False,
-    ladder_down=True,
+    ladder_down=False,
     player_proximity_map_water_strength=5,
     player_proximity_map_water_max=1,
     player_proximity_map_mountain_strength=5,
@@ -305,10 +305,10 @@ ALL_SMOOTHGEN_CONFIGS = jax.tree_map(
     BOSS_LEVEL_CONFIG,
 )
 
-# As above, but with "patchy" overworld
-PATCHY_SMOOTHGEN_CONFIGS = jax.tree_map(
+# As above, but with "featureless" overworld
+FEATURELESS_SMOOTHGEN_CONFIGS = jax.tree_map(
     lambda l1, l2, l3, l4, l5, l6: jnp.stack((l1, l2, l3, l4, l5, l6), axis=0),
-    OVERWORLD_PATCHY_CONFIG,
+    OVERWORLD_FEATURELESS_CONFIG,
     GNOMISH_MINES_CONFIG,
     TROLL_MINES_CONFIG,
     FIRE_LEVEL_CONFIG,

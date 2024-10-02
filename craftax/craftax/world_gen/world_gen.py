@@ -8,7 +8,7 @@ from craftax.craftax.util.noise import generate_fractal_noise_2d
 from craftax.craftax.world_gen.world_gen_configs import (
     ALL_DUNGEON_CONFIGS,
     ALL_SMOOTHGEN_CONFIGS,
-    PATCHY_SMOOTHGEN_CONFIGS,
+    FEATURELESS_SMOOTHGEN_CONFIGS,
 )
 
 
@@ -553,6 +553,8 @@ def generate_world(rng, params, static_params):
         [static_params.map_size[0] // 2, static_params.map_size[1] // 2]
     )
     world_configs = ALL_SMOOTHGEN_CONFIGS
+    # Toggle for featureless arena
+    #world_configs = FEATURELESS_SMOOTHGEN_CONFIGS
 
     # Generate smoothgens (overworld, caves, elemental levels, boss level)
     rngs = jax.random.split(rng, 7)
