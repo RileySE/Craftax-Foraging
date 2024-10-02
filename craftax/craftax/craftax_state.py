@@ -141,6 +141,7 @@ class StaticEnvParams:
     map_size: Tuple[int, int] = (96, 96)
     num_levels: int = 9
     reward_func: str = 'foraging'
+    map_type: str = 'normal'
 
     # Mobs
     max_melee_mobs: int = 3
