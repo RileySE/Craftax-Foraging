@@ -165,6 +165,8 @@ def make_train(config):
     static_params = craftax_state.StaticEnvParams()
     if config['REWARD_FUNCTION'] == 'vanilla':
         static_params.reward_func = 'vanilla'
+    if config['FEATURELESS_WORLD']:
+        static_params.featureless_world = True
 
 
     if config["ENV_NAME"] == "Craftax-Classic-Symbolic-v1":
@@ -845,6 +847,7 @@ if __name__ == "__main__":
     parser.add_argument('--logging_threads_per_viz',type=int, default=1)
     parser.add_argument('--logging_threads_per_viz_val', type=int, default=1)
     parser.add_argument('--action_in_obs', action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument('--featureless_world', action=argparse.BooleanOptionalAction, default=False)
 
     args, rest_args = parser.parse_known_args(sys.argv[1:])
     if rest_args:
