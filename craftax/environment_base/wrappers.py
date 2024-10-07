@@ -217,7 +217,6 @@ class LogWrapper(GymnaxWrapper):
         info["returned_episode_lengths"] = state.returned_episode_lengths
         info["timestep"] = state.timestep
         info["returned_episode"] = done
-        info["level"] = env_state.level
         return obs, state, reward, done, info
 
 
@@ -515,8 +514,8 @@ class CurriculumWrapper(GymnaxWrapper):
             state = log_state.env_state
 
             # update level
-            level = jnp.floor(update_step * self.num_levels / self.total_steps + 1)
-            batched_level = jnp.full((self.num_envs,), level, dtype=jnp.int32)
+            level = jnp.floor(update_step * self.num_levels / self.total_steps + 1).astype(jnp.int32)
+            batched_level = jnp.full((self.num_envs,), level)
             state = state.replace(level=batched_level)
 
             # update spawn chances

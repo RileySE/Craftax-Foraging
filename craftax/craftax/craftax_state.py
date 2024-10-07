@@ -122,7 +122,7 @@ class EnvState:
     def floor_mob_spawn_chance(self) -> jnp.ndarray:
         return jnp.array(
             [
-                jnp.array([0.1, self.max_melee_spawn_chance, self.max_ranged_spawn_chance, 0.0]),  # Floor 0 (overworld)
+                jnp.array([0.4, self.max_melee_spawn_chance, self.max_ranged_spawn_chance, 0.0]),  # Floor 0 (overworld)
                 jnp.array([0.1, 0.06, 0.05, 0.0]),  # Floor 1 (gnomish mines)
                 jnp.array([0.1, 0.06, 0.05, 0.0]),  # Floor 2 (dungeon)
                 jnp.array([0.1, 0.06, 0.05, 0.0]),  # Floor 3 (sewers)
