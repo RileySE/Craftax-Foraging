@@ -123,7 +123,23 @@ class ActorCriticRNN(nn.Module):
             critic
         )
 
-        return hidden, pi, jnp.squeeze(critic, axis=-1)
+        aux = nn.Dense(
+        self.config["LAYER_SIZE"],
+        kernel_init=orthogonal(2),
+        bias_init=constant(0.0),
+        )(embedding)
+        aux = nn.relu(aux)
+        aux = nn.Dense(
+            self.config["LAYER_SIZE"],
+            kernel_init=orthogonal(2),
+            bias_init=constant(0.0),
+        )(aux)
+        aux = nn.relu(aux)
+        aux = nn.Dense(2, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
+            aux
+        )
+
+        return hidden, pi, jnp.squeeze(critic, axis=-1), aux
 
 
 class Transition(NamedTuple):
@@ -893,6 +909,9 @@ if __name__ == "__main__":
             },
             "VF_COEF": {
                 "values": [0.5]
+            },
+            "AUX_COEF": {
+                "values": [0.1]
             },
             "MAX_GRAD_NORM": {
                 "values": [1.0]

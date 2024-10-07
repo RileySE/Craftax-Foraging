@@ -1290,7 +1290,7 @@ def update_mobs(rng, state, params, static_params):
 
     rng, _rng = jax.random.split(rng)
     (rng, state), _ = jax.lax.scan(
-        _move_melee_mob, (rng, state), jnp.arange(20)  # make space for curriculum
+        _move_melee_mob, (rng, state), jnp.arange(5)  # make space for curriculum
     )
 
     # Move passive_mobs
@@ -2049,6 +2049,9 @@ def move_player(state, action, params):
 
 
 def spawn_mobs(state, rng, params, static_params):
+
+    floor_mob_spawn_chance = state.floor_mob_spawn_chance 
+    
     player_distance_map = get_distance_map(
         state.player_position, static_params.map_size
     )
@@ -2082,7 +2085,7 @@ def spawn_mobs(state, rng, params, static_params):
     rng, _rng = jax.random.split(rng)
     can_spawn_passive_mob = jnp.logical_and(
         can_spawn_passive_mob,
-        jax.random.uniform(_rng) < state.floor_mob_spawn_chance[state.player_level, 0],
+        jax.random.uniform(_rng) < floor_mob_spawn_chance[state.player_level, 0],
     )
 
     can_spawn_passive_mob = jnp.logical_and(
@@ -2221,9 +2224,9 @@ def spawn_mobs(state, rng, params, static_params):
     )
 
     rng, _rng = jax.random.split(rng)
-    melee_mob_spawn_chance = state.floor_mob_spawn_chance[
+    melee_mob_spawn_chance = floor_mob_spawn_chance[
         state.player_level, 1
-    ] + state.floor_mob_spawn_chance[state.player_level, 3] * jnp.square(
+    ] + floor_mob_spawn_chance[state.player_level, 3] * jnp.square(
         1 - state.light_level
     )
     can_spawn_melee_mob = jnp.logical_and(
@@ -2337,7 +2340,7 @@ def spawn_mobs(state, rng, params, static_params):
     can_spawn_ranged_mob = jnp.logical_and(
         can_spawn_ranged_mob,
         jax.random.uniform(_rng)
-        < state.floor_mob_spawn_chance[state.player_level, 2] * monster_spawn_coeff,
+        < floor_mob_spawn_chance[state.player_level, 2] * monster_spawn_coeff,
     )
 
     # Hack for deep thing
