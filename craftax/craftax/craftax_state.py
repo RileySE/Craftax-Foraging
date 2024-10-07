@@ -50,6 +50,8 @@ class EnvState:
     player_position: jnp.ndarray
     player_level: int
     player_direction: int
+    # Initial coordinates of the player at start of the episode
+    player_starting_position: jnp.ndarray
 
     # Intrinsics
     player_health: float
@@ -145,7 +147,7 @@ class EnvParams:
     passive_mob_health: int = 3
     ranged_mob_health: int = 3
 
-    mob_despawn_distance: int = 20  # increased for curriculum
+    mob_despawn_distance: int = 14  # increased for curriculum
     max_attribute: int = 5
 
     god_mode: bool = False
@@ -155,7 +157,7 @@ class EnvParams:
 
 # HACK: Removed the static "struct.dataclass" declaration. Hope that didn't break any optimizations!
 class StaticEnvParams:
-    map_size: Tuple[int, int] = (48, 48)
+    map_size: Tuple[int, int] = (96, 96)
     num_levels: int = 9
     reward_func: str = 'foraging'
 
