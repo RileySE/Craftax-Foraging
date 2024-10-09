@@ -41,57 +41,55 @@ from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_l
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run sparsity PPO.")
-    
-    # Add arguments for each parameter you want to override
-    parser.add_argument("--FEATURELESS_WORLD", type=bool, default=False, help="Featureless world")
-    parser.add_argument("--RUN_NAME", type=str, default="default_run", help="Name of the run")
-    parser.add_argument("--ENV_NAME", type=str, default="Craftax-Symbolic-v1", help="Environment name")
-    parser.add_argument("--SPARSE_ALG", type=str, default="magnitude", help="Sparsity algorithm")
-    parser.add_argument("--GPU_ID", type=int, default=0, help="GPU ID")
-    parser.add_argument("--PREDATORS", type=bool, default=True, help="Use predators")
-    parser.add_argument("--SPARSITY", type=float, default=0.4, help="Sparsity value")
-    parser.add_argument("--NUM_ENVS", type=int, default=1024, help="Number of environments")
-    parser.add_argument("--TOTAL_TIMESTEPS", type=float, default=1e9, help="Total timesteps")
-    parser.add_argument("--LR", type=float, default=2e-4, help="Learning rate")
-    parser.add_argument("--NUM_ENV_STEPS", type=int, default=64, help="Number of environment steps")
-    parser.add_argument("--UPDATE_EPOCHS", type=int, default=4, help="Number of update epochs")
-    parser.add_argument("--NUM_MINIBATCHES", type=int, default=8, help="Number of minibatches")
-    parser.add_argument("--GAMMA", type=float, default=0.99, help="Gamma value")
-    parser.add_argument("--GAE_LAMBDA", type=float, default=0.8, help="GAE Lambda")
-    parser.add_argument("--CLIP_EPS", type=float, default=0.2, help="Clip epsilon")
-    parser.add_argument("--ENT_COEF", type=float, default=0.01, help="Entropy coefficient")
-    parser.add_argument("--VF_COEF", type=float, default=0.5, help="Value function coefficient")
-    parser.add_argument("--AUX_COEF", type=float, default=0.1, help="Auxiliary coefficient")
-    parser.add_argument("--MAX_GRAD_NORM", type=float, default=1.0, help="Max gradient norm")
-    parser.add_argument("--ACTIVATION", type=str, default="tanh", help="Activation function")
-    parser.add_argument("--ANNEAL_LR", type=bool, default=True, help="Whether to anneal LR")
-    parser.add_argument("--DEBUG", type=bool, default=True, help="Enable debug mode")
-    parser.add_argument("--JIT", type=bool, default=True, help="Use JIT compilation")
-    parser.add_argument("--ACTION_IN_OBS", type=bool, default=False, help="Include action in observation")
-    parser.add_argument("--SEED", type=int, default=np.random.randint(2 ** 31), help="Random seed")
-    parser.add_argument("--USE_WANDB", type=bool, default=True, help="Use WandB for logging")
-    parser.add_argument("--SAVE_POLICY", type=bool, default=True, help="Save the policy")
-    parser.add_argument("--NUM_REPEATS", type=int, default=1, help="Number of repeats")
-    parser.add_argument("--LAYER_SIZE", type=int, default=512, help="Layer size")
-    parser.add_argument("--WANDB_PROJECT", type=str, default="sparsity_project", help="WandB project name")
-    parser.add_argument("--WANDB_ENTITY", type=str, default=None, help="WandB entity name")
-    parser.add_argument("--USE_OPTIMISTIC_RESETS", type=bool, default=True, help="Use optimistic resets")
-    parser.add_argument("--OPTIMISTIC_RESET_RATIO", type=int, default=16, help="Optimistic reset ratio")
-    parser.add_argument("--UPDATES_PER_VIZ", type=int, default=1024, help="Updates per visualization")
-    parser.add_argument("--STEPS_PER_VIZ", type=int, default=1024, help="Steps per visualization")
-    parser.add_argument("--LOGGING_STEPS_PER_VIZ", type=int, default=8, help="Logging steps per viz")
-    parser.add_argument("--LOGGING_STEPS_PER_VIZ_VAL", type=int, default=8, help="Logging steps per viz validation")
-    parser.add_argument("--OUTPUT_PATH", type=str, default='./output/', help="Output path")
-    parser.add_argument("--FRAMES_PER_FILE", type=int, default=512, help="Frames per file")
-    parser.add_argument("--NO_VIDEOS", type=bool, default=True, help="Disable video recording")
-    parser.add_argument("--FULL_ACTION_SPACE", type=bool, default=False, help="Use full action space")
-    parser.add_argument("--REWARD_FUNCTION", type=str, default='foraging', help="Reward function")
-    parser.add_argument("--VALIDATION_SEED", type=int, default=777, help="Validation seed")
-    parser.add_argument("--VALIDATION_STEP_OFFSET", type=int, default=0, help="Validation step offset")
-    parser.add_argument("--LOGGING_THREADS_PER_VIZ", type=int, default=1, help="Logging threads per viz")
-    parser.add_argument("--LOGGING_THREADS_PER_VIZ_VAL", type=int, default=1, help="Logging threads per viz validation")
-    parser.add_argument("--CURRICULUM", type=bool, default=False, help="Use curriculum learning")
-
+    parser.add_argument("--prune_step", type=int, default=20000, help="Step to prune")
+    parser.add_argument("--featureless_world", type=bool, default=False, help="Featureless world")
+    parser.add_argument("--run_name", type=str, default="default_run", help="Name of the run")
+    parser.add_argument("--env_name", type=str, default="Craftax-Symbolic-v1", help="Environment name")
+    parser.add_argument("--sparse_alg", type=str, default="magnitude", help="For none, use \"no_prune\"")
+    parser.add_argument("--gpu_id", type=int, default=0, help="GPU ID")
+    parser.add_argument("--predators", type=bool, default=True, help="Use predators")
+    parser.add_argument("--sparsity", type=float, default=0.4, help="Sparsity value")
+    parser.add_argument("--num_envs", type=int, default=1024, help="Number of environments")
+    parser.add_argument("--total_timesteps", type=float, default=3e9, help="Total timesteps")
+    parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
+    parser.add_argument("--num_env_steps", type=int, default=64, help="Number of environment steps")
+    parser.add_argument("--update_epochs", type=int, default=4, help="Number of update epochs")
+    parser.add_argument("--num_minibatches", type=int, default=8, help="Number of minibatches")
+    parser.add_argument("--gamma", type=float, default=0.99, help="Gamma value")
+    parser.add_argument("--gae_lambda", type=float, default=0.8, help="GAE Lambda")
+    parser.add_argument("--clip_eps", type=float, default=0.2, help="Clip epsilon")
+    parser.add_argument("--ent_coef", type=float, default=0.01, help="Entropy coefficient")
+    parser.add_argument("--vf_coef", type=float, default=0.5, help="Value function coefficient")
+    parser.add_argument("--aux_coef", type=float, default=0.1, help="Auxiliary coefficient")
+    parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Max gradient norm")
+    parser.add_argument("--activation", type=str, default="tanh", help="Activation function")
+    parser.add_argument("--anneal_lr", type=bool, default=True, help="Whether to anneal LR")
+    parser.add_argument("--debug", type=bool, default=True, help="Enable debug mode")
+    parser.add_argument("--jit", type=bool, default=True, help="Use JIT compilation")
+    parser.add_argument("--action_in_obs", type=bool, default=False, help="Include action in observation")
+    parser.add_argument("--seed", type=int, default=np.random.randint(2 ** 31), help="Random seed")
+    parser.add_argument("--use_wandb", type=bool, default=True, help="Use WandB for logging")
+    parser.add_argument("--save_policy", type=bool, default=True, help="Save the policy")
+    parser.add_argument("--num_repeats", type=int, default=1, help="Number of repeats")
+    parser.add_argument("--layer_size", type=int, default=512, help="Layer size")
+    parser.add_argument("--wandb_project", type=str, default="sparsity_project", help="WandB project name")
+    parser.add_argument("--wandb_entity", type=str, default=None, help="WandB entity name")
+    parser.add_argument("--use_optimistic_resets", type=bool, default=True, help="Use optimistic resets")
+    parser.add_argument("--optimistic_reset_ratio", type=int, default=16, help="Optimistic reset ratio")
+    parser.add_argument("--updates_per_viz", type=int, default=1024, help="Updates per visualization")
+    parser.add_argument("--steps_per_viz", type=int, default=1024, help="Steps per visualization")
+    parser.add_argument("--logging_steps_per_viz", type=int, default=8, help="Logging steps per viz")
+    parser.add_argument("--logging_steps_per_viz_val", type=int, default=8, help="Logging steps per viz validation")
+    parser.add_argument("--output_path", type=str, default='./output/', help="Output path")
+    parser.add_argument("--frames_per_file", type=int, default=512, help="Frames per file")
+    parser.add_argument("--no_videos", type=bool, default=True, help="Disable video recording")
+    parser.add_argument("--full_action_space", type=bool, default=False, help="Use full action space")
+    parser.add_argument("--reward_function", type=str, default='foraging', help="Reward function")
+    parser.add_argument("--validation_seed", type=int, default=777, help="Validation seed")
+    parser.add_argument("--validation_step_offset", type=int, default=0, help="Validation step offset")
+    parser.add_argument("--logging_threads_per_viz", type=int, default=1, help="Logging threads per viz")
+    parser.add_argument("--logging_threads_per_viz_val", type=int, default=1, help="Logging threads per viz validation")
+    parser.add_argument("--curriculum", type=bool, default=False, help="Use curriculum learning")
     return parser.parse_args()
 
 class ScannedRNN(nn.Module):
@@ -342,8 +340,8 @@ def make_train(config):
         sparsity_config.sparsity = config["SPARSITY"]
         sparsity_config.algorithm = config["SPARSE_ALG"]
         sparsity_config.dist_type = "erk"
-        sparsity_config.update_start_step = 10000 * config["UPDATE_EPOCHS"] * config["NUM_MINIBATCHES"]
-        sparsity_config.update_end_step = 10000 * config["UPDATE_EPOCHS"] * config["NUM_MINIBATCHES"]
+        sparsity_config.update_start_step = config["PRUNE_STEP"] * config["UPDATE_EPOCHS"] * config["NUM_MINIBATCHES"]
+        sparsity_config.update_end_step = config["PRUNE_STEP"] * config["UPDATE_EPOCHS"] * config["NUM_MINIBATCHES"]
         sparsity_config = sparsity_config.unlock()
         sparse_updater = jaxpruner.create_updater_from_config(sparsity_config)
         tx = sparse_updater.wrap_optax(tx)
@@ -884,57 +882,10 @@ if __name__ == "__main__":
     args = parse_args()
 
     wandb.init(
-        project=args.WANDB_PROJECT,
-        entity=args.WANDB_ENTITY,
-        config={
-            "FEATURELESS_WORLD": args.FEATURELESS_WORLD,
-            "ENV_NAME": args.ENV_NAME,
-            "SPARSE_ALG": args.SPARSE_ALG,
-            "GPU_ID": args.GPU_ID,
-            "PREDATORS": args.PREDATORS,
-            "SPARSITY": args.SPARSITY,
-            "NUM_ENVS": args.NUM_ENVS,
-            "TOTAL_TIMESTEPS": args.TOTAL_TIMESTEPS,
-            "LR": args.LR,
-            "NUM_ENV_STEPS": args.NUM_ENV_STEPS,
-            "UPDATE_EPOCHS": args.UPDATE_EPOCHS,
-            "NUM_MINIBATCHES": args.NUM_MINIBATCHES,
-            "GAMMA": args.GAMMA,
-            "GAE_LAMBDA": args.GAE_LAMBDA,
-            "CLIP_EPS": args.CLIP_EPS,
-            "ENT_COEF": args.ENT_COEF,
-            "VF_COEF": args.VF_COEF,
-            "AUX_COEF": args.AUX_COEF,
-            "MAX_GRAD_NORM": args.MAX_GRAD_NORM,
-            "ACTIVATION": args.ACTIVATION,
-            "ANNEAL_LR": args.ANNEAL_LR,
-            "DEBUG": args.DEBUG,
-            "JIT": args.JIT,
-            "ACTION_IN_OBS": args.ACTION_IN_OBS,
-            "SEED": args.SEED,
-            "USE_WANDB": args.USE_WANDB,
-            "SAVE_POLICY": args.SAVE_POLICY,
-            "NUM_REPEATS": args.NUM_REPEATS,
-            "LAYER_SIZE": args.LAYER_SIZE,
-            "USE_OPTIMISTIC_RESETS": args.USE_OPTIMISTIC_RESETS,
-            "OPTIMISTIC_RESET_RATIO": args.OPTIMISTIC_RESET_RATIO,
-            "UPDATES_PER_VIZ": args.UPDATES_PER_VIZ,
-            "STEPS_PER_VIZ": args.STEPS_PER_VIZ,
-            "LOGGING_STEPS_PER_VIZ": args.LOGGING_STEPS_PER_VIZ,
-            "LOGGING_STEPS_PER_VIZ_VAL": args.LOGGING_STEPS_PER_VIZ_VAL,
-            "OUTPUT_PATH": args.OUTPUT_PATH,
-            "FRAMES_PER_FILE": args.FRAMES_PER_FILE,
-            "NO_VIDEOS": args.NO_VIDEOS,
-            "FULL_ACTION_SPACE": args.FULL_ACTION_SPACE,
-            "REWARD_FUNCTION": args.REWARD_FUNCTION,
-            "VALIDATION_SEED": args.VALIDATION_SEED,
-            "VALIDATION_STEP_OFFSET": args.VALIDATION_STEP_OFFSET,
-            "LOGGING_THREADS_PER_VIZ": args.LOGGING_THREADS_PER_VIZ,
-            "LOGGING_THREADS_PER_VIZ_VAL": args.LOGGING_THREADS_PER_VIZ_VAL,
-            "CURRICULUM": args.CURRICULUM
-        },
-        name=args.RUN_NAME
+        project=args.wandb_project,
+        entity=args.wandb_entity,
+        config={key.upper(): value for key, value in vars(args).items()},
+        name=args.run_name
     )
 
-    # Run PPO or your main training function
     run_ppo(wandb.config)
