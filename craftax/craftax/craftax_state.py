@@ -163,6 +163,7 @@ class StaticEnvParams:
     num_levels: int = 9
     reward_func: str = 'foraging'
     map_type: str = 'normal'
+    featureless_world: bool = False
 
     # Mobs
     # HACK: Doubled to 18 for patch depletion stuff
