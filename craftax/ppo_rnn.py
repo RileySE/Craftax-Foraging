@@ -45,7 +45,7 @@ def parse_args():
     parser.add_argument("--featureless_world", type=bool, default=False, help="Featureless world")
     parser.add_argument("--run_name", type=str, default="default_run", help="Name of the run")
     parser.add_argument("--env_name", type=str, default="Craftax-Symbolic-v1", help="Environment name")
-    parser.add_argument("--sparse_alg", type=str, default="magnitude", help="For none, use \"no_prune\"")
+    parser.add_argument("--sparse_alg", type=str, default="magnitude", help="options, magnitude, no_prune, saliency, random")
     parser.add_argument("--gpu_id", type=int, default=0, help="GPU ID")
     parser.add_argument("--predators", type=bool, default=True, help="Use predators")
     parser.add_argument("--sparsity", type=float, default=0.4, help="Sparsity value")
