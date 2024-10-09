@@ -33,13 +33,9 @@ from craftax.environment_base.wrappers import (
     OptimisticResetVecEnvWrapper,
     AutoResetEnvWrapper,
     BatchEnvWrapper,
-<<<<<<< HEAD
     VideoPlotWrapper,
-    ReduceActionSpaceWrapper, AppendActionToObsWrapper,
+    ReduceActionSpaceWrapper, AppendActionToObsWrapper, AppendActionToObsWrapper,
     CurriculumWrapper
-=======
-    VideoPlotWrapper, ReduceActionSpaceWrapper, AppendActionToObsWrapper,
->>>>>>> foraging
 )
 from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
 
@@ -47,6 +43,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run sparsity PPO.")
     
     # Add arguments for each parameter you want to override
+    parser.add_argument("--FEATURELESS_WORLD", type=bool, default=False, help="Featureless world")
     parser.add_argument("--RUN_NAME", type=str, default="default_run", help="Name of the run")
     parser.add_argument("--ENV_NAME", type=str, default="Craftax-Symbolic-v1", help="Environment name")
     parser.add_argument("--SPARSE_ALG", type=str, default="magnitude", help="Sparsity algorithm")
@@ -176,15 +173,9 @@ class ActorCriticRNN(nn.Module):
         )
 
         aux = nn.Dense(
-<<<<<<< HEAD
         self.config["LAYER_SIZE"],
         kernel_init=orthogonal(2),
         bias_init=constant(0.0),
-=======
-            self.config["LAYER_SIZE"],
-            kernel_init=orthogonal(2),
-            bias_init=constant(0.0),
->>>>>>> foraging
         )(embedding)
         aux = nn.relu(aux)
         aux = nn.Dense(
@@ -710,12 +701,9 @@ def make_train(config):
 
             # Callback function for logging hidden states
             def write_rnn_hstate(hstate, scalars, increment=0):
-<<<<<<< HEAD
 
                 run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
                 os.makedirs(run_out_path, exist_ok=True)
-=======
->>>>>>> foraging
                 # Assemble header for the scalar file(s)
                 scalar_file_header = 'action'
                 for key in fields_to_log:
@@ -892,65 +880,6 @@ def run_ppo(config):
 
 
 if __name__ == "__main__":
-<<<<<<< HEAD
-=======
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--env_name", type=str, default="Craftax-Symbolic-v1")
-    parser.add_argument(
-        "--num_envs",
-        type=int,
-        default=1024,
-    )
-    parser.add_argument("--total_timesteps", type=int, default=1e9)
-    parser.add_argument("--lr", type=float, default=2e-4)
-    parser.add_argument("--num_steps", type=int, default=64)
-    parser.add_argument("--update_epochs", type=int, default=4)
-    parser.add_argument("--num_minibatches", type=int, default=8)
-    parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--gae_lambda", type=float, default=0.8)
-    parser.add_argument("--clip_eps", type=float, default=0.2)
-    parser.add_argument("--ent_coef", type=float, default=0.01)
-    parser.add_argument("--vf_coef", type=float, default=0.5)
-    parser.add_argument("--aux_coef", type=float, default=0.1)
-    parser.add_argument("--max_grad_norm", type=float, default=1.0)
-    parser.add_argument("--activation", type=str, default="tanh")
-    parser.add_argument(
-        "--anneal_lr", action=argparse.BooleanOptionalAction, default=True
-    )
-    parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--jit", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--seed", type=int, default=np.random.randint(2**31))
-    parser.add_argument(
-        "--use_wandb", action=argparse.BooleanOptionalAction, default=True
-    )
-    parser.add_argument(
-        "--save_policy", action=argparse.BooleanOptionalAction, default=False
-    )
-    parser.add_argument('--gpu_id', type=int, default=0)
-    parser.add_argument("--num_repeats", type=int, default=1)
-    parser.add_argument("--layer_size", type=int, default=512)
-    parser.add_argument("--wandb_project", type=str)
-    parser.add_argument("--wandb_entity", type=str)
-    parser.add_argument(
-        "--use_optimistic_resets", action=argparse.BooleanOptionalAction, default=True
-    )
-    parser.add_argument("--optimistic_reset_ratio", type=int, default=16)
-    parser.add_argument('--updates_per_viz', type=int, default=1024)
-    parser.add_argument('--steps_per_viz', type=int, default=1024)
-    parser.add_argument('--logging_steps_per_viz', type=int, default=8)
-    parser.add_argument('--logging_steps_per_viz_val', type=int, default=8)
-    parser.add_argument('--output_path', type=str, default='./output/')
-    parser.add_argument('--frames_per_file', type=int, default=512)
-    parser.add_argument('--no_videos', action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument('--full_action_space', action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument('--reward_function', type=str, default='foraging')
-    parser.add_argument('--validation_seed', type=int, default=777)
-    parser.add_argument('--validation_step_offset', type=int, default=0)
-    parser.add_argument('--logging_threads_per_viz',type=int, default=1)
-    parser.add_argument('--logging_threads_per_viz_val', type=int, default=1)
-    parser.add_argument('--action_in_obs', action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument('--featureless_world', action=argparse.BooleanOptionalAction, default=False)
->>>>>>> foraging
 
     args = parse_args()
 
@@ -958,6 +887,7 @@ if __name__ == "__main__":
         project=args.WANDB_PROJECT,
         entity=args.WANDB_ENTITY,
         config={
+            "FEATURELESS_WORLD": args.FEATURELESS_WORLD,
             "ENV_NAME": args.ENV_NAME,
             "SPARSE_ALG": args.SPARSE_ALG,
             "GPU_ID": args.GPU_ID,
