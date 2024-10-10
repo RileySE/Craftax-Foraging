@@ -39,10 +39,11 @@ from craftax.environment_base.wrappers import (
 )
 from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
 
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Run sparsity PPO.")
     parser.add_argument("--prune_step", type=int, default=20000, help="Step to prune")
-    parser.add_argument("--featureless_world", type=bool, default=False, help="Featureless world")
+    parser.add_argument('--featureless_world', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run_name", type=str, default="default_run", help="Name of the run")
     parser.add_argument("--env_name", type=str, default="Craftax-Symbolic-v1", help="Environment name")
     parser.add_argument("--sparse_alg", type=str, default="magnitude", help="options, magnitude, no_prune, saliency, random")
@@ -63,18 +64,18 @@ def parse_args():
     parser.add_argument("--aux_coef", type=float, default=0.1, help="Auxiliary coefficient")
     parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Max gradient norm")
     parser.add_argument("--activation", type=str, default="tanh", help="Activation function")
-    parser.add_argument("--anneal_lr", type=bool, default=True, help="Whether to anneal LR")
-    parser.add_argument("--debug", type=bool, default=True, help="Enable debug mode")
-    parser.add_argument("--jit", type=bool, default=True, help="Use JIT compilation")
-    parser.add_argument("--action_in_obs", type=bool, default=False, help="Include action in observation")
+    parser.add_argument("--anneal_lr", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--jit", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--action_in_obs', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--seed", type=int, default=np.random.randint(2 ** 31), help="Random seed")
-    parser.add_argument("--use_wandb", type=bool, default=True, help="Use WandB for logging")
-    parser.add_argument("--save_policy", type=bool, default=True, help="Save the policy")
+    parser.add_argument("--use_wandb", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--save_policy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--num_repeats", type=int, default=1, help="Number of repeats")
     parser.add_argument("--layer_size", type=int, default=512, help="Layer size")
     parser.add_argument("--wandb_project", type=str, default="sparsity_project", help="WandB project name")
     parser.add_argument("--wandb_entity", type=str, default=None, help="WandB entity name")
-    parser.add_argument("--use_optimistic_resets", type=bool, default=True, help="Use optimistic resets")
+    parser.add_argument("--use_optimistic_resets", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--optimistic_reset_ratio", type=int, default=16, help="Optimistic reset ratio")
     parser.add_argument("--updates_per_viz", type=int, default=1024, help="Updates per visualization")
     parser.add_argument("--steps_per_viz", type=int, default=1024, help="Steps per visualization")
@@ -82,8 +83,8 @@ def parse_args():
     parser.add_argument("--logging_steps_per_viz_val", type=int, default=8, help="Logging steps per viz validation")
     parser.add_argument("--output_path", type=str, default='./output/', help="Output path")
     parser.add_argument("--frames_per_file", type=int, default=512, help="Frames per file")
-    parser.add_argument("--no_videos", type=bool, default=True, help="Disable video recording")
-    parser.add_argument("--full_action_space", type=bool, default=False, help="Use full action space")
+    parser.add_argument('--no_videos', action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument('--full_action_space', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--reward_function", type=str, default='foraging', help="Reward function")
     parser.add_argument("--validation_seed", type=int, default=777, help="Validation seed")
     parser.add_argument("--validation_step_offset", type=int, default=0, help="Validation step offset")
@@ -885,7 +886,7 @@ if __name__ == "__main__":
         project=args.wandb_project,
         entity=args.wandb_entity,
         config={key.upper(): value for key, value in vars(args).items()},
-        name=args.run_name
+        name=args.run_name,
     )
 
     run_ppo(wandb.config)
