@@ -2049,8 +2049,6 @@ def move_player(state, action, params):
 
 
 def spawn_mobs(state, rng, params, static_params):
-
-    floor_mob_spawn_chance = state.floor_mob_spawn_chance 
     
     player_distance_map = get_distance_map(
         state.player_position, static_params.map_size
@@ -2085,7 +2083,7 @@ def spawn_mobs(state, rng, params, static_params):
     rng, _rng = jax.random.split(rng)
     can_spawn_passive_mob = jnp.logical_and(
         can_spawn_passive_mob,
-        jax.random.uniform(_rng) < floor_mob_spawn_chance[state.player_level, 0],
+        jax.random.uniform(_rng) < FLOOR_MOB_SPAWN_CHANCE[state.player_level, 0],
     )
 
     can_spawn_passive_mob = jnp.logical_and(
@@ -2209,7 +2207,7 @@ def spawn_mobs(state, rng, params, static_params):
 
     # Melee mobs
     can_spawn_melee_mob = (
-        state.melee_mobs.mask[state.player_level].sum() < state.max_melee_mobs
+        state.melee_mobs.mask[state.player_level].sum() < static_params.max_melee_mobs
     )
 
     new_melee_mob_type = FLOOR_MOB_MAPPING[state.player_level, MobType.MELEE.value]
@@ -2224,9 +2222,9 @@ def spawn_mobs(state, rng, params, static_params):
     )
 
     rng, _rng = jax.random.split(rng)
-    melee_mob_spawn_chance = floor_mob_spawn_chance[
+    melee_mob_spawn_chance = FLOOR_MOB_SPAWN_CHANCE[
         state.player_level, 1
-    ] + floor_mob_spawn_chance[state.player_level, 3] * jnp.square(
+    ] + FLOOR_MOB_SPAWN_CHANCE[state.player_level, 3] * jnp.square(
         1 - state.light_level
     )
     can_spawn_melee_mob = jnp.logical_and(
@@ -2322,7 +2320,7 @@ def spawn_mobs(state, rng, params, static_params):
 
     # Ranged mobs
     can_spawn_ranged_mob = (
-        state.ranged_mobs.mask[state.player_level].sum() < state.max_ranged_mobs
+        state.ranged_mobs.mask[state.player_level].sum() < static_params.max_ranged_mobs
     )
 
     new_ranged_mob_type = FLOOR_MOB_MAPPING[state.player_level, MobType.RANGED.value]
@@ -2340,7 +2338,7 @@ def spawn_mobs(state, rng, params, static_params):
     can_spawn_ranged_mob = jnp.logical_and(
         can_spawn_ranged_mob,
         jax.random.uniform(_rng)
-        < floor_mob_spawn_chance[state.player_level, 2] * monster_spawn_coeff,
+        < FLOOR_MOB_SPAWN_CHANCE[state.player_level, 2] * monster_spawn_coeff,
     )
 
     # Hack for deep thing

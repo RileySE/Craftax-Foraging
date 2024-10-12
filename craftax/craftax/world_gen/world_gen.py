@@ -612,8 +612,8 @@ def generate_world(rng, params, static_params):
             type_id=jnp.zeros((static_params.num_levels, max_mobs), dtype=jnp.int32),
         )
 
-    melee_mobs = generate_empty_mobs(20)  # make space for changing curriculum
-    ranged_mobs = generate_empty_mobs(20)
+    melee_mobs = generate_empty_mobs(2)  # make space for changing curriculum
+    ranged_mobs = generate_empty_mobs(3)
     passive_mobs = generate_empty_mobs(static_params.max_passive_mobs)
 
     # Projectiles

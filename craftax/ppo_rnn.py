@@ -289,11 +289,6 @@ def make_train(config):
         env_viz = AutoResetEnvWrapper(env_viz)
         env_viz = BatchEnvWrapper(env_viz, num_envs=config["NUM_ENVS"])
 
-    env = CurriculumWrapper(env, num_envs=config["NUM_ENVS"],
-                            num_steps=config["NUM_LOG_STEPS"],
-                            use_curriculum=config["CURRICULUM"],
-                            predators=config["PREDATORS"])
-
     def linear_schedule(count):
         frac = (
             1.0
@@ -390,7 +385,7 @@ def make_train(config):
                 # STEP ENV
                 rng, _rng = jax.random.split(rng)
                 obsv, env_state, reward, done, info, = env.step(
-                     _rng, env_state, action, update_step, env_params
+                     _rng, env_state, action, env_params
                 )
 
                 # Compute distance to origin for aux loss
