@@ -509,10 +509,6 @@ def make_train(config):
 
                     grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
 
-                    updated_params = sparse_updater.pre_forward_update(
-                        train_state.params, train_state.opt_state
-                    )
-
                     total_loss, grads = grad_fn(
                         updated_params, init_hstate, traj_batch, advantages, targets
                     )
