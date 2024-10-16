@@ -590,10 +590,6 @@ def make_train(config):
                 traj_batch.info,
             )
 
-            metric["total_sparsity"] = jaxpruner.utils.summarize_sparsity(
-                train_state.params, only_total_sparsity=True
-            )["_total_sparsity"]
-
             to_log = metric
 
             rng = update_state[-1]
