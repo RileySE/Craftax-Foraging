@@ -510,7 +510,7 @@ def make_train(config):
                     grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
 
                     total_loss, grads = grad_fn(
-                        updated_params, init_hstate, traj_batch, advantages, targets
+                        train_state.params, init_hstate, traj_batch, advantages, targets
                     )
 
                     train_state = train_state.apply_gradients(grads=grads)
