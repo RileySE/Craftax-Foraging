@@ -77,7 +77,7 @@ def parse_args():
     parser.add_argument("--wandb_entity", type=str, default=None, help="WandB entity name")
     parser.add_argument("--use_optimistic_resets", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--optimistic_reset_ratio", type=int, default=16, help="Optimistic reset ratio")
-    parser.add_argument("--updates_per_viz", type=int, default=1024, help="Updates per visualization")
+    parser.add_argument("--updates_per_viz", type=int, default=2048, help="Updates per visualization")
     parser.add_argument("--steps_per_viz", type=int, default=1024, help="Steps per visualization")
     parser.add_argument("--logging_steps_per_viz", type=int, default=8, help="Logging steps per viz")
     parser.add_argument("--logging_steps_per_viz_val", type=int, default=8, help="Logging steps per viz validation")
@@ -682,8 +682,8 @@ def make_train(config):
             fields_to_log = ['health','food','drink','energy','done','is_sleeping','is_resting','player_position_x',
                                       'player_position_y','recover','hunger','thirst','fatigue','light_level','dist_to_melee_l1',
                                       'melee_on_screen','dist_to_passive_l1','passive_on_screen','dist_to_ranged_l1',
-                                      'ranged_on_screen','num_melee_nearby','num_passives_nearby','num_ranged_nearby','delta',
-                                      'pred_delta','episode_id']
+                                      'ranged_on_screen','num_melee_nearby','num_passives_nearby','num_ranged_nearby','delta_x',
+                                      'delta_y', 'pred_delta_x', 'pred_delta_y', 'episode_id']
 
             # Callback function for logging hidden states
             def write_rnn_hstate(hstate, scalars, increment=0):
