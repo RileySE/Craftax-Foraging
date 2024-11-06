@@ -42,7 +42,7 @@ for row in weight_file:
     if count % layer_size == 0:
         non_0_per_layer.append([])
 
-    if False and count % 256 == 0:
+    if True and count % 256 == 0:
         print('Plotting neuron #', count)
         make_histogram(row_np, 'Weight distribution of a single neuron', normalization_factor=total_weights, n_bins=50)
 
