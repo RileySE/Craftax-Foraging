@@ -1,4 +1,5 @@
 import argparse
+import math
 import os
 import sys
 from math import ceil, sqrt
@@ -437,49 +438,86 @@ def make_train(config):
                         def compute_l1_sparse_loss(layer_params):
                             return jnp.abs(layer_params).mean()
 
+                        def compute_sparse_lognorm_loss(layer_params):
+                            mean = 0.0
+                            variance = 1.0
+                            # For multi-dim this gives us the first dimension, what we want
+                            layer_size = len(layer_params)
+                            inds = jnp.arange(1, layer_size+1)
+                            # PDF of a log normal distribution
+                            ideal_1 = 1 / (inds * variance * sqrt(2 * math.pi))
+                            ideal_2 = jnp.exp(-1 * jnp.pow(jnp.log(inds) - mean, 2) / (2 * pow(variance, 2)))
+                            ideals = ideal_1 * ideal_2
+
+                            # Use absolute values of the weights so negative weights are allowed
+                            abs_params = jnp.abs(layer_params)
+                            # Sort params based on size
+                            sorted_params = jax.lax.sort(abs_params, 0)
+                            # Think L1 works for now?
+                            loss = jnp.abs(sorted_params - ideals.reshape(ideals.shape + (1,))).mean()
+                            return loss
+
                         # Compute sparsity loss for each layer's weights
                         flat_params = jax.tree.flatten(params)
                         # HACK: Quick hack for testing, hardcode which param arrays to compute on
                         # Input layer
                         sparse_loss = compute_sparse_loss(flat_params[0][1])
                         l1_loss = compute_l1_sparse_loss(flat_params[0][1])
+                        lognorm_loss = compute_sparse_lognorm_loss(flat_params[0][1])
+                        #jax.debug.print('first one is {}', lognorm_loss)
 
                         sparse_loss += compute_sparse_loss(flat_params[0][3])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][3])
-                        #jax.debug.print('first one is {}', sparse_loss)
+                        lognorm_loss += compute_sparse_lognorm_loss(flat_params[0][3])
                         sparse_loss += compute_sparse_loss(flat_params[0][5])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][5])
+                        lognorm_loss += compute_sparse_lognorm_loss(flat_params[0][5])
                         # Policy output
                         #sparse_loss += compute_sparse_loss(flat_params[0][7])
 
                         sparse_loss += compute_sparse_loss(flat_params[0][9])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][9])
+                        lognorm_loss += compute_sparse_lognorm_loss(flat_params[0][9])
                         sparse_loss += compute_sparse_loss(flat_params[0][11])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][11])
+                        lognorm_loss += compute_sparse_lognorm_loss(flat_params[0][11])
                         # Value output
                         #sparse_loss += compute_sparse_loss(flat_params[0][13])
 
                         sparse_loss += compute_sparse_loss(flat_params[0][15])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][15])
+                        lognorm_loss += compute_sparse_lognorm_loss(flat_params[0][15])
 
                         sparse_loss += compute_sparse_loss(flat_params[0][17])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][17])
+                        lognorm_loss += compute_sparse_lognorm_loss(flat_params[0][17])
                         # Aux output
                         #sparse_loss += compute_sparse_loss(flat_params[0][19])
                         #l1_loss += compute_l1_sparse_loss(flat_params[0][19])
 
                         sparse_loss += compute_sparse_loss(flat_params[0][21])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][21])
+                        lognorm_loss += compute_sparse_lognorm_loss(flat_params[0][21])
+
                         sparse_loss += compute_sparse_loss(flat_params[0][22])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][22])
+                        lognorm_loss += compute_sparse_lognorm_loss(flat_params[0][22])
+
                         sparse_loss += compute_sparse_loss(flat_params[0][23])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][23])
+                        lognorm_loss += compute_sparse_lognorm_loss(flat_params[0][23])
+
                         sparse_loss += compute_sparse_loss(flat_params[0][25])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][25])
+                        lognorm_loss += compute_sparse_lognorm_loss(flat_params[0][25])
+
                         sparse_loss += compute_sparse_loss(flat_params[0][27])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][27])
+                        lognorm_loss += compute_sparse_lognorm_loss(flat_params[0][27])
+
                         sparse_loss += compute_sparse_loss(flat_params[0][29])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][29])
+                        lognorm_loss += compute_sparse_lognorm_loss(flat_params[0][29])
                         #jax.debug.print('total is {}', sparse_loss)
 
 
@@ -488,7 +526,7 @@ def make_train(config):
                             + config["VF_COEF"] * value_loss
                             - config["ENT_COEF"] * entropy
                             + config["AUX_COEF"] * aux_loss
-                            + config['SPARSE_COEF'] * sparse_loss
+                            + config['SPARSE_COEF'] * lognorm_loss
                             + config['L1_DECAY_COEF'] * l1_loss
                         )
 
