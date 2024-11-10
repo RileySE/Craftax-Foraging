@@ -39,19 +39,18 @@ from craftax.environment_base.wrappers import (
 )
 from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
 
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Run sparsity PPO.")
     parser.add_argument("--prune_step", type=int, default=20000, help="Step to prune")
     parser.add_argument('--featureless_world', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run_name", type=str, default="default_run", help="Name of the run")
-    parser.add_argument("--env_name", type=str, default="Craftax-Symbolic-v1", help="Environment name")
+    parser.add_argument("--env_name", type=str, default="Craftax-Pixels-v1", help="Environment name")
     parser.add_argument("--sparse_alg", type=str, default="magnitude", help="options, magnitude, no_prune, saliency, random")
     parser.add_argument("--gpu_id", type=int, default=0, help="GPU ID")
     parser.add_argument("--predators", type=bool, default=True, help="Use predators")
-    parser.add_argument("--sparsity", type=float, default=0.4, help="Sparsity value")
+    parser.add_argument("--sparsity", type=float, default=0.9, help="Sparsity value")
     parser.add_argument("--num_envs", type=int, default=1024, help="Number of environments")
-    parser.add_argument("--total_timesteps", type=float, default=3e9, help="Total timesteps")
+    parser.add_argument("--total_timesteps", type=float, default=4e9, help="Total timesteps")
     parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
     parser.add_argument("--num_env_steps", type=int, default=64, help="Number of environment steps")
     parser.add_argument("--update_epochs", type=int, default=4, help="Number of update epochs")
@@ -93,6 +92,28 @@ def parse_args():
     parser.add_argument("--curriculum", type=bool, default=False, help="Use curriculum learning")
     return parser.parse_args()
 
+class CNN(nn.Module):
+
+    def setup(self):
+        self.conv1 = nn.Conv(features=16, kernel_size=(3, 3), strides=(2, 2), padding='SAME')
+        self.conv2 = nn.Conv(features=32, kernel_size=(3, 3), strides=(2, 2), padding='SAME')
+        self.pool = nn.avg_pool
+
+    @nn.compact
+    def __call__(self, x):
+        batch_size, num_envs, h, w, c = x.shape
+        x = x.reshape(batch_size * num_envs, h, w, c)
+        x = self.conv1(x)
+        x = nn.relu(x)
+        x = self.pool(x, window_shape=(2, 2), strides=(2, 2), padding='SAME')
+        x = self.conv2(x)
+        x = nn.relu(x)
+        x = x.reshape(x.shape[0], -1)
+        x = nn.Dense(features=8268)(x)
+        x = x.reshape(batch_size, num_envs, 8268)
+        
+        return x
+    
 class ScannedRNN(nn.Module):
     @functools.partial(
         nn.scan,
@@ -126,7 +147,10 @@ class ActorCriticRNN(nn.Module):
 
     @nn.compact
     def __call__(self, hidden, x):
+
         obs, dones = x
+        if self.config["ENV_NAME"] == "Craftax-Pixels-v1":
+            obs = CNN()(obs)
         embedding = nn.Dense(
             self.config["LAYER_SIZE"],
             kernel_init=orthogonal(np.sqrt(2)),
@@ -189,7 +213,6 @@ class ActorCriticRNN(nn.Module):
 
         return hidden, pi, jnp.squeeze(critic, axis=-1), aux
 
-
 class Transition(NamedTuple):
     done: jnp.ndarray
     action: jnp.ndarray
@@ -199,7 +222,6 @@ class Transition(NamedTuple):
     obs: jnp.ndarray
     info: jnp.ndarray
     deltas_to_start: jnp.ndarray
-
 
 def make_train(config):
     config["NUM_UPDATES"] = (
@@ -509,8 +531,12 @@ def make_train(config):
 
                     grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
 
+                    updated_params = sparse_updater.pre_forward_update(
+                        train_state.params, train_state.opt_state
+                    )
+
                     total_loss, grads = grad_fn(
-                        train_state.params, init_hstate, traj_batch, advantages, targets
+                        updated_params, init_hstate, traj_batch, advantages, targets
                     )
 
                     train_state = train_state.apply_gradients(grads=grads)
@@ -585,6 +611,10 @@ def make_train(config):
                 / traj_batch.info["returned_episode"].sum(),
                 traj_batch.info,
             )
+
+            metric["total_sparsity"] = jaxpruner.utils.summarize_sparsity(
+                train_state.params, only_total_sparsity=True
+            )["_total_sparsity"]
 
             to_log = metric
 
@@ -825,7 +855,6 @@ def make_train(config):
 
     return train
 
-
 def run_ppo(config):
 
     reset_batch_logs()
@@ -863,7 +892,6 @@ def run_ppo(config):
 
     if config["SAVE_POLICY"]:
         _save_network(0, "policies")
-
 
 if __name__ == "__main__":
 
