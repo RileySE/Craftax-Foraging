@@ -440,7 +440,7 @@ def make_train(config):
 
                         def compute_sparse_lognorm_loss(layer_params):
                             mean = 0.0
-                            variance = 1.0
+                            variance = 2.0
                             # For multi-dim this gives us the first dimension, what we want
                             layer_size = len(layer_params)
                             inds = jnp.arange(1, layer_size+1)

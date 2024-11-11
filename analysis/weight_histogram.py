@@ -24,9 +24,11 @@ weight_file = open(weight_filename)
 layer_size = 512
 max_weights = []
 non_0_counts = []
+weights_per_neuron = []
 non_0_per_layer = [[]]
 count = 0
 all_weights_count = 0
+weights_per_layer = []
 # Each row is one neuron's weights
 for row in weight_file:
     count += 1
@@ -38,11 +40,15 @@ for row in weight_file:
     max_weights.append(row_np.max())
     weights_not_0 = (row_np > 0.01).sum()
     non_0_counts.append(weights_not_0)
+    weights_per_neuron.append(total_weights)
     non_0_per_layer[-1].append(weights_not_0)
     if count % layer_size == 0:
         non_0_per_layer.append([])
+    if (count - 1) % layer_size == 0:
+        weights_per_layer.append(total_weights)
 
-    if True and count % 256 == 0:
+
+    if False and count % 256 == 0:
         print('Plotting neuron #', count)
         make_histogram(row_np, 'Weight distribution of a single neuron', normalization_factor=total_weights, n_bins=50)
 
@@ -52,8 +58,9 @@ max_weights_np = np.asarray(max_weights)
 make_histogram(max_weights_np, 'Max weight of each neuron', ylabel='% of Neurons', normalization_factor=count, n_bins=50)
 
 non_0_np = np.asarray(non_0_counts)
-
-make_histogram(non_0_np, 'Fraction of non-0 weights per neuron', '# Non-0 weights', '% of Neurons', count, 500)
+weights_per_neuron_np = np.asarray(weights_per_neuron)
+make_histogram(non_0_np / weights_per_neuron_np, 'Fraction of non-0 weights per neuron', 'Fraction of Weights Non-0', '% of Neurons', count, 50)
 
 for layer in range(len(non_0_per_layer)):
-    make_histogram(non_0_per_layer[layer], 'Fraction of non-0 weights per neuron, layer ' + str(layer+1), '# Non-0 weights', '% of Neurons', layer_size, 100)
+    curr_non_0 = np.asarray(non_0_per_layer[layer])
+    make_histogram(curr_non_0 / weights_per_layer[layer], 'Fraction of non-0 weights per neuron, layer ' + str(layer+1), 'Fraction of Weights Non-0', '% of Neurons', layer_size, 100)
