@@ -49,12 +49,12 @@ def parse_args():
     parser.add_argument("--gpu_id", type=int, default=0, help="GPU ID")
     parser.add_argument("--predators", type=bool, default=True, help="Use predators")
     parser.add_argument("--sparsity", type=float, default=0.9, help="Sparsity value")
-    parser.add_argument("--num_envs", type=int, default=1024, help="Number of environments")
+    parser.add_argument("--num_envs", type=int, default=2, help="Number of environments") # 1024
     parser.add_argument("--total_timesteps", type=float, default=4e9, help="Total timesteps")
     parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
-    parser.add_argument("--num_env_steps", type=int, default=64, help="Number of environment steps")
-    parser.add_argument("--update_epochs", type=int, default=4, help="Number of update epochs")
-    parser.add_argument("--num_minibatches", type=int, default=8, help="Number of minibatches")
+    parser.add_argument("--num_env_steps", type=int, default=2, help="Number of environment steps") # 64
+    parser.add_argument("--update_epochs", type=int, default=2, help="Number of update epochs") # 4
+    parser.add_argument("--num_minibatches", type=int, default=2, help="Number of minibatches") # 8
     parser.add_argument("--gamma", type=float, default=0.99, help="Gamma value")
     parser.add_argument("--gae_lambda", type=float, default=0.8, help="GAE Lambda")
     parser.add_argument("--clip_eps", type=float, default=0.2, help="Clip epsilon")
@@ -65,7 +65,7 @@ def parse_args():
     parser.add_argument("--activation", type=str, default="tanh", help="Activation function")
     parser.add_argument("--anneal_lr", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--jit", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--jit", action=argparse.BooleanOptionalAction, default=False) # True
     parser.add_argument('--action_in_obs', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--seed", type=int, default=np.random.randint(2 ** 31), help="Random seed")
     parser.add_argument("--use_wandb", action=argparse.BooleanOptionalAction, default=True)
@@ -76,8 +76,8 @@ def parse_args():
     parser.add_argument("--wandb_entity", type=str, default=None, help="WandB entity name")
     parser.add_argument("--use_optimistic_resets", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--optimistic_reset_ratio", type=int, default=16, help="Optimistic reset ratio")
-    parser.add_argument("--updates_per_viz", type=int, default=1024, help="Updates per visualization")
-    parser.add_argument("--steps_per_viz", type=int, default=1024, help="Steps per visualization")
+    parser.add_argument("--updates_per_viz", type=int, default=2, help="Updates per visualization") # 1024
+    parser.add_argument("--steps_per_viz", type=int, default=2, help="Steps per visualization") # 1024
     parser.add_argument("--logging_steps_per_viz", type=int, default=8, help="Logging steps per viz")
     parser.add_argument("--logging_steps_per_viz_val", type=int, default=8, help="Logging steps per viz validation")
     parser.add_argument("--output_path", type=str, default='./output/', help="Output path")
@@ -93,14 +93,13 @@ def parse_args():
     return parser.parse_args()
 
 class CNN(nn.Module):
-
     def setup(self):
         self.conv1 = nn.Conv(features=16, kernel_size=(3, 3), strides=(2, 2), padding='SAME')
         self.conv2 = nn.Conv(features=32, kernel_size=(3, 3), strides=(2, 2), padding='SAME')
         self.pool = nn.avg_pool
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, config):
         batch_size, num_envs, h, w, c = x.shape
         x = x.reshape(batch_size * num_envs, h, w, c)
         x = self.conv1(x)
@@ -109,8 +108,8 @@ class CNN(nn.Module):
         x = self.conv2(x)
         x = nn.relu(x)
         x = x.reshape(x.shape[0], -1)
-        x = nn.Dense(features=8268)(x)
-        x = x.reshape(batch_size, num_envs, 8268)
+        x = nn.Dense(features=config["LAYER_SIZE"])(x)
+        x = x.reshape(batch_size, num_envs, config["LAYER_SIZE"])
         
         return x
     
@@ -148,15 +147,16 @@ class ActorCriticRNN(nn.Module):
     @nn.compact
     def __call__(self, hidden, x):
 
-        obs, dones = x
+        embedding, dones = x
         if self.config["ENV_NAME"] == "Craftax-Pixels-v1":
-            obs = CNN()(obs)
-        embedding = nn.Dense(
+            embedding = CNN()(embedding, config=self.config)
+        else: 
+            embedding = nn.Dense(
             self.config["LAYER_SIZE"],
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
-        )(obs)
-        embedding = nn.relu(embedding)
+            )(embedding)
+            embedding = nn.relu(embedding)
 
         rnn_in = (embedding, dones)
         hidden, embedding = ScannedRNN()(hidden, rnn_in)
@@ -211,7 +211,7 @@ class ActorCriticRNN(nn.Module):
             aux
         )
 
-        return hidden, pi, jnp.squeeze(critic, axis=-1), aux
+        return hidden, pi, jnp.squeeze(critic, axis=-1), aux, embedding
 
 class Transition(NamedTuple):
     done: jnp.ndarray
@@ -395,7 +395,7 @@ def make_train(config):
 
                 # SELECT ACTION
                 ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-                hstate, pi, value, aux = network.apply(train_state.params, hstate, ac_in)
+                hstate, pi, value, _, _ = network.apply(train_state.params, hstate, ac_in)
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
                 value, action, log_prob = (
@@ -447,7 +447,7 @@ def make_train(config):
                 update_step,
             ) = runner_state
             ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-            _, _, last_val, _ = network.apply(train_state.params, hstate, ac_in)
+            _, _, last_val, _, _ = network.apply(train_state.params, hstate, ac_in)
             last_val = last_val.squeeze(0)
 
             def _calculate_gae(traj_batch, last_val, last_done):
@@ -485,7 +485,7 @@ def make_train(config):
 
                     def _loss_fn(params, init_hstate, traj_batch, gae, targets):
                         # RERUN NETWORK
-                        _, pi, value, aux = network.apply(
+                        _, pi, value, aux, _ = network.apply(
                             params, init_hstate[0], (traj_batch.obs, traj_batch.done)
                         )
                         log_prob = pi.log_prob(traj_batch.action)
@@ -606,7 +606,7 @@ def make_train(config):
             #traj_batch.info['total_loss'] = loss_info[0].mean()
             #traj_batch.info['aux_loss'] = loss_info[1][-1].mean()
 
-            metric = jax.tree_map(
+            metric = jax.tree.map(
                 lambda x: (x * traj_batch.info["returned_episode"]).sum()
                 / traj_batch.info["returned_episode"].sum(),
                 traj_batch.info,
@@ -655,7 +655,7 @@ def make_train(config):
 
             # SELECT ACTION
             ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-            hstate, pi, value, aux = network.apply(train_state.params, hstate, ac_in)
+            hstate, pi, value, aux, obs = network.apply(train_state.params, hstate, ac_in)
             action = pi.sample(seed=_rng)
             log_prob = pi.log_prob(action)
             value, action, log_prob = (
@@ -678,6 +678,7 @@ def make_train(config):
             info['hidden_state'] = hstate
             info['pred_delta'] = aux
             info['delta'] = deltas_to_start
+            info['obs'] = obs
 
             transition = Transition(
                 last_done, action, value, reward, log_prob, last_obs, info, deltas_to_start,
@@ -705,6 +706,7 @@ def make_train(config):
             # Finally, log data associated with the visualization runs
             update_step = runner_state[-1]
             hidden_states = traj_batch.info['hidden_state']
+            obs = traj_batch.info['obs']
             # Null this for memory savings
             traj_batch.info['hidden_state'] = None
 
@@ -715,39 +717,45 @@ def make_train(config):
                                       'ranged_on_screen','num_melee_nearby','num_passives_nearby','num_ranged_nearby','delta',
                                       'pred_delta','episode_id']
 
-            # Callback function for logging hidden states
-            def write_rnn_hstate(hstate, scalars, increment=0):
-
+            # Callback function for logging hstates, scalars, conv_obs
+            def write_rnn_hstate(hstate, scalars, obs, increment=0):
                 run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
                 os.makedirs(run_out_path, exist_ok=True)
+                
                 # Assemble header for the scalar file(s)
                 scalar_file_header = 'action'
                 for key in fields_to_log:
                     scalar_file_header += ',' + key
 
+                print(f"hstate.shape {hstate.shape}")
+                print(f"obs.shape {obs.shape}")
+                print(f"scalars.shape {scalars.shape}")
+
                 # We save to temp files and then append to the target file since numpy apparently cannot write files in append mode for some reason
                 for i in range(logging_threads):
-                    out_filename_hstates = os.path.join(run_out_path, 'hstates_{}_{}.csv'.format(increment, i))
+                    # Write hstate file
+                    out_filename_hstates = os.path.join(run_out_path, f'hstates_{increment}_{i}.csv')
                     temp_filename = os.path.join(run_out_path, 'temp.csv')
-                    np.savetxt(temp_filename,
-                               hstate[:, i, :], delimiter=',')
-                    temp_file = open(temp_filename, 'r')
-                    out_file_hstates = open(out_filename_hstates, 'a+')
-                    out_file_hstates.write(temp_file.read())
-                    out_file_hstates.close()
-                    temp_file.close()
-                    # Then do the same thing for the scalars
-                    out_filename_scalars = os.path.join(run_out_path, 'scalars_{}_{}.csv'.format(increment, i))
-                    np.savetxt(temp_filename,
-                               scalars[:, i, :], delimiter=',', fmt='%f',
-                               header=scalar_file_header
-                               )
-                    temp_file = open(temp_filename, 'r')
-                    out_file_scalars = open(out_filename_scalars, 'a+')
-                    out_file_scalars.write(temp_file.read())
-                    temp_file.close()
-                    out_file_scalars.close()
-                    print('Writing log file', out_filename_hstates)
+                    np.savetxt(temp_filename, hstate[:, i, :], delimiter=',')
+                    with open(temp_filename, 'r') as temp_file, open(out_filename_hstates, 'a+') as out_file_hstates:
+                        out_file_hstates.write(temp_file.read())
+
+                    # Write scalars file
+                    out_filename_scalars = os.path.join(run_out_path, f'scalars_{increment}_{i}.csv')
+                    np.savetxt(temp_filename, scalars[:, i, :], delimiter=',', fmt='%f', header=scalar_file_header)
+                    with open(temp_filename, 'r') as temp_file, open(out_filename_scalars, 'a+') as out_file_scalars:
+                        out_file_scalars.write(temp_file.read())
+
+                    if config["ENV_NAME"] == "Craftax-Pixels-v1":
+                        
+                        obs = obs.squeeze(axis=1)
+                        for i in range(logging_threads):
+                            out_filename_obs = os.path.join(run_out_path, f'obs_{increment}_{i}.csv')
+                            temp_filename = os.path.join(run_out_path, 'temp.csv')
+                            
+                            np.savetxt(temp_filename, obs[:, i, :], delimiter=',')
+                            with open(temp_filename, 'r') as temp_file, open(out_filename_obs, 'a+') as out_file_obs:
+                                out_file_obs.write(temp_file.read())
 
 
             # Add the specified field to the logging array
@@ -769,7 +777,7 @@ def make_train(config):
             for field_to_log in fields_to_log:
                 log_array = add_field_to_log_array(traj_batch.info, log_array, field_to_log)
 
-            jax.debug.callback(write_rnn_hstate, hidden_states, log_array, update_step)
+            jax.debug.callback(write_rnn_hstate, hidden_states, log_array, obs, update_step)
 
             return runner_state, None
 
@@ -780,6 +788,7 @@ def make_train(config):
                 _update_step, runner_state, None, config["UPDATES_PER_VIZ"]
             )
 
+            """ # TODO log convolutional weights
             # Log model weights
             def save_weights_callback(weights_flat, iter):
                 run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
@@ -794,6 +803,7 @@ def make_train(config):
 
             weights_flat = jax.tree.flatten(runner_state[0].params)
             jax.debug.callback(save_weights_callback, weights_flat[0], runner_state[-1])
+            """
 
             # Can we save the environment state and resume training later?
             #runner_state_copy = runner_state
