@@ -438,9 +438,10 @@ def make_train(config):
                         def compute_l1_sparse_loss(layer_params):
                             return jnp.abs(layer_params).mean()
 
+                        # TODO fix this, currently doesn't make sense with the ranking
                         def compute_sparse_lognorm_loss(layer_params):
                             mean = 0.0
-                            variance = 2.0
+                            variance = 1.0
                             # For multi-dim this gives us the first dimension, what we want
                             layer_size = len(layer_params)
                             inds = jnp.arange(1, layer_size+1)
@@ -464,7 +465,7 @@ def make_train(config):
                         sparse_loss = compute_sparse_loss(flat_params[0][1])
                         l1_loss = compute_l1_sparse_loss(flat_params[0][1])
                         lognorm_loss = compute_sparse_lognorm_loss(flat_params[0][1])
-                        #jax.debug.print('first one is {}', lognorm_loss)
+                        jax.debug.print('first one is {}', lognorm_loss)
 
                         sparse_loss += compute_sparse_loss(flat_params[0][3])
                         l1_loss += compute_l1_sparse_loss(flat_params[0][3])
@@ -896,7 +897,7 @@ def run_ppo(config):
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_REPEATS"])
 
-    train_jit = jax.jit(make_train(config))
+    train_jit = jax.jit(make_train(config), device=jax.devices()[config['GPU_ID']])
     train_vmap = jax.vmap(train_jit)
 
     t0 = time.time()
@@ -934,6 +935,7 @@ if __name__ == "__main__":
         type=int,
         default=1024,
     )
+    parser.add_argument("--gpu_id", type=int, default=0)
     parser.add_argument("--total_timesteps", type=int, default=1e9)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--num_steps", type=int, default=64)
