@@ -49,12 +49,12 @@ def parse_args():
     parser.add_argument("--gpu_id", type=int, default=0, help="GPU ID")
     parser.add_argument("--predators", type=bool, default=True, help="Use predators")
     parser.add_argument("--sparsity", type=float, default=0.9, help="Sparsity value")
-    parser.add_argument("--num_envs", type=int, default=2, help="Number of environments") # 1024
+    parser.add_argument("--num_envs", type=int, default=1024, help="Number of environments")
     parser.add_argument("--total_timesteps", type=float, default=4e9, help="Total timesteps")
     parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
-    parser.add_argument("--num_env_steps", type=int, default=2, help="Number of environment steps") # 64
-    parser.add_argument("--update_epochs", type=int, default=2, help="Number of update epochs") # 4
-    parser.add_argument("--num_minibatches", type=int, default=2, help="Number of minibatches") # 8
+    parser.add_argument("--num_env_steps", type=int, default=64, help="Number of environment steps")
+    parser.add_argument("--update_epochs", type=int, default=4, help="Number of update epochs")
+    parser.add_argument("--num_minibatches", type=int, default=8, help="Number of minibatches")
     parser.add_argument("--gamma", type=float, default=0.99, help="Gamma value")
     parser.add_argument("--gae_lambda", type=float, default=0.8, help="GAE Lambda")
     parser.add_argument("--clip_eps", type=float, default=0.2, help="Clip epsilon")
@@ -65,7 +65,7 @@ def parse_args():
     parser.add_argument("--activation", type=str, default="tanh", help="Activation function")
     parser.add_argument("--anneal_lr", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--jit", action=argparse.BooleanOptionalAction, default=False) # True
+    parser.add_argument("--jit", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--action_in_obs', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--seed", type=int, default=np.random.randint(2 ** 31), help="Random seed")
     parser.add_argument("--use_wandb", action=argparse.BooleanOptionalAction, default=True)
@@ -76,8 +76,8 @@ def parse_args():
     parser.add_argument("--wandb_entity", type=str, default=None, help="WandB entity name")
     parser.add_argument("--use_optimistic_resets", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--optimistic_reset_ratio", type=int, default=16, help="Optimistic reset ratio")
-    parser.add_argument("--updates_per_viz", type=int, default=2, help="Updates per visualization") # 1024
-    parser.add_argument("--steps_per_viz", type=int, default=2, help="Steps per visualization") # 1024
+    parser.add_argument("--updates_per_viz", type=int, default=1024, help="Updates per visualization")
+    parser.add_argument("--steps_per_viz", type=int, default=1024, help="Steps per visualization")
     parser.add_argument("--logging_steps_per_viz", type=int, default=8, help="Logging steps per viz")
     parser.add_argument("--logging_steps_per_viz_val", type=int, default=8, help="Logging steps per viz validation")
     parser.add_argument("--output_path", type=str, default='./output/', help="Output path")
@@ -94,8 +94,8 @@ def parse_args():
 
 class CNN(nn.Module):
     def setup(self):
-        self.conv1 = nn.Conv(features=16, kernel_size=(3, 3), strides=(2, 2), padding='SAME')
-        self.conv2 = nn.Conv(features=32, kernel_size=(3, 3), strides=(2, 2), padding='SAME')
+        self.conv1 = nn.Conv(features=8, kernel_size=(3, 3), strides=(2, 2), padding='SAME')
+        self.conv2 = nn.Conv(features=16, kernel_size=(3, 3), strides=(2, 2), padding='SAME')
         self.pool = nn.avg_pool
 
     @nn.compact
@@ -107,6 +107,7 @@ class CNN(nn.Module):
         x = self.pool(x, window_shape=(2, 2), strides=(2, 2), padding='SAME')
         x = self.conv2(x)
         x = nn.relu(x)
+        x = self.pool(x, window_shape=(2, 2), strides=(2, 2), padding='SAME')
         x = x.reshape(x.shape[0], -1)
         x = nn.Dense(features=config["LAYER_SIZE"])(x)
         x = x.reshape(batch_size, num_envs, config["LAYER_SIZE"])
