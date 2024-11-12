@@ -1299,10 +1299,11 @@ def update_mobs(rng, state, params, static_params):
         passive_mobs = state.passive_mobs
 
         # Random move
+        # Why is the passive chance of not moving implemented in such a janky way? Most of DIRECTIONS is [0,0] (no-op)
         rng, _rng = jax.random.split(rng)
         random_move_direction = jax.random.choice(
             _rng,
-            DIRECTIONS[1:9],  # 50% chance of not moving
+            DIRECTIONS[0:16],  # HACK: 75% chance of not moving
         )
         proposed_position = (
             passive_mobs.position[state.player_level, passive_mob_index]
