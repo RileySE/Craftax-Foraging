@@ -728,10 +728,6 @@ def make_train(config):
                 for key in fields_to_log:
                     scalar_file_header += ',' + key
 
-                print(f"hstate.shape {hstate.shape}")
-                print(f"obs.shape {obs.shape}")
-                print(f"scalars.shape {scalars.shape}")
-
                 # We save to temp files and then append to the target file since numpy apparently cannot write files in append mode for some reason
                 for i in range(logging_threads):
                     # Write hstate file
@@ -891,7 +887,7 @@ def run_ppo(config):
         train_state = jax.tree_map(lambda x: x[0], train_states)
         orbax_checkpointer = PyTreeCheckpointer()
         options = CheckpointManagerOptions(max_to_keep=1, create=True)
-        path = os.path.join(wandb.run.dir, dir_name)
+        path = os.path.abspath(os.path.join(config['OUTPUT_PATH'], wandb.run.id, dir_name))
         checkpoint_manager = CheckpointManager(path, orbax_checkpointer, options)
         print(f"saved runner state to {path}")
         save_args = orbax_utils.save_args_from_target(train_state)
