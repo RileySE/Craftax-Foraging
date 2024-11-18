@@ -1303,7 +1303,7 @@ def update_mobs(rng, state, params, static_params):
         rng, _rng = jax.random.split(rng)
         random_move_direction = jax.random.choice(
             _rng,
-            DIRECTIONS[0:16],  # HACK: 75% chance of not moving
+            DIRECTIONS_PASSIVE,  # HACK: 87.5% chance of not moving
         )
         proposed_position = (
             passive_mobs.position[state.player_level, passive_mob_index]

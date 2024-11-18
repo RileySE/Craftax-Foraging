@@ -360,6 +360,14 @@ DIRECTIONS = jnp.concatenate(
     axis=0,
 )
 
+DIRECTIONS_PASSIVE = jnp.concatenate(
+    (
+        jnp.array([[0, 0], [0, -1], [0, 1], [-1, 0], [1, 0]], dtype=jnp.int32),
+        jnp.zeros((27, 2), dtype=jnp.int32),
+    ),
+    axis=0,
+)
+
 CLOSE_BLOCKS = jnp.array(
     [
         [0, -1],
