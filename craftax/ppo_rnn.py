@@ -442,13 +442,28 @@ def make_train(config):
                         def compute_sparse_lognorm_loss(layer_params):
                             mean = 0.0
                             variance = 1.0
+                            interval_end = 2.0
                             # For multi-dim this gives us the first dimension, what we want
                             layer_size = len(layer_params)
                             inds = jnp.arange(1, layer_size+1)
+                            inds_norm = inds / layer_size
+                            interval_values = inds_norm * interval_end
+                            jax.debug.print('{},{},{}', interval_values[0], interval_values[50], interval_values[-1])
                             # PDF of a log normal distribution
-                            ideal_1 = 1 / (inds * variance * sqrt(2 * math.pi))
-                            ideal_2 = jnp.exp(-1 * jnp.pow(jnp.log(inds) - mean, 2) / (2 * pow(variance, 2)))
+                            ideal_1 = 1 / (interval_values * variance * sqrt(2 * math.pi))
+                            ideal_2 = jnp.exp(-1 * jnp.pow(jnp.log(interval_values) - mean, 2) / (2 * pow(variance, 2)))
                             ideals = ideal_1 * ideal_2
+
+                            def debug_plot_ideal(ideals):
+                                import matplotlib.pyplot as plt
+                                import numpy as np
+                                hist, bins = np.histogram(ideals, bins=50)
+                                plt.figure()
+                                #plt.stairs(hist)
+                                plt.plot(ideals)
+                                plt.show()
+
+                            jax.debug.callback(debug_plot_ideal, ideals)
 
                             # Use absolute values of the weights so negative weights are allowed
                             abs_params = jnp.abs(layer_params)
