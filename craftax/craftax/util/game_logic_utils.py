@@ -118,9 +118,10 @@ def attack_mob(state, position, damage_vector, can_eat):
         0,
     )
 
+    # HACK: Reduced food from eating a passive to 3 (was 6)
     new_food = jax.lax.select(
         jnp.logical_and(did_kill_passive_mob, can_eat),
-        jnp.minimum(get_max_food(state), state.player_food + 6),
+        jnp.minimum(get_max_food(state), state.player_food + 3),
         state.player_food,
     )
     new_hunger = jax.lax.select(
