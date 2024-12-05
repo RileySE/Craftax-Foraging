@@ -41,6 +41,8 @@ from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_l
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run sparsity PPO.")
+    parser.add_argument("--use_policy", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--policy_path", type=str, default="/n/home13/jlunger/Craftax-Foraging/craftax/output/wurji8fy/policies", help="Name of the run")
     parser.add_argument("--prune_step", type=int, default=20000, help="Step to prune")
     parser.add_argument('--featureless_world', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run_name", type=str, default="default_run", help="Name of the run")
@@ -50,7 +52,7 @@ def parse_args():
     parser.add_argument("--predators", type=bool, default=True, help="Use predators")
     parser.add_argument("--sparsity", type=float, default=0.9, help="Sparsity value")
     parser.add_argument("--num_envs", type=int, default=1024, help="Number of environments")
-    parser.add_argument("--total_timesteps", type=float, default=4e9, help="Total timesteps")
+    parser.add_argument("--total_timesteps", type=float, default=1e9, help="Total timesteps")
     parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
     parser.add_argument("--num_env_steps", type=int, default=64, help="Number of environment steps")
     parser.add_argument("--update_epochs", type=int, default=4, help="Number of update epochs")
@@ -76,8 +78,8 @@ def parse_args():
     parser.add_argument("--wandb_entity", type=str, default=None, help="WandB entity name")
     parser.add_argument("--use_optimistic_resets", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--optimistic_reset_ratio", type=int, default=16, help="Optimistic reset ratio")
-    parser.add_argument("--updates_per_viz", type=int, default=1024, help="Updates per visualization")
-    parser.add_argument("--steps_per_viz", type=int, default=1024, help="Steps per visualization")
+    parser.add_argument("--updates_per_viz", type=int, default=1024, help="Updates per visualization") # 1024
+    parser.add_argument("--steps_per_viz", type=int, default=1024, help="Steps per visualization") # 1024
     parser.add_argument("--logging_steps_per_viz", type=int, default=8, help="Logging steps per viz")
     parser.add_argument("--logging_steps_per_viz_val", type=int, default=8, help="Logging steps per viz validation")
     parser.add_argument("--output_path", type=str, default='./output/', help="Output path")
@@ -229,6 +231,9 @@ def make_train(config):
         config["TOTAL_TIMESTEPS"] // config["NUM_ENV_STEPS"] // config["NUM_ENVS"] // config['UPDATES_PER_VIZ']
     )
 
+
+    print(f"NUM_UPDATES: {config["NUM_UPDATES"]}")
+
     config["NUM_LOG_STEPS"] = config["NUM_UPDATES"] * config["UPDATES_PER_VIZ"]
 
     # HACK: We have to use the original formula for num_updates for LR annealing,
@@ -322,7 +327,6 @@ def make_train(config):
 
     def train(rng):
 
-        # INIT NETWORK
         if config['FULL_ACTION_SPACE']:
             action_space_size = env.action_space(env_params).n
         else:
@@ -343,7 +347,22 @@ def make_train(config):
         init_hstate = ScannedRNN.initialize_carry(
             config["NUM_ENVS"], config["LAYER_SIZE"]
         )
-        network_params = network.init(_rng, init_hstate, init_x)
+        if config["USE_POLICY"]:
+            restore_path = "/n/home13/jlunger/Craftax-Foraging/craftax/output/wurji8fy/policies/1/default"
+            checkpointer = PyTreeCheckpointer()
+            restored_train_state = checkpointer.restore(restore_path)
+
+            # Access the restored parameters directly
+            restored_params = restored_train_state['params']  # This is already {'params': {...}}
+            network_params = restored_params  # Do not wrap with 'params' key again
+
+            # Verify the structure
+            print("Structure of network_params:")
+            print(jax.tree_map(lambda x: x.shape if hasattr(x, 'shape') else x, network_params))
+        else:
+            # Initialize network parameters
+            network_params = network.init(_rng, init_hstate, init_x)
+
         if config["ANNEAL_LR"]:
             tx = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
@@ -785,7 +804,6 @@ def make_train(config):
                 _update_step, runner_state, None, config["UPDATES_PER_VIZ"]
             )
 
-            """ # TODO log convolutional weights
             # Log model weights
             def save_weights_callback(weights_flat, iter):
                 run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
@@ -798,17 +816,19 @@ def make_train(config):
                     np.savetxt(weight_file, np.transpose(weights_set), delimiter=',', fmt='%f')
                 print('Saving weights in file', weight_filename)
 
-            weights_flat = jax.tree.flatten(runner_state[0].params)
-            jax.debug.callback(save_weights_callback, weights_flat[0], runner_state[-1])
-            """
+            if config["ENV_NAME"] == "Craftax-Symbolic-v1": #TODO add convolutional weight logging
+                weights_flat = jax.tree.flatten(runner_state[0].params)
+                jax.debug.callback(save_weights_callback, weights_flat[0], runner_state[-1])
 
             # Can we save the environment state and resume training later?
             #runner_state_copy = runner_state
 
             # Then do iterations of logging
+            # """ #TODO logging randomly crashes?
             runner_state, empty = jax.lax.scan(
                 partial(_logging_step, logging_threads = config["LOGGING_THREADS_PER_VIZ"]), runner_state, None, config['LOGGING_STEPS_PER_VIZ']
             )
+            # """
 
             return runner_state, metric
 
@@ -855,13 +875,15 @@ def make_train(config):
 
         # Do validation logging iterations
         # TODO separate command line argument for validation logging step count?
+        """
         val_runner_state, empty = jax.lax.scan(
             partial(_logging_step, logging_threads = config["LOGGING_THREADS_PER_VIZ_VAL"]), val_runner_state, None, config['LOGGING_STEPS_PER_VIZ_VAL']
         )
+        """
         return {"runner_state": runner_state, "metric": metric}
 
     return train
-
+ 
 def run_ppo(config):
 
     reset_batch_logs()
@@ -872,7 +894,7 @@ def run_ppo(config):
 
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_REPEATS"])
-
+    
     train_jit = jax.jit(make_train(config), device=jax.devices()[config['GPU_ID']])
     train_vmap = jax.vmap(train_jit)
 
@@ -884,7 +906,7 @@ def run_ppo(config):
 
     def _save_network(rs_index, dir_name):
         train_states = out["runner_state"][rs_index]
-        train_state = jax.tree_map(lambda x: x[0], train_states)
+        train_state = jax.tree_map(lambda x: jax.device_get(x[0]), train_states)
         orbax_checkpointer = PyTreeCheckpointer()
         options = CheckpointManagerOptions(max_to_keep=1, create=True)
         path = os.path.abspath(os.path.join(config['OUTPUT_PATH'], wandb.run.id, dir_name))
@@ -892,10 +914,11 @@ def run_ppo(config):
         print(f"saved runner state to {path}")
         save_args = orbax_utils.save_args_from_target(train_state)
         checkpoint_manager.save(
-            config["TOTAL_TIMESTEPS"],
+            int(config["TOTAL_TIMESTEPS"]),
             train_state,
             save_kwargs={"save_args": save_args},
         )
+
 
     if config["SAVE_POLICY"]:
         _save_network(0, "policies")
