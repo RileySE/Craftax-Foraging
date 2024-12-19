@@ -3,6 +3,8 @@ import os
 import sys
 from math import ceil, sqrt
 from functools import partial
+from tabnanny import check
+
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
@@ -347,6 +349,14 @@ def make_train(config):
             params=network_params,
             tx=tx,
         )
+
+        # TODO debug model loading (Jax, why do you need to make everything complicated?)
+        #orbax_checkpointer = PyTreeCheckpointer()
+        #options = CheckpointManagerOptions(max_to_keep=1, create=True)
+        #path = os.path.join(args.output_path, 'policies')
+        #checkpoint_manager = CheckpointManager(path, orbax_checkpointer, options)
+        #orbax_checkpointer.restore(path, train_state)
+        #train_state = checkpoint_manager.restore(config['TOTAL_TIMESTEPS'], items=train_state)
 
         # INIT ENV
         rng, _rng = jax.random.split(rng)
@@ -857,7 +867,7 @@ def run_ppo(config):
         train_state = jax.tree_map(lambda x: x[0], train_states)
         orbax_checkpointer = PyTreeCheckpointer()
         options = CheckpointManagerOptions(max_to_keep=1, create=True)
-        path = os.path.join(wandb.run.dir, dir_name)
+        path = os.path.join(args.output_path, dir_name)
         checkpoint_manager = CheckpointManager(path, orbax_checkpointer, options)
         print(f"saved runner state to {path}")
         save_args = orbax_utils.save_args_from_target(train_state)
@@ -866,6 +876,7 @@ def run_ppo(config):
             train_state,
             save_kwargs={"save_args": save_args},
         )
+        #orbax_checkpointer.save(path, train_state)
 
     if config["SAVE_POLICY"]:
         _save_network(0, "policies")
