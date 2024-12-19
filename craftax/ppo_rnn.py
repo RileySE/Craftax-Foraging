@@ -41,8 +41,8 @@ from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_l
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run sparsity PPO.")
-    parser.add_argument("--use_policy", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--policy_path", type=str, default="/n/home13/jlunger/Craftax-Foraging/craftax/output/wurji8fy/policies", help="Name of the run")
+    parser.add_argument("--use_policy", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--policy_path", type=str, default="/n/holyscratch01/krajan_lab/jlunger/output/xmqrgxya/policies", help="Name of the run")
     parser.add_argument("--prune_step", type=int, default=20000, help="Step to prune")
     parser.add_argument('--featureless_world', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run_name", type=str, default="default_run", help="Name of the run")
@@ -71,10 +71,10 @@ def parse_args():
     parser.add_argument('--action_in_obs', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--seed", type=int, default=np.random.randint(2 ** 31), help="Random seed")
     parser.add_argument("--use_wandb", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--save_policy", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--save_policy", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--num_repeats", type=int, default=1, help="Number of repeats")
     parser.add_argument("--layer_size", type=int, default=512, help="Layer size")
-    parser.add_argument("--wandb_project", type=str, default="sparsity_project", help="WandB project name")
+    parser.add_argument("--wandb_project", type=str, default="defproject", help="WandB project name")
     parser.add_argument("--wandb_entity", type=str, default=None, help="WandB entity name")
     parser.add_argument("--use_optimistic_resets", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--optimistic_reset_ratio", type=int, default=16, help="Optimistic reset ratio")
@@ -351,16 +351,12 @@ def make_train(config):
             restore_path = "/n/home13/jlunger/Craftax-Foraging/craftax/output/wurji8fy/policies/1/default"
             checkpointer = PyTreeCheckpointer()
             restored_train_state = checkpointer.restore(restore_path)
+            restored_params = restored_train_state['params']
+            network_params = restored_params
+            if config["DEBUG"]:
+                print(f"loaded policy {config["POLICY_PATH"]}")
 
-            # Access the restored parameters directly
-            restored_params = restored_train_state['params']  # This is already {'params': {...}}
-            network_params = restored_params  # Do not wrap with 'params' key again
-
-            # Verify the structure
-            print("Structure of network_params:")
-            print(jax.tree_map(lambda x: x.shape if hasattr(x, 'shape') else x, network_params))
         else:
-            # Initialize network parameters
             network_params = network.init(_rng, init_hstate, init_x)
 
         if config["ANNEAL_LR"]:
@@ -888,6 +884,7 @@ def run_ppo(config):
 
     reset_batch_logs()
 
+    print(config["JIT"])
     if not config["JIT"]:
         jax.config.update("jax_disable_jit", True)
         print('JIT disabled')
