@@ -142,7 +142,7 @@ class StaticEnvParams:
     # Mobs
     # HACK: Doubled to 18 for patch depletion stuff
     # TODO make passive max scale with arena size to maintain constant density
-    max_passive_mobs: int = 144
+    max_passive_mobs: int = 72
     max_growing_plants: int = 30
     max_mob_projectiles: int = 3
     max_player_projectiles: int = 3

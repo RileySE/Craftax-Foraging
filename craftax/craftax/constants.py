@@ -363,7 +363,7 @@ DIRECTIONS = jnp.concatenate(
 DIRECTIONS_PASSIVE = jnp.concatenate(
     (
         jnp.array([[0, 0], [0, -1], [0, 1], [-1, 0], [1, 0]], dtype=jnp.int32),
-        jnp.zeros((60, 2), dtype=jnp.int32),
+        jnp.zeros((59, 2), dtype=jnp.int32),
     ),
     axis=0,
 )
