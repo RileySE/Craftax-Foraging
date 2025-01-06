@@ -50,6 +50,7 @@ def parse_args():
     parser.add_argument("--gpu_id", type=int, default=0, help="GPU ID")
     parser.add_argument("--predators", type=bool, default=True, help="Use predators")
     parser.add_argument("--sparsity", type=float, default=0.4, help="Sparsity value")
+    parser.add_argument("--max_cows", type=int, default=72, help="Maximum number of cows that can exist at a time")
     parser.add_argument("--num_envs", type=int, default=1024, help="Number of environments")
     parser.add_argument("--total_timesteps", type=float, default=3e9, help="Total timesteps")
     parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
@@ -227,6 +228,7 @@ def make_train(config):
     if config['FEATURELESS_WORLD']:
         static_params.featureless_world = True
 
+    static_params.max_passive_mobs = config['MAX_COWS']
 
     if config["ENV_NAME"] == "Craftax-Classic-Symbolic-v1":
         from craftax.craftax_classic.envs.craftax_symbolic_env import (
