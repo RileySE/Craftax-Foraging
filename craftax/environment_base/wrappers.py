@@ -366,6 +366,8 @@ class VideoPlotWrapper(LogWrapper):
         num_passives_nearby = (dists_to_passive <= nearby_distance).sum()
         num_ranged_nearby = (dists_to_ranged <= nearby_distance).sum()
 
+        num_monsters_killed = env_state.monsters_killed[env_state.player_level]
+
         info['dist_to_melee_l1'] = dist_to_melee
         info['dist_to_passive_l1'] = dist_to_passive
         info['dist_to_ranged_l1'] = dist_to_ranged
@@ -375,6 +377,10 @@ class VideoPlotWrapper(LogWrapper):
         info['num_melee_nearby'] = num_melee_nearby
         info['num_passives_nearby'] = num_passives_nearby
         info['num_ranged_nearby'] = num_ranged_nearby
+        info['num_monsters_killed'] = num_monsters_killed
+        info['has_sword'] = env_state.inventory.sword
+        info['has_pick'] = env_state.inventory.pickaxe
+        info['held_iron'] = env_state.inventory.iron
 
         return obs, state, reward, done, info
 
