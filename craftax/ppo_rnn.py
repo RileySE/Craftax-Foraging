@@ -92,6 +92,7 @@ def parse_args():
     parser.add_argument("--logging_threads_per_viz", type=int, default=1, help="Logging threads per viz")
     parser.add_argument("--logging_threads_per_viz_val", type=int, default=1, help="Logging threads per viz validation")
     parser.add_argument("--curriculum", type=bool, default=False, help="Use curriculum learning")
+    parser.add_argument("--map_size", type=int, default=96, help="The side length for the map")
     return parser.parse_args()
 
 class ScannedRNN(nn.Module):
@@ -227,6 +228,7 @@ def make_train(config):
         static_params.reward_func = 'vanilla'
     if config['FEATURELESS_WORLD']:
         static_params.featureless_world = True
+    static_params.map_size = (config['MAP_SIZE'],config['MAP_SIZE'])
 
     static_params.max_passive_mobs = config['MAX_COWS']
 
