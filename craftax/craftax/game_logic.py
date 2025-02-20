@@ -2211,6 +2211,11 @@ def spawn_mobs(state, rng, params, static_params):
         state.melee_mobs.mask[state.player_level].sum() < static_params.max_melee_mobs
     )
 
+    can_spawn_melee_mob = jnp.logical_and(
+        can_spawn_melee_mob,
+        static_params.predators,
+    )
+
     new_melee_mob_type = FLOOR_MOB_MAPPING[state.player_level, MobType.MELEE.value]
     new_melee_mob_type_boss = FLOOR_MOB_MAPPING[
         state.boss_progress, MobType.MELEE.value
@@ -2340,6 +2345,11 @@ def spawn_mobs(state, rng, params, static_params):
         can_spawn_ranged_mob,
         jax.random.uniform(_rng)
         < FLOOR_MOB_SPAWN_CHANCE[state.player_level, 2] * monster_spawn_coeff,
+    )
+
+    can_spawn_ranged_mob = jnp.logical_and(
+        can_spawn_ranged_mob,
+        static_params.predators,
     )
 
     # Hack for deep thing

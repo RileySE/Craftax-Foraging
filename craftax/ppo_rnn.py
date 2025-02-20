@@ -228,6 +228,8 @@ def make_train(config):
         static_params.reward_func = 'vanilla'
     if config['FEATURELESS_WORLD']:
         static_params.featureless_world = True
+    if config['PREDATORS']:
+        static_params.predators = True
     static_params.map_size = (config['MAP_SIZE'],config['MAP_SIZE'])
 
     static_params.max_passive_mobs = config['MAX_COWS']
