@@ -132,12 +132,12 @@ class EnvParams:
 # HACK: Removed the static "struct.dataclass" declaration. Hope that didn't break any optimizations!
 class StaticEnvParams:
     # HACK: Increased arena size to 96-square
-    # TODO expose arena size as a hyperparameter
     map_size: Tuple[int, int] = (96, 96)
     num_levels: int = 9
     reward_func: str = 'foraging'
     map_type: str = 'normal'
     featureless_world: bool = False
+    predators: bool = False
 
     # Mobs
     # HACK: Doubled to 18 for patch depletion stuff

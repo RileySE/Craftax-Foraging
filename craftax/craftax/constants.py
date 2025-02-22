@@ -139,7 +139,7 @@ FLOOR_MOB_SPAWN_CHANCE = jnp.array(
     [
         # (passive, melee, ranged, melee-night)
         # HACK: Increased passive spawn rate to compensate for larger arena size
-        jnp.array([0.4, 0.02, 0.05, 0.1]),  # Floor 0 (overworld)
+        jnp.array([0.8, 0.02, 0.05, 0.1]),  # Floor 0 (overworld)
         jnp.array([0.1, 0.06, 0.05, 0.0]),  # Floor 1 (gnomish mines)
         jnp.array([0.1, 0.06, 0.05, 0.0]),  # Floor 2 (dungeon)
         jnp.array([0.1, 0.06, 0.05, 0.0]),  # Floor 3 (sewers)
@@ -356,6 +356,14 @@ DIRECTIONS = jnp.concatenate(
     (
         jnp.array([[0, 0], [0, -1], [0, 1], [-1, 0], [1, 0]], dtype=jnp.int32),
         jnp.zeros((11, 2), dtype=jnp.int32),
+    ),
+    axis=0,
+)
+
+DIRECTIONS_PASSIVE = jnp.concatenate(
+    (
+        jnp.array([[0, 0], [0, -1], [0, 1], [-1, 0], [1, 0]], dtype=jnp.int32),
+        jnp.zeros((59, 2), dtype=jnp.int32),
     ),
     axis=0,
 )

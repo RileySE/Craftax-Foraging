@@ -1299,10 +1299,11 @@ def update_mobs(rng, state, params, static_params):
         passive_mobs = state.passive_mobs
 
         # Random move
+        # Why is the passive chance of not moving implemented in such a janky way? Most of DIRECTIONS is [0,0] (no-op)
         rng, _rng = jax.random.split(rng)
         random_move_direction = jax.random.choice(
             _rng,
-            DIRECTIONS[1:9],  # 50% chance of not moving
+            DIRECTIONS_PASSIVE,  # HACK: 87.5% chance of not moving
         )
         proposed_position = (
             passive_mobs.position[state.player_level, passive_mob_index]
@@ -2210,6 +2211,11 @@ def spawn_mobs(state, rng, params, static_params):
         state.melee_mobs.mask[state.player_level].sum() < static_params.max_melee_mobs
     )
 
+    can_spawn_melee_mob = jnp.logical_and(
+        can_spawn_melee_mob,
+        static_params.predators,
+    )
+
     new_melee_mob_type = FLOOR_MOB_MAPPING[state.player_level, MobType.MELEE.value]
     new_melee_mob_type_boss = FLOOR_MOB_MAPPING[
         state.boss_progress, MobType.MELEE.value
@@ -2339,6 +2345,11 @@ def spawn_mobs(state, rng, params, static_params):
         can_spawn_ranged_mob,
         jax.random.uniform(_rng)
         < FLOOR_MOB_SPAWN_CHANCE[state.player_level, 2] * monster_spawn_coeff,
+    )
+
+    can_spawn_ranged_mob = jnp.logical_and(
+        can_spawn_ranged_mob,
+        static_params.predators,
     )
 
     # Hack for deep thing
