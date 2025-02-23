@@ -42,7 +42,7 @@ from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_l
 def parse_args():
     parser = argparse.ArgumentParser(description="Run sparsity PPO.")
     parser.add_argument("--use_policy", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--policy_path", type=str, default="/n/holyscratch01/krajan_lab/jlunger/output/xmqrgxya/policies", help="Name of the run")
+    parser.add_argument("--policy_path", type=str, default="/n/home13/jlunger/Craftax-Foraging/craftax/output/zepj790r/policies", help="Name of the run")
     parser.add_argument("--prune_step", type=int, default=20000, help="Step to prune")
     parser.add_argument('--featureless_world', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run_name", type=str, default="default_run", help="Name of the run")
@@ -152,15 +152,15 @@ class ActorCriticRNN(nn.Module):
     @nn.compact
     def __call__(self, hidden, x):
 
-        embedding, dones = x
+        obs, dones = x
         if self.config["ENV_NAME"] == "Craftax-Pixels-v1":
-            embedding = CNN()(embedding, config=self.config)
+            embedding = CNN()(obs, config=self.config)
         else: 
             embedding = nn.Dense(
             self.config["LAYER_SIZE"],
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
-            )(embedding)
+            )(obs)
             embedding = nn.relu(embedding)
 
         rnn_in = (embedding, dones)
@@ -216,7 +216,7 @@ class ActorCriticRNN(nn.Module):
             aux
         )
 
-        return hidden, pi, jnp.squeeze(critic, axis=-1), aux, embedding
+        return hidden, pi, jnp.squeeze(critic, axis=-1), aux
 
 class Transition(NamedTuple):
     done: jnp.ndarray
@@ -224,7 +224,7 @@ class Transition(NamedTuple):
     value: jnp.ndarray
     reward: jnp.ndarray
     log_prob: jnp.ndarray
-    obs: jnp.ndarray
+    obsv: jnp.ndarray
     info: jnp.ndarray
     deltas_to_start: jnp.ndarray
 
@@ -268,24 +268,24 @@ def make_train(config):
         )
 
         env = CraftaxClassicSymbolicEnv()
-        is_symbolic = True
+
     elif config["ENV_NAME"] == "Craftax-Classic-Pixels-v1":
         from craftax.craftax_classic.envs.craftax_pixels_env import (
             CraftaxClassicPixelsEnv,
         )
 
         env = CraftaxClassicPixelsEnv()
-        is_symbolic = False
+
     elif config["ENV_NAME"] == "Craftax-Symbolic-v1":
         from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
 
         env = CraftaxSymbolicEnv(static_params)
-        is_symbolic = True
+
     elif config["ENV_NAME"] == "Craftax-Pixels-v1":
         from craftax.craftax.envs.craftax_pixels_env import CraftaxPixelsEnv
 
         env = CraftaxPixelsEnv(static_params)
-        is_symbolic = False
+
     else:
         raise ValueError(f"Unknown env: {config['ENV_NAME']}")
     env_params = env.default_params
@@ -417,7 +417,7 @@ def make_train(config):
 
                 # SELECT ACTION
                 ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-                hstate, pi, value, _, _ = network.apply(train_state.params, hstate, ac_in)
+                hstate, pi, value, _ = network.apply(train_state.params, hstate, ac_in)
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
                 value, action, log_prob = (
@@ -469,7 +469,7 @@ def make_train(config):
                 update_step,
             ) = runner_state
             ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-            _, _, last_val, _, _ = network.apply(train_state.params, hstate, ac_in)
+            _, _, last_val, _, = network.apply(train_state.params, hstate, ac_in)
             last_val = last_val.squeeze(0)
 
             def _calculate_gae(traj_batch, last_val, last_done):
@@ -507,8 +507,8 @@ def make_train(config):
 
                     def _loss_fn(params, init_hstate, traj_batch, gae, targets):
                         # RERUN NETWORK
-                        _, pi, value, aux, _ = network.apply(
-                            params, init_hstate[0], (traj_batch.obs, traj_batch.done)
+                        _, pi, value, aux = network.apply(
+                            params, init_hstate[0], (traj_batch.obsv, traj_batch.done)
                         )
                         log_prob = pi.log_prob(traj_batch.action)
 
@@ -677,7 +677,7 @@ def make_train(config):
 
             # SELECT ACTION
             ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-            hstate, pi, value, aux, obs = network.apply(train_state.params, hstate, ac_in)
+            hstate, pi, value, aux = network.apply(train_state.params, hstate, ac_in)
             action = pi.sample(seed=_rng)
             log_prob = pi.log_prob(action)
             value, action, log_prob = (
@@ -700,7 +700,6 @@ def make_train(config):
             info['hidden_state'] = hstate
             info['pred_delta'] = aux
             info['delta'] = deltas_to_start
-            info['obs'] = obs
 
             transition = Transition(
                 last_done, action, value, reward, log_prob, last_obs, info, deltas_to_start,
@@ -728,7 +727,6 @@ def make_train(config):
             # Finally, log data associated with the visualization runs
             update_step = runner_state[-1]
             hidden_states = traj_batch.info['hidden_state']
-            obs = traj_batch.info['obs']
             # Null this for memory savings
             traj_batch.info['hidden_state'] = None
 
@@ -771,17 +769,6 @@ def make_train(config):
                     with open(temp_filename, 'r') as temp_file, open(out_filename_scalars, 'a+') as out_file_scalars:
                         out_file_scalars.write(temp_file.read())
 
-                    if config["ENV_NAME"] == "Craftax-Pixels-v1":
-                        
-                        obs = obs.squeeze(axis=1)
-                        for i in range(logging_threads):
-                            out_filename_obs = os.path.join(run_out_path, f'obs_{increment}_{i}.csv')
-                            temp_filename = os.path.join(run_out_path, 'temp.csv')
-                            
-                            np.savetxt(temp_filename, obs[:, i, :], delimiter=',')
-                            with open(temp_filename, 'r') as temp_file, open(out_filename_obs, 'a+') as out_file_obs:
-                                out_file_obs.write(temp_file.read())
-
 
             # Add the specified field to the logging array
             # Also assembles the header for the log file itself
@@ -802,7 +789,7 @@ def make_train(config):
             for field_to_log in fields_to_log:
                 log_array = add_field_to_log_array(traj_batch.info, log_array, field_to_log)
 
-            jax.debug.callback(write_rnn_hstate, hidden_states, log_array, obs, update_step)
+            jax.debug.callback(write_rnn_hstate, hidden_states, log_array, update_step)
 
             return runner_state, None
 
@@ -832,12 +819,9 @@ def make_train(config):
             # Can we save the environment state and resume training later?
             #runner_state_copy = runner_state
 
-            # Then do iterations of logging
-            # """ #TODO logging randomly crashes?
             runner_state, empty = jax.lax.scan(
                 partial(_logging_step, logging_threads = config["LOGGING_THREADS_PER_VIZ"]), runner_state, None, config['LOGGING_STEPS_PER_VIZ']
             )
-            # """
 
             return runner_state, metric
 
