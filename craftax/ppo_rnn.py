@@ -41,7 +41,7 @@ from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_l
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run sparsity PPO.")
-    parser.add_argument("--use_policy", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--use_policy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--policy_path", type=str, default="/n/home13/jlunger/Craftax-Foraging/craftax/output/zepj790r/policies/300000000/default", help="Name of the run")
     parser.add_argument("--prune_step", type=int, default=20000, help="Step to prune")
     parser.add_argument('--featureless_world', action=argparse.BooleanOptionalAction, default=False)
