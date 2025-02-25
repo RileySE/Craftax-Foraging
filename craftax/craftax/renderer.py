@@ -6,7 +6,8 @@ from craftax.craftax.craftax_state import EnvState
 from craftax.craftax.util.game_logic_utils import is_boss_vulnerable
 
 
-def render_craftax_symbolic(state: EnvState):
+#TODO expose directional vision parameter (needs to poke through several layers)
+def render_craftax_symbolic(state: EnvState, directional_vision: bool = True):
     map = state.map[state.player_level]
 
     obs_dim_array = jnp.array([OBS_DIM[0], OBS_DIM[1]], dtype=jnp.int32)
@@ -104,6 +105,17 @@ def render_craftax_symbolic(state: EnvState):
         constant_values=0.0,
     )
     light_map_view = jax.lax.dynamic_slice(padded_light_map, tl_corner, OBS_DIM) > 0.05
+
+    # Select which hemisphere to use to restrict vision
+    # TODO validate me
+    vision_hemi_directional = VISION_HEMI_UP
+    vision_hemi_directional = jax.lax.select(state.player_direction == 1, vision_hemi_directional, VISION_HEMI_RIGHT)
+    vision_hemi_directional = jax.lax.select(state.player_direction == 2, vision_hemi_directional, VISION_HEMI_DOWN)
+    vision_hemi_directional = jax.lax.select(state.player_direction == 3, vision_hemi_directional, VISION_HEMI_LEFT)
+
+    vision_hemi = jax.lax.select(directional_vision, vision_hemi_directional, VISION_HEMI_FULL)
+
+    light_map_view = light_map_view * vision_hemi
 
     # Mask out tiles and mobs in darkness
     all_map = all_map * light_map_view[:, :, None]

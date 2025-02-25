@@ -93,6 +93,7 @@ def parse_args():
     parser.add_argument("--logging_threads_per_viz_val", type=int, default=1, help="Logging threads per viz validation")
     parser.add_argument("--curriculum", type=bool, default=False, help="Use curriculum learning")
     parser.add_argument("--map_size", type=int, default=96, help="The side length for the map")
+    parser.add_argument("--directional_vision", action=argparse.BooleanOptionalAction, default=False, help="Turn on directional vision cones")
     return parser.parse_args()
 
 class ScannedRNN(nn.Module):
@@ -231,6 +232,7 @@ def make_train(config):
     if config['PREDATORS']:
         static_params.predators = True
     static_params.map_size = (config['MAP_SIZE'],config['MAP_SIZE'])
+    static_params.directional_vision = config['DIRECTIONAL_VISION']
 
     static_params.max_passive_mobs = config['MAX_COWS']
 
