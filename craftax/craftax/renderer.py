@@ -6,7 +6,6 @@ from craftax.craftax.craftax_state import EnvState
 from craftax.craftax.util.game_logic_utils import is_boss_vulnerable
 
 
-#TODO expose directional vision parameter (needs to poke through several layers)
 def render_craftax_symbolic(state: EnvState, directional_vision: bool = True):
     map = state.map[state.player_level]
 
