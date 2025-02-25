@@ -107,11 +107,10 @@ def render_craftax_symbolic(state: EnvState, directional_vision: bool = True):
     light_map_view = jax.lax.dynamic_slice(padded_light_map, tl_corner, OBS_DIM) > 0.05
 
     # Select which hemisphere to use to restrict vision
-    # TODO validate me
-    vision_hemi_directional = VISION_HEMI_UP
-    vision_hemi_directional = jax.lax.select(state.player_direction == 1, vision_hemi_directional, VISION_HEMI_RIGHT)
-    vision_hemi_directional = jax.lax.select(state.player_direction == 2, vision_hemi_directional, VISION_HEMI_DOWN)
-    vision_hemi_directional = jax.lax.select(state.player_direction == 3, vision_hemi_directional, VISION_HEMI_LEFT)
+    vision_hemi_directional = VISION_HEMI_LEFT
+    vision_hemi_directional = jax.lax.select(state.player_direction == 2,VISION_HEMI_RIGHT, vision_hemi_directional)
+    vision_hemi_directional = jax.lax.select(state.player_direction == 3, VISION_HEMI_UP, vision_hemi_directional)
+    vision_hemi_directional = jax.lax.select(state.player_direction == 4, VISION_HEMI_DOWN, vision_hemi_directional)
 
     vision_hemi = jax.lax.select(directional_vision, vision_hemi_directional, VISION_HEMI_FULL)
 
