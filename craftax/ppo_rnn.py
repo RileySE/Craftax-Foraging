@@ -71,7 +71,7 @@ def parse_args():
     parser.add_argument("--jit", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--action_in_obs', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--seed", type=int, default=np.random.randint(2 ** 31), help="Random seed")
-    parser.add_argument("--use_wandb", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--use_wandb", action=argparse.BooleanOptionalAction, defagult=True)
     parser.add_argument("--save_policy", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--num_repeats", type=int, default=1, help="Number of repeats")
     parser.add_argument("--layer_size", type=int, default=512, help="Layer size")
@@ -234,7 +234,7 @@ def make_train(config):
     )
 
 
-    print(f"NUM_UPDATES: {config["NUM_UPDATES"]}")
+    #print(f"NUM_UPDATES: {config["NUM_UPDATES"]}")
 
     config["NUM_LOG_STEPS"] = config["NUM_UPDATES"] * config["UPDATES_PER_VIZ"]
 
