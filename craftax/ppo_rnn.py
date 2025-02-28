@@ -356,6 +356,47 @@ def make_train(config):
             tx=tx,
         )
 
+        # Exploration state
+        ex_state = {
+            "rnd_model": None,
+        }
+
+        if config["USE_RND"]:
+            obs_shape = env.observation_space(env_params).shape
+            assert len(obs_shape) == 1, "Only configured for 1D observations"
+            obs_shape = obs_shape[0]
+
+            # Random network
+            rnd_random_network = RNDNetwork(
+                num_layers=3,
+                output_dim=config["RND_OUTPUT_SIZE"],
+                layer_size=config["RND_LAYER_SIZE"],
+            )
+            rng, _rng = jax.random.split(rng)
+            rnd_random_network_params = rnd_random_network.init(
+                _rng, jnp.zeros((1, obs_shape))
+            )
+
+            # Distillation Network
+            rnd_distillation_network = RNDNetwork(
+                num_layers=3,
+                output_dim=config["RND_OUTPUT_SIZE"],
+                layer_size=config["RND_LAYER_SIZE"],
+            )
+            rng, _rng = jax.random.split(rng)
+            rnd_distillation_network_params = rnd_distillation_network.init(
+                _rng, jnp.zeros((1, obs_shape))
+            )
+            tx = optax.chain(
+                optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
+                optax.adam(config["RND_LR"], eps=1e-5),
+            )
+            ex_state["rnd_distillation_network"] = TrainState.create(
+                apply_fn=rnd_distillation_network.apply,
+                params=rnd_distillation_network_params,
+                tx=tx,
+            )
+
         # INIT ENV
         rng, _rng = jax.random.split(rng)
         obsv, log_state = env.reset(_rng, env_params)
@@ -401,6 +442,23 @@ def make_train(config):
                 # dists_to_start = jnp.linalg.norm(env_state.player_position - starting_pos, ord=1, axis=-1)
                 deltas_to_start = env_state.env_state.player_position - starting_pos
 
+                reward_i = jnp.zeros(config["NUM_ENVS"])
+
+                if config["USE_RND"]:
+                    random_pred = rnd_random_network.apply(
+                        rnd_random_network_params, obsv
+                    )
+
+                    distill_pred = ex_state["rnd_distillation_network"].apply_fn(
+                        ex_state["rnd_distillation_network"].params, obsv
+                    )
+                    error = (random_pred - distill_pred) * (1 - done[:, None])
+                    mse = jnp.square(error).mean(axis=-1)
+
+                    reward_i = mse * config["RND_REWARD_COEFF"]
+
+                reward = reward + reward_i
+
                 transition = Transition(
                     last_done, action, value, reward, log_prob, last_obs, info, deltas_to_start
                 )
@@ -433,17 +491,25 @@ def make_train(config):
                 update_step,
             ) = runner_state
             ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-            _, _, last_val, _ = network.apply(train_state.params, hstate, ac_in)
-            last_val = last_val.squeeze(0)
+            _, last_val_e, last_val_i, _ = network.apply(train_state.params, hstate, ac_in)
+            last_val_e = last_val_e.squeeze(0)
+            last_val_i = last_val_i.squeeze(0)
 
-            def _calculate_gae(traj_batch, last_val, last_done):
+            def _calculate_gae(traj_batch, last_val, last_done, is_extrinsic):
                 def _get_advantages(carry, transition):
-                    gae, next_value, next_done = carry
+                    gae, next_value, next_done, is_extrinsic = carry
                     done, value, reward = (
                         transition.done,
-                        transition.value,
+                        jax.lax.select(
+                            is_extrinsic, transition.value_e, transition.value_i
+                        ),
                         transition.reward,
                     )
+
+                    done = jnp.logical_and(
+                        done, jnp.logical_or(config["RND_IS_EPISODIC"], is_extrinsic)
+                    )
+
                     delta = (
                         reward + config["GAMMA"] * next_value * (1 - next_done) - value
                     )
@@ -451,18 +517,21 @@ def make_train(config):
                         delta
                         + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - next_done) * gae
                     )
-                    return (gae, value, done), gae
+                    return (gae, value, done, is_extrinsic), gae
 
                 _, advantages = jax.lax.scan(
                     _get_advantages,
-                    (jnp.zeros_like(last_val), last_val, last_done),
+                    (jnp.zeros_like(last_val), last_val, last_done, is_extrinsic),
                     traj_batch,
                     reverse=True,
                     unroll=16,
                 )
-                return advantages, advantages + traj_batch.value
+                return advantages, advantages + jax.lax.select(
+                    is_extrinsic, traj_batch.value_e, traj_batch.value_i
+                )
 
-            advantages, targets = _calculate_gae(traj_batch, last_val, last_done)
+            advantages_e, targets_e = _calculate_gae(traj_batch, last_val_e, True)
+            advantages_i, targets_i = _calculate_gae(traj_batch, last_val_e, False)
 
             # UPDATE NETWORK
             def _update_epoch(update_state, unused):
