@@ -101,6 +101,9 @@ def batch_log(update_step, log, config):
                 sps = steps_between_updates / dt
                 agg_logs["sps"] = sps
 
+        for k,v in agg_logs.items():
+            print("k: ", k, "v: ", v, "type: ", type(v))
+
         wandb.log(agg_logs)
 
 
