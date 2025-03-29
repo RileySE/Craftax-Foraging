@@ -206,7 +206,7 @@ class Logger(object):
 
     def log_metrics(self, metrics, step, ty):
         for key, value in metrics.items():
-            self.log(f"{ty}/{key}", value.item(), step)
+            self.log(f"{ty}/{key}", value, step)
 
     def dump(self, step, ty=None):
         if ty is None or ty == "eval":

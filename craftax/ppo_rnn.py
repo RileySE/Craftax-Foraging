@@ -602,6 +602,9 @@ def make_train(config):
 
             rng = update_state[-1]
 
+            for key, value in metrics.items():
+                print(key, value, type(value))
+
             logger.log_metrics(metric, update_step, ty="train")
             logger.dump_to_console(update_step, ty="train")
 
