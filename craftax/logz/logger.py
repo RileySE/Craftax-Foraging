@@ -172,15 +172,20 @@ class MetersGroup(object):
 class Logger(object):
     def __init__(self, log_dir, use_wandb):
         self._log_dir = log_dir
+        # check if log_dir is path, if it is not, then convert it to path
+        if not isinstance(log_dir, Path):
+            log_dir_path = Path(log_dir)
+        else:
+            log_dir_path = log_dir
         self._train_mg = MetersGroup(
-            log_dir / "train.csv", formatting=COMMON_TRAIN_FORMAT, use_wandb=use_wandb
+            log_dir_path / "train.csv", formatting=COMMON_TRAIN_FORMAT, use_wandb=use_wandb
         )
         self._eval_mg = MetersGroup(
-            log_dir / "eval.csv", formatting=COMMON_EVAL_FORMAT, use_wandb=use_wandb
+            log_dir_path / "eval.csv", formatting=COMMON_EVAL_FORMAT, use_wandb=use_wandb
         )
 
         self._iteration_mg = MetersGroup(
-            log_dir / "eval.csv", formatting=COMMON_EVAL_FORMAT, use_wandb=use_wandb
+            log_dir_path / "eval.csv", formatting=COMMON_EVAL_FORMAT, use_wandb=use_wandb
         )
 
         self._sw = None
