@@ -6,6 +6,7 @@ import wandb
 from termcolor import colored
 import chex
 from absl import logging
+from pathlib import Path
 
 COMMON_TRAIN_FORMAT = [
     ("steps", "S", "int"),
