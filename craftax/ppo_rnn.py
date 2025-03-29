@@ -37,7 +37,8 @@ from craftax.environment_base.wrappers import (
     ReduceActionSpaceWrapper, AppendActionToObsWrapper, AppendActionToObsWrapper,
     CurriculumWrapper
 )
-from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs, Logger
+from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
+from craftax.logz import Logger
 
 
 def parse_args():
