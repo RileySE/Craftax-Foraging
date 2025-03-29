@@ -11,33 +11,29 @@ from pathlib import Path
 COMMON_TRAIN_FORMAT = [
     ("steps", "S", "int"),
     ("fps", "FPS", "float"),
-    ("avg_episode_length", "AVG_LEN", "int"),
-    ("avg_episode_returns", "AVG_R", "float"),
+    ("episode_length", "AVG_LEN", "int"),
+    ("episode_return", "AVG_R", "float"),
     ("episodes_done", "AVG_E", "int"),
     ("total_episodes", "TOTAL_EPISODES", "int"),
     ("total_returns", "TOTAL_RETURNS", "float"),
     ("task", "TASK", "int"),
     ("exploration_epsilon", "EPS", "float"),
-    ("min_return", "MIN_R", "float"),
-    ("max_return", "MAX_R", "float"),
     ("total_time", "T", "time"),
+    ("score", "SCORE", "float"),
 ]
 
 
 COMMON_EVAL_FORMAT = [
     ("steps", "S", "int"),
     ("fps", "FPS", "float"),
-    ("avg_episode_length", "AVG_LEN", "int"),
-    ("avg_episode_returns", "AVG_R", "float"),
+    ("episode_length", "AVG_LEN", "int"),
+    ("episode_return", "AVG_R", "float"),
     ("episodes_done", "AVG_E", "int"),
     ("total_episodes", "TOTAL_EPISODES", "int"),
     ("total_returns", "TOTAL_RETURNS", "float"),
     ("task", "TASK", "int"),
-    ("start_pos_idx", "START_POS_IDX", "int"),
-    ("steps_to_good_policy", "STEPS_TO_GOOD_POLICY", "int"),
-    ("min_return", "MIN_R", "float"),
-    ("max_return", "MAX_R", "float"),
     ("total_time", "T", "time"),
+    ("score", "SCORE", "float"),
 ]
 
 

@@ -601,13 +601,15 @@ def make_train(config):
             to_log = metric
 
             rng = update_state[-1]
+
+            logger.log_metrics(metrics, global_step, ty="train")
+            logger.dump_to_console(update_step, ty="train")
+
             if config["DEBUG"] and config["USE_WANDB"]:
 
                 def callback(metric, update_step):
                     to_log = create_log_dict(metric, config)
                     batch_log(update_step, to_log, config)
-
-                    logger.dump_to_console(update_step, ty="train")
 
                 jax.debug.callback(callback, to_log, update_step)
 
