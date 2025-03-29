@@ -602,7 +602,7 @@ def make_train(config):
 
             rng = update_state[-1]
 
-            logger.log_metrics(metrics, global_step, ty="train")
+            logger.log_metrics(metric, global_step, ty="train")
             logger.dump_to_console(update_step, ty="train")
 
             if config["DEBUG"] and config["USE_WANDB"]:
