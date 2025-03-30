@@ -604,15 +604,15 @@ def make_train(config):
 
             if config["DEBUG"] and config["USE_WANDB"]:
 
-                for key, value in metric.items():
-                    jax.debug.print("{}, {}, {}", key, value, type(value))
-
-                logger.log_metrics(metric, update_step, ty="train")
-                logger.dump_to_console(update_step, ty="train")
-
                 def callback(metric, update_step):
                     to_log = create_log_dict(metric, config)
                     batch_log(update_step, to_log, config)
+
+                    for key, value in metric.items():
+                        jax.debug.print("{}, {}, {}", key, value, type(value))
+
+                    logger.log_metrics(metric, update_step, ty="train")
+                    logger.dump_to_console(update_step, ty="train")
 
                 jax.debug.callback(callback, to_log, update_step)
 
