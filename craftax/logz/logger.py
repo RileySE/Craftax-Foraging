@@ -7,6 +7,7 @@ from termcolor import colored
 import chex
 from absl import logging
 from pathlib import Path
+import numpy as np
 
 COMMON_TRAIN_FORMAT = [
     ("steps", "S", "int"),
