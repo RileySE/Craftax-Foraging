@@ -131,6 +131,7 @@ class MetersGroup(object):
             value = data.get(key, 0)
             pieces.append(self._format(disp_key, value, ty))
         logging.info(" | ".join(pieces))
+        print("| ".join(pieces))
 
     def _dump_to_wandb(self, data):
         wandb.log(data)
