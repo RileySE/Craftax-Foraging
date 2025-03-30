@@ -124,6 +124,7 @@ class MetersGroup(object):
             raise f"invalid format type: {ty}"
 
     def _dump_to_console(self, data, prefix):
+        print("dumping to console")
         prefix = colored(prefix, "yellow" if prefix == "train" else "green")
         pieces = [f"| {prefix: <14}"]
         for key, disp_key, ty in self._formatting:
@@ -231,6 +232,7 @@ class Logger(object):
         return LogAndDumpCtx(self, step, ty)
 
     def clear(self, ty):
+        print("clearing meters")
         if ty is None or ty == "eval":
             self._eval_mg.clear()
         if ty is None or ty == "train":
