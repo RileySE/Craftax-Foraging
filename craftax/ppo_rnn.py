@@ -602,13 +602,13 @@ def make_train(config):
 
             rng = update_state[-1]
 
-            for key, value in metric.items():
-                print(key, value, type(value))
-
-            logger.log_metrics(metric, update_step, ty="train")
-            logger.dump_to_console(update_step, ty="train")
-
             if config["DEBUG"] and config["USE_WANDB"]:
+
+                for key, value in metric.items():
+                    print(key, value, type(value))
+
+                logger.log_metrics(metric, update_step, ty="train")
+                logger.dump_to_console(update_step, ty="train")
 
                 def callback(metric, update_step):
                     to_log = create_log_dict(metric, config)
