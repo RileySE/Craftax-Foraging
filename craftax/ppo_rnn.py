@@ -605,7 +605,7 @@ def make_train(config):
             if config["DEBUG"] and config["USE_WANDB"]:
 
                 for key, value in metric.items():
-                    print(key, value.item(), type(value.item()))
+                    print(key, np.asarray(value), type(np.asarray(value)))
 
                 logger.log_metrics(metric, update_step, ty="train")
                 logger.dump_to_console(update_step, ty="train")
