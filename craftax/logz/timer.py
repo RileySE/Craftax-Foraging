@@ -1,3 +1,5 @@
+import time
+
 class Timer:
     """
     Source: https://github.com/rll-research/url_benchmark/utils.py
