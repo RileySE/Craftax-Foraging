@@ -370,11 +370,15 @@ def make_train(config):
             config["NUM_ENVS"], config["LAYER_SIZE"]
         )
 
+
+
         # TRAIN LOOP
         def _update_step(runner_state, unused):
+            total_episodes = 0
+            total_returns = 0.0
+
             # COLLECT TRAJECTORIES
             def _env_step(runner_state, unused):
-                total_episodes, total_returns = 0, 0.0
 
                 (
                     train_state,
@@ -404,10 +408,6 @@ def make_train(config):
                      _rng, env_state, action, env_params
                 )
 
-                # sum the boolean done array to get the number of episodes done
-                total_episodes += jnp.sum(done)
-                total_returns += jnp.sum(reward)
-
                 # Compute distance to origin for aux loss
                 starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
                 # dists_to_start = jnp.linalg.norm(env_state.player_position - starting_pos, ord=1, axis=-1)
@@ -433,6 +433,9 @@ def make_train(config):
             runner_state, traj_batch = jax.lax.scan(
                 _env_step, runner_state, None, config["NUM_ENV_STEPS"]
             )
+
+            total_episodes += jnp.sum(traj_batch.done)
+            total_returns += jnp.sum(traj_batch.reward)
 
             # CALCULATE ADVANTAGE
             (
