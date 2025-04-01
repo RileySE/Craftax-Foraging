@@ -405,8 +405,8 @@ def make_train(config):
                 )
 
                 # sum the boolean done array to get the number of episodes done
-                total_episodes += jnp.sum(done).item()
-                total_returns += jnp.sum(reward).item()
+                total_episodes += jnp.sum(done)
+                total_returns += jnp.sum(reward)
 
                 # Compute distance to origin for aux loss
                 starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
