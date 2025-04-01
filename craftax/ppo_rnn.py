@@ -38,7 +38,7 @@ from craftax.environment_base.wrappers import (
     CurriculumWrapper
 )
 from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
-from craftax.logz import Logger
+from craftax.logz import Logger, Timer
 
 
 def parse_args():
@@ -281,6 +281,9 @@ def make_train(config):
     # create Logger
     logger = Logger(config['OUTPUT_PATH'], use_wandb=config["USE_WANDB"])
 
+    # create Timer
+    timer = Timer()
+
     if not os.path.isdir(config['OUTPUT_PATH']):
         os.makedirs(config['OUTPUT_PATH'])
 
@@ -382,6 +385,8 @@ def make_train(config):
                     update_step,
                 ) = runner_state
                 rng, _rng = jax.random.split(rng)
+
+                print("last_done: ", last_done, "type: ", last_done.dtype)
 
                 # SELECT ACTION
                 ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
