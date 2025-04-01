@@ -284,6 +284,8 @@ def make_train(config):
     # create Timer
     timer = Timer()
 
+    total_episodes, total_returns = 0, 0.0
+
     if not os.path.isdir(config['OUTPUT_PATH']):
         os.makedirs(config['OUTPUT_PATH'])
 
@@ -386,8 +388,6 @@ def make_train(config):
                 ) = runner_state
                 rng, _rng = jax.random.split(rng)
 
-                print("last_done: ", last_done, "type: ", last_done.dtype)
-
                 # SELECT ACTION
                 ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
                 hstate, pi, value, aux = network.apply(train_state.params, hstate, ac_in)
@@ -404,6 +404,10 @@ def make_train(config):
                 obsv, env_state, reward, done, info, = env.step(
                      _rng, env_state, action, env_params
                 )
+
+                # sum the boolean done array to get the number of episodes done
+                total_episodes += jnp.sum(done).item()
+                total_returns += jnp.sum(reward).item()
 
                 # Compute distance to origin for aux loss
                 starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
@@ -602,7 +606,8 @@ def make_train(config):
                 / traj_batch.info["returned_episode"].sum(),
                 traj_batch.info,
             )
-
+            metric["total_episodes"] = total_episodes
+            metric["total_returns"] = total_returns
             to_log = metric
 
             rng = update_state[-1]

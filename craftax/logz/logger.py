@@ -14,7 +14,6 @@ COMMON_TRAIN_FORMAT = [
     ("fps", "FPS", "float"),
     ("episode_length", "AVG_LEN", "int"),
     ("episode_return", "AVG_R", "float"),
-    ("episodes_done", "AVG_E", "int"),
     ("total_episodes", "TOTAL_EPISODES", "int"),
     ("total_returns", "TOTAL_RETURNS", "float"),
     ("task", "TASK", "int"),
