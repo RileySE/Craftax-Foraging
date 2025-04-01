@@ -284,8 +284,6 @@ def make_train(config):
     # create Timer
     timer = Timer()
 
-    total_episodes, total_returns = 0, 0.0
-
     if not os.path.isdir(config['OUTPUT_PATH']):
         os.makedirs(config['OUTPUT_PATH'])
 
@@ -376,6 +374,7 @@ def make_train(config):
         def _update_step(runner_state, unused):
             # COLLECT TRAJECTORIES
             def _env_step(runner_state, unused):
+                total_episodes, total_returns = 0, 0.0
 
                 (
                     train_state,
