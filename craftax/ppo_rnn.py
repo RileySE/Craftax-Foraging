@@ -284,8 +284,6 @@ def make_train(config):
     # create Timer
     timer = Timer()
 
-    last_step = 0
-
     if not os.path.isdir(config['OUTPUT_PATH']):
         os.makedirs(config['OUTPUT_PATH'])
 
@@ -374,8 +372,6 @@ def make_train(config):
 
         # TRAIN LOOP
         def _update_step(runner_state, unused):
-            total_episodes = 0
-            total_returns = 0.0
 
             # COLLECT TRAJECTORIES
             def _env_step(runner_state, unused):
@@ -433,10 +429,6 @@ def make_train(config):
             runner_state, traj_batch = jax.lax.scan(
                 _env_step, runner_state, None, config["NUM_ENV_STEPS"]
             )
-
-            total_episodes += jnp.sum(traj_batch.done)
-            total_returns += jnp.sum(traj_batch.reward)
-            episode_return = jnp.sum(traj_batch.reward) / jnp.sum(traj_batch.done)
 
             # CALCULATE ADVANTAGE
             (
@@ -610,14 +602,7 @@ def make_train(config):
                 traj_batch.info,
             )
 
-            elapsed_time, total_time = timer.reset()
-            fps = config["NUM_UPDATES"] / elapsed_time
-
-            metric["total_episodes"] = total_episodes
-            metric["total_returns"] = total_returns
-            metric["episode_return"] = episode_return
             metric["steps"] = update_step
-            metric["fps"] = fps
             to_log = metric
 
             rng = update_state[-1]
