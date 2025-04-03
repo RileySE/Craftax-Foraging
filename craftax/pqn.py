@@ -92,6 +92,7 @@ def parse_args():
     parser.add_argument("--EPS_START", type=float, default=0.1, help="Initial epsilon")
     parser.add_argument("--EPS_FINISH", type=float, default=0.005, help="Final epsilon")
     parser.add_argument("--EPS_DECAY", type=float, default=0.2, help="Epsilon decay")
+    parser.add_argument("--TOTAL_TIMESTEPS_DECAY", type=int, default=1e9, help="Total timesteps for decay")
     parser.add_argument("--NUM_STEPS", type=int, default=8, help="steps per environment in each update")
     parser.add_argument("--LR_LINEAR_DECAY", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--REW_SCALE", type=float, default=1.0, help="Reward scale")
