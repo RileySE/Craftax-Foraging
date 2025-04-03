@@ -39,6 +39,7 @@ from craftax.environment_base.wrappers import (
 )
 from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
 from craftax.logz import Logger, Timer
+from craftax.models import BatchRenorm
 
 
 def parse_args():
