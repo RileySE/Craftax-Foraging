@@ -206,15 +206,21 @@ class QNetwork(nn.Module):
         return x
 
 
-class Transition(NamedTuple):
-    done: jnp.ndarray
-    action: jnp.ndarray
-    value: jnp.ndarray
-    reward: jnp.ndarray
-    log_prob: jnp.ndarray
-    obs: jnp.ndarray
-    info: jnp.ndarray
-    deltas_to_start: jnp.ndarray
+@chex.dataclass(frozen=True)
+class Transition:
+    obs: chex.Array
+    action: chex.Array
+    reward: chex.Array
+    done: chex.Array
+    next_obs: chex.Array
+    q_val: chex.Array
+
+
+class CustomTrainState(TrainState):
+    batch_stats: Any
+    timesteps: int = 0
+    n_updates: int = 0
+    grad_steps: int = 0
 
 def make_train(config):
     config["NUM_UPDATES"] = (
