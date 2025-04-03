@@ -10,6 +10,7 @@ import jaxpruner
 import numpy as np
 import optax
 import time
+import chex
 
 from flax.training import orbax_utils
 from matplotlib import pyplot as plt, animation
