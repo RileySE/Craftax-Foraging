@@ -108,6 +108,7 @@ def parse_args():
     parser.add_argument("--TEST_NUM_STEPS", type=int, default=10000, help="Number of steps to test")
     parser.add_argument("--EPS_TEST", type=float, default=0.00, help="For greedy policy")
     parser.add_argument("--NUM_EPOCHS", type=int, default=1, help="Number of epochs")
+    parser.add_argument("--WANDB_MODE", type=str, default="online", help="WandB mode")
     return parser.parse_args()
 
 class CNN(nn.Module):
