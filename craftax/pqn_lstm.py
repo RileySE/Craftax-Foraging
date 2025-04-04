@@ -112,6 +112,156 @@ def parse_args():
     parser.add_argument("--NORM_TYPE", type=str, default="layer_norm", help="layer_norm or batch_norm")
     return parser.parse_args()
 
+# class ScannedRNN(nn.Module):
+#
+#     @partial(
+#         nn.scan,
+#         variable_broadcast="params",
+#         in_axes=0,
+#         out_axes=0,
+#         split_rngs={"params": False},
+#     )
+#     @nn.compact
+#     def __call__(self, carry, x):
+#         """Applies the module."""
+#         rnn_state = carry
+#         ins, resets = x
+#         hidden_size = rnn_state[0].shape[-1]
+#
+#         init_rnn_state = self.initialize_carry(hidden_size, *resets.shape)
+#         rnn_state = jax.tree_util.tree_map(
+#             lambda init, old: jnp.where(resets[:, np.newaxis], init, old),
+#             init_rnn_state,
+#             rnn_state,
+#         )
+#
+#         new_rnn_state, y = nn.OptimizedLSTMCell(hidden_size)(rnn_state, ins)
+#         return new_rnn_state, y
+#
+#     @staticmethod
+#     def initialize_carry(hidden_size, *batch_size):
+#         # Use a dummy key since the default state init fn is just zeros.
+#         return nn.OptimizedLSTMCell(hidden_size, parent=None).initialize_carry(
+#             jax.random.PRNGKey(0), (*batch_size, hidden_size)
+#         )
+#
+# class CNN(nn.Module):
+#
+#     norm_type: str = "layer_norm"
+#
+#     @nn.compact
+#     def __call__(self, x: jnp.ndarray, train: bool):
+#         if self.norm_type == "layer_norm":
+#             normalize = lambda x: nn.LayerNorm()(x)
+#         elif self.norm_type == "batch_norm":
+#             normalize = lambda x: nn.BatchNorm(use_running_average=not train)(x)
+#         else:
+#             normalize = lambda x: x
+#         x = nn.Conv(
+#             32,
+#             kernel_size=(8, 8),
+#             strides=(4, 4),
+#             padding="VALID",
+#             kernel_init=nn.initializers.he_normal(),
+#         )(x)
+#         x = normalize(x)
+#         x = nn.relu(x)
+#         x = nn.Conv(
+#             64,
+#             kernel_size=(4, 4),
+#             strides=(2, 2),
+#             padding="VALID",
+#             kernel_init=nn.initializers.he_normal(),
+#         )(x)
+#         x = normalize(x)
+#         x = nn.relu(x)
+#         x = nn.Conv(
+#             64,
+#             kernel_size=(3, 3),
+#             strides=(1, 1),
+#             padding="VALID",
+#             kernel_init=nn.initializers.he_normal(),
+#         )(x)
+#         x = normalize(x)
+#         x = nn.relu(x)
+#         x = x.reshape((x.shape[0], -1))
+#         x = nn.Dense(512, kernel_init=nn.initializers.he_normal())(x)
+#         x = normalize(x)
+#         x = nn.relu(x)
+#         return x
+#
+#
+# class RNNQNetwork(nn.Module):
+#     action_dim: int
+#     norm_type: str = "layer_norm"
+#     norm_input: bool = False
+#     num_layers: int = 4
+#     num_rnn_layers: int = 1
+#     hidden_size: int = 512
+#     is_symbolic: bool = False
+#     add_last_action: bool = False
+#
+#     @nn.compact
+#     def __call__(self, hidden, x, done, last_action, train: bool = False):
+#         if self.is_symbolic:
+#             """
+#             Symbolic observation uses the same PQN_craftax architecture.
+#             """
+#             if self.norm_type == "layer_norm":
+#                 normalize = lambda x: nn.LayerNorm()(x)
+#             elif self.norm_type == "batch_norm":
+#                 normalize = lambda x: BatchRenorm(use_running_average=not train)(x)
+#             else:
+#                 normalize = lambda x: x
+#
+#             if self.norm_input:
+#                 x = BatchRenorm(use_running_average=not train)(x)
+#             else:
+#                 # dummy normalize input in any case for global compatibility
+#                 x_dummy = BatchRenorm(use_running_average=not train)(x)
+#
+#             for l in range(self.num_layers):
+#                 x = nn.Dense(self.hidden_size)(x)
+#                 x = normalize(x)
+#                 x = nn.relu(x)
+#
+#         else:
+#
+#             """
+#             Pixel observation uses the PQN_atari architecture.
+#             """
+#
+#             x = jnp.transpose(x, (0, 2, 3, 1))
+#             if self.norm_input:
+#                 x = nn.BatchNorm(use_running_average=not train)(x)
+#             else:
+#                 # dummy normalize input for global compatibility
+#                 x_dummy = nn.BatchNorm(use_running_average=not train)(x)
+#                 x = x / 255.0
+#             x = CNN(norm_type=self.norm_type)(x, train)
+#             for l in range(self.num_layers):
+#                 x = nn.Dense(self.hidden_size)(x)
+#                 x = normalize(x)
+#                 x = nn.relu(x)
+#
+#         # add last action to the input of the rnn
+#         if self.add_last_action:
+#             last_action = jax.nn.one_hot(last_action, self.action_dim)
+#             x = jnp.concatenate([x, last_action], axis=-1)
+#
+#         new_hidden = []
+#         for i in range(self.num_rnn_layers):
+#             rnn_in = (x, done)
+#             hidden_aux, x = ScannedRNN()(hidden[i], rnn_in)
+#             new_hidden.append(hidden_aux)
+#
+#         q_vals = nn.Dense(self.action_dim)(x)
+#
+#         return new_hidden, q_vals
+#
+#     def initialize_carry(self, *batch_size):
+#         return ScannedRNN.initialize_carry(self.hidden_size, *batch_size)
+
 class ScannedRNN(nn.Module):
 
     @partial(
@@ -145,104 +295,36 @@ class ScannedRNN(nn.Module):
             jax.random.PRNGKey(0), (*batch_size, hidden_size)
         )
 
-class CNN(nn.Module):
-
-    norm_type: str = "layer_norm"
-
-    @nn.compact
-    def __call__(self, x: jnp.ndarray, train: bool):
-        if self.norm_type == "layer_norm":
-            normalize = lambda x: nn.LayerNorm()(x)
-        elif self.norm_type == "batch_norm":
-            normalize = lambda x: nn.BatchNorm(use_running_average=not train)(x)
-        else:
-            normalize = lambda x: x
-        x = nn.Conv(
-            32,
-            kernel_size=(8, 8),
-            strides=(4, 4),
-            padding="VALID",
-            kernel_init=nn.initializers.he_normal(),
-        )(x)
-        x = normalize(x)
-        x = nn.relu(x)
-        x = nn.Conv(
-            64,
-            kernel_size=(4, 4),
-            strides=(2, 2),
-            padding="VALID",
-            kernel_init=nn.initializers.he_normal(),
-        )(x)
-        x = normalize(x)
-        x = nn.relu(x)
-        x = nn.Conv(
-            64,
-            kernel_size=(3, 3),
-            strides=(1, 1),
-            padding="VALID",
-            kernel_init=nn.initializers.he_normal(),
-        )(x)
-        x = normalize(x)
-        x = nn.relu(x)
-        x = x.reshape((x.shape[0], -1))
-        x = nn.Dense(512, kernel_init=nn.initializers.he_normal())(x)
-        x = normalize(x)
-        x = nn.relu(x)
-        return x
-
 
 class RNNQNetwork(nn.Module):
     action_dim: int
-    norm_type: str = "layer_norm"
-    norm_input: bool = False
+    hidden_size: int = 512
     num_layers: int = 4
     num_rnn_layers: int = 1
-    hidden_size: int = 512
-    is_symbolic: bool = False
+    norm_input: bool = False
+    norm_type: str = "layer_norm"
+    dueling: bool = False
     add_last_action: bool = False
 
     @nn.compact
     def __call__(self, hidden, x, done, last_action, train: bool = False):
-        if self.is_symbolic:
-            """
-            Symbolic observation uses the same PQN_craftax architecture.
-            """
-            if self.norm_type == "layer_norm":
-                normalize = lambda x: nn.LayerNorm()(x)
-            elif self.norm_type == "batch_norm":
-                normalize = lambda x: BatchRenorm(use_running_average=not train)(x)
-            else:
-                normalize = lambda x: x
-
-            if self.norm_input:
-                x = BatchRenorm(use_running_average=not train)(x)
-            else:
-                # dummy normalize input in any case for global compatibility
-                x_dummy = BatchRenorm(use_running_average=not train)(x)
-
-            for l in range(self.num_layers):
-                x = nn.Dense(self.hidden_size)(x)
-                x = normalize(x)
-                x = nn.relu(x)
-
+        if self.norm_type == "layer_norm":
+            normalize = lambda x: nn.LayerNorm()(x)
+        elif self.norm_type == "batch_norm":
+            normalize = lambda x: BatchRenorm(use_running_average=not train)(x)
         else:
+            normalize = lambda x: x
 
-            """
-            Pixel observation uses the PQN_atari architecture.
-            """
+        if self.norm_input:
+            x = BatchRenorm(use_running_average=not train)(x)
+        else:
+            # dummy normalize input in any case for global compatibility
+            x_dummy = BatchRenorm(use_running_average=not train)(x)
 
-            x = jnp.transpose(x, (0, 2, 3, 1))
-            if self.norm_input:
-                x = nn.BatchNorm(use_running_average=not train)(x)
-            else:
-                # dummy normalize input for global compatibility
-                x_dummy = nn.BatchNorm(use_running_average=not train)(x)
-                x = x / 255.0
-            x = CNN(norm_type=self.norm_type)(x, train)
-            for l in range(self.num_layers):
-                x = nn.Dense(self.hidden_size)(x)
-                x = normalize(x)
-                x = nn.relu(x)
+        for l in range(self.num_layers):
+            x = nn.Dense(self.hidden_size)(x)
+            x = normalize(x)
+            x = nn.relu(x)
 
         # add last action to the input of the rnn
         if self.add_last_action:
@@ -260,7 +342,10 @@ class RNNQNetwork(nn.Module):
         return new_hidden, q_vals
 
     def initialize_carry(self, *batch_size):
-        return ScannedRNN.initialize_carry(self.hidden_size, *batch_size)
+        return [
+            ScannedRNN.initialize_carry(self.hidden_size, *batch_size)
+            for _ in range(self.num_rnn_layers)
+        ]
 
 @chex.dataclass(frozen=True)
 class Transition:
