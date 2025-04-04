@@ -110,6 +110,7 @@ def parse_args():
     parser.add_argument("--NUM_EPOCHS", type=int, default=1, help="Number of epochs")
     parser.add_argument("--WANDB_MODE", type=str, default="online", help="WandB mode")
     parser.add_argument("--NORM_TYPE", type=str, default="layer_norm", help="layer_norm or batch_norm")
+    parser.add_argument("--MEMORY_WINDOW", type=int, default=0, help="steps of previous episode added in the rnn training horizon")
     return parser.parse_args()
 
 # class ScannedRNN(nn.Module):
