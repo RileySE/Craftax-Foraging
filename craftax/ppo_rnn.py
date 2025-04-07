@@ -46,7 +46,7 @@ def parse_args():
     parser.add_argument("--prune_step", type=int, default=20000, help="Step to prune")
     parser.add_argument('--featureless_world', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run_name", type=str, default="default_run", help="Name of the run")
-    parser.add_argument("--env_name", type=str, default="Craftax-Pixels-v1", help="Environment name")
+    parser.add_argument("--env_name", type=str, default="Craftax-Symbolic-v1", help="Environment name")
     parser.add_argument("--sparse_alg", type=str, default="magnitude", help="options, magnitude, no_prune, saliency, random")
     parser.add_argument("--gpu_id", type=int, default=0, help="GPU ID")
     parser.add_argument("--predators", type=bool, default=True, help="Use predators")
@@ -882,7 +882,6 @@ def run_ppo(config):
 
     reset_batch_logs()
 
-    print(config["JIT"])
     if not config["JIT"]:
         jax.config.update("jax_disable_jit", True)
         print('JIT disabled')
