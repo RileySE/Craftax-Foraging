@@ -1,3 +1,4 @@
+import math
 import os
 import pathlib
 from enum import Enum
@@ -5,6 +6,8 @@ import jax.numpy as jnp
 import imageio.v3 as iio
 import numpy as np
 from PIL import Image
+from sympy import ceiling
+
 from craftax.craftax.util.maths_utils import get_distance_map
 from craftax.environment_base.util import load_compressed_pickle, save_compressed_pickle
 
@@ -167,6 +170,13 @@ FLOOR_MOB_MAPPING = jnp.array(
     ],
     dtype=jnp.int32,
 )
+
+#Restricted vision hemispheres for directional vision experiments
+VISION_HEMI_FULL = jnp.ones(OBS_DIM)
+VISION_HEMI_UP = jnp.concatenate([jnp.ones((math.floor(OBS_DIM[0] / 2.), OBS_DIM[1])), jnp.zeros((math.ceil(OBS_DIM[0] / 2.), OBS_DIM[1]))], axis=0)
+VISION_HEMI_DOWN = jnp.concatenate([jnp.zeros((math.ceil(OBS_DIM[0] / 2.), OBS_DIM[1])), jnp.ones((math.floor(OBS_DIM[0] / 2.), OBS_DIM[1]))], axis=0)
+VISION_HEMI_RIGHT = jnp.concatenate([jnp.zeros((OBS_DIM[0], math.ceil(OBS_DIM[1] / 2.))), jnp.ones((OBS_DIM[0], math.floor(OBS_DIM[1] / 2.)))], axis=1)
+VISION_HEMI_LEFT = jnp.concatenate([jnp.ones((OBS_DIM[0], math.floor(OBS_DIM[1] / 2.))), jnp.zeros((OBS_DIM[0], math.ceil(OBS_DIM[1] / 2.)))], axis=1)
 
 
 # Path blocks, water, lava  (everything collides with solid blocks)

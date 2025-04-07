@@ -58,7 +58,7 @@ class CraftaxSymbolicEnv(EnvironmentNoAutoReset):
         return self.get_obs(state), state
 
     def get_obs(self, state: EnvState) -> chex.Array:
-        pixels = render_craftax_symbolic(state)
+        pixels = render_craftax_symbolic(state, self.static_env_params.directional_vision)
         return pixels
 
     def is_terminal(self, state: EnvState, params: EnvParams) -> bool:

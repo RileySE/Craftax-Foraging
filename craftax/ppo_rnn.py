@@ -94,6 +94,7 @@ def parse_args():
     parser.add_argument("--logging_threads_per_viz_val", type=int, default=1, help="Logging threads per viz validation")
     parser.add_argument("--curriculum", type=bool, default=False, help="Use curriculum learning")
     parser.add_argument("--map_size", type=int, default=96, help="The side length for the map")
+    parser.add_argument("--directional_vision", action=argparse.BooleanOptionalAction, default=False, help="Turn on directional vision cones")
     return parser.parse_args()
 
 class CNN(nn.Module):
@@ -259,6 +260,7 @@ def make_train(config):
     if config['PREDATORS']:
         static_params.predators = True
     static_params.map_size = (config['MAP_SIZE'],config['MAP_SIZE'])
+    static_params.directional_vision = config['DIRECTIONAL_VISION']
 
     static_params.max_passive_mobs = config['MAX_COWS']
 
@@ -694,6 +696,7 @@ def make_train(config):
             deltas_to_start = env_state.env_state.player_position - starting_pos
 
             # Add hstate and other non-env metrics to info so they can be logged
+            info['value'] = value
             info['hidden_state'] = hstate
             info['pred_delta'] = aux
             info['delta'] = deltas_to_start
@@ -732,7 +735,7 @@ def make_train(config):
                                       'player_position_y','recover','hunger','thirst','fatigue','light_level','dist_to_melee_l1',
                                       'melee_on_screen','dist_to_passive_l1','passive_on_screen','dist_to_ranged_l1',
                                       'ranged_on_screen','num_melee_nearby','num_passives_nearby','num_ranged_nearby','delta',
-                                      'pred_delta', 'num_monsters_killed', 'has_sword', 'has_pick', 'held_iron', 'episode_id']
+                                      'pred_delta', 'num_monsters_killed', 'has_sword', 'has_pick', 'held_iron', 'value', 'episode_id']
 
             # Callback function for logging hidden states
             def write_rnn_hstate(hstate, scalars, increment=0):
@@ -741,7 +744,8 @@ def make_train(config):
                                       'player_position_y','recover','hunger','thirst','fatigue','light_level','dist_to_melee_l1',
                                       'melee_on_screen','dist_to_passive_l1','passive_on_screen','dist_to_ranged_l1',
                                       'ranged_on_screen','num_melee_nearby','num_passives_nearby','num_ranged_nearby','delta_x',
-                                      'delta_y', 'pred_delta_x', 'pred_delta_y', 'num_monsters_killed', 'has_sword', 'has_pick', 'held_iron', 'episode_id']
+                                      'delta_y', 'pred_delta_x', 'pred_delta_y', 'num_monsters_killed', 'has_sword',
+                                      'has_pick', 'held_iron', 'value', 'episode_id']
 
                 run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
                 os.makedirs(run_out_path, exist_ok=True)
