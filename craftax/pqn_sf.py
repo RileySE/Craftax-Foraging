@@ -640,7 +640,7 @@ def make_train(config):
                     )(multi_train_state.task_state.params, basis_features)
                     multi_train_state.task_state = multi_train_state.task_state.apply_gradients(grads=grads_task)
 
-                    return (multi_train_state, rng), (loss, qvals)
+                    return (multi_train_state, rng), (loss, qvals, reward_loss)
 
                 def preprocess_transition(x, rng):
                     x = x.reshape(
@@ -665,10 +665,10 @@ def make_train(config):
                     _learn_phase, (multi_train_state, rng), (minibatches, targets)
                 )
 
-                return (multi_train_state, rng), (loss, qvals)
+                return (multi_train_state, rng), (loss, qvals, reward_loss)
 
             rng, _rng = jax.random.split(rng)
-            (multi_train_state, rng), (loss, qvals) = jax.lax.scan(
+            (multi_train_state, rng), (loss, qvals, reward_loss) = jax.lax.scan(
                 _learn_epoch, (multi_train_state, rng), None, config["NUM_EPOCHS"]
             )
 
