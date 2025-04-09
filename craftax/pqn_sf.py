@@ -22,7 +22,7 @@ from orbax.checkpoint import (
 
 import wandb
 from flax.linen.initializers import constant, orthogonal
-from typing import Sequence, NamedTuple, Dict, Any
+from typing import Sequence, NamedTuple, Dict, Any, Callable
 from flax.training.train_state import TrainState
 import distrax
 import functools
@@ -41,6 +41,8 @@ from craftax.environment_base.wrappers import (
 from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
 from craftax.logz import Logger, Timer
 from craftax.models import BatchRenorm
+
+NetworkFn = Callable[..., Any]
 
 
 def parse_args():
@@ -116,6 +118,19 @@ def parse_args():
     parser.add_argument("--HIDDEN_SIZE", type=int, default=512, help="Hidden size")
     parser.add_argument("--NUM_LAYERS", type=int, default=2, help="Number of layers")
     return parser.parse_args()
+
+def l2_normalize(
+    p: int = 2,
+    dim: int = 1,
+    eps: float = 1e-12,
+) -> NetworkFn:
+    def net_fn(inputs):
+        denominator = jnp.clip(
+            jnp.linalg.norm(inputs, ord=p, axis=dim, keepdims=True), a_min=eps
+        )
+        return inputs / denominator
+
+    return net_fn
 
 class CNN(nn.Module):
 
