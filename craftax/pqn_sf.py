@@ -610,7 +610,11 @@ def make_train(config):
 
                         return loss, (updates, chosen_action_qvals, basis_features)
 
-                    def _reward_loss_fn(task_params, basis_features, reward):
+                    def _reward_loss_fn(task_params, basis_features):
+                        if config.get("Q_LAMBDA", False):
+                            reward = minibatch.reward
+                        else:
+                            reward = jnp.concatenate((minibatch.reward, minibatch.reward))
 
                         print("basis_features", basis_features.shape)
                         print("task_params", task_params["w"].shape)
@@ -633,7 +637,7 @@ def make_train(config):
                     basis_features = jax.lax.stop_gradient(basis_features)
                     reward_loss, grads_task = jax.value_and_grad(
                         _reward_loss_fn
-                    )(multi_train_state.task_state.params, basis_features, minibatch.reward)
+                    )(multi_train_state.task_state.params, basis_features)
                     multi_train_state.task_state = multi_train_state.task_state.apply_gradients(grads=grads_task)
 
                     return (multi_train_state, rng), (loss, qvals)
