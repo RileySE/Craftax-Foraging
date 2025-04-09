@@ -113,6 +113,8 @@ def parse_args():
     parser.add_argument("--FEATURE_DIM", type=int, default=128, help="Feature dimension")
     parser.add_argument("--LR_TASK", type=float, default=2e-5, help="Learning rate for task")
     parser.add_argument("--NORM_TYPE", type=str, default="layer_norm", help="layer_norm or batch_norm")
+    parser.add_argument("--HIDDEN_SIZE", type=int, default=512, help="Hidden size")
+    parser.add_argument("--NUM_LAYERS", type=int, default=2, help="Number of layers")
     return parser.parse_args()
 
 class CNN(nn.Module):
@@ -165,19 +167,31 @@ class SFNetwork(nn.Module):
     action_dim: int
     norm_type: str = "layer_norm"
     norm_input: bool = False
-    feature_dim: int = 128
+    feature_dim: int = 256
     sf_dim: int = 256
+    hidden_size: int = 512
+    num_layers: int = 2 # lesser than Q network since we use additional layers to construct SF
 
     @nn.compact
     def __call__(self, x: jnp.ndarray, task: jnp.ndarray, train: bool):
-        x = jnp.transpose(x, (0, 2, 3, 1))
         if self.norm_input:
-            x = nn.BatchNorm(use_running_average=not train)(x)
+            x = BatchRenorm(use_running_average=not train)(x)
         else:
             # dummy normalize input for global compatibility
-            x_dummy = nn.BatchNorm(use_running_average=not train)(x)
-            x = x / 255.0
-        x = CNN(norm_type=self.norm_type)(x, train)
+            x_dummy = BatchRenorm(use_running_average=not train)(x)
+
+        if self.norm_type == "layer_norm":
+            normalize = lambda x: nn.LayerNorm()(x)
+        elif self.norm_type == "batch_norm":
+            normalize = lambda x: BatchRenorm(use_running_average=not train)(x)
+        else:
+            normalize = lambda x: x
+
+        for l in range(self.num_layers):
+            x = nn.Dense(self.hidden_size)(x)
+            x = normalize(x)
+            x = nn.relu(x)
+
         rep = nn.Dense(self.sf_dim)(x)
         basis_features = l2_normalize()(rep)
 
@@ -373,6 +387,8 @@ def make_train(config):
             norm_input=config.get("NORM_INPUT", False),
             sf_dim=config["SF_DIM"],
             feature_dim=config["FEATURE_DIM"],
+            hidden_size=config["HIDDEN_SIZE"],
+            num_layers=config["NUM_LAYERS"],
         )
 
         original_rng = rng[0]
