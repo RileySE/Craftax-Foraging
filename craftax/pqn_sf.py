@@ -189,7 +189,6 @@ class SFNetwork(nn.Module):
 
     @nn.compact
     def __call__(self, x: jnp.ndarray, task: jnp.ndarray, train: bool):
-        print("x shape: ", x.shape)
         if self.norm_input:
             x = BatchRenorm(use_running_average=not train)(x)
         else:
@@ -209,7 +208,6 @@ class SFNetwork(nn.Module):
             x = nn.relu(x)
 
         rep = nn.Dense(self.sf_dim)(x)
-        print("rep shape", rep.shape)
         basis_features = l2_normalize()(rep)
 
         task = convert_variable_into_batch(task, batch_size=x.shape[0])
@@ -615,11 +613,6 @@ def make_train(config):
                             reward = minibatch.reward
                         else:
                             reward = jnp.concatenate((minibatch.reward, minibatch.reward))
-
-                        print("basis_features", basis_features.shape)
-                        print("task_params", task_params["w"].shape)
-                        print("reward", reward.shape)
-
                         loss = 0.5 * jnp.square(jnp.dot(basis_features, task_params["w"]) - reward).mean()
 
                         return loss
