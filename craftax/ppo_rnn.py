@@ -38,7 +38,6 @@ from craftax.environment_base.wrappers import (
     CurriculumWrapper
 )
 from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
-from craftax.logz import Logger, Timer
 
 
 def parse_args():
@@ -277,12 +276,6 @@ def make_train(config):
     env_viz = VideoPlotWrapper(env, config['OUTPUT_PATH'], config['FRAMES_PER_FILE'], not config['NO_VIDEOS'])
 
     env = LogWrapper(env)
-
-    # create Logger
-    logger = Logger(config['OUTPUT_PATH'], use_wandb=config["USE_WANDB"])
-
-    # create Timer
-    timer = Timer()
 
     if not os.path.isdir(config['OUTPUT_PATH']):
         os.makedirs(config['OUTPUT_PATH'])
@@ -612,10 +605,6 @@ def make_train(config):
                 def callback(metric, update_step):
                     to_log = create_log_dict(metric, config)
                     batch_log(update_step, to_log, config)
-
-                    logger.log_metrics(metric, update_step, ty="train")
-                    logger.dump_to_console(update_step, ty="train")
-                    logger.clear(ty="train")
 
                 jax.debug.callback(callback, to_log, update_step)
 
