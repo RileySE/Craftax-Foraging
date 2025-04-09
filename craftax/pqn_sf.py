@@ -424,6 +424,12 @@ def make_train(config):
         lr = lr_scheduler if config.get("LR_LINEAR_DECAY", False) else config["LR"]
         lr_task = config["LR_TASK"]
 
+        def init_meta(rng, sf_dim) -> chex.Array:
+            _, task_rng_key = jax.random.split(rng)
+            task = jax.random.uniform(task_rng_key, shape=(sf_dim,))
+            task = task / jnp.linalg.norm(task, ord=2)
+            return task
+
         def create_agent(rng):
             init_x = jnp.zeros((1, *env.observation_space(env_params).shape))
             init_task = jnp.zeros((1, config["SF_DIM"]))
