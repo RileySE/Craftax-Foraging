@@ -216,6 +216,8 @@ class Transition:
     done: chex.Array
     next_obs: chex.Array
     q_val: chex.Array
+    info: jnp.ndarray
+    deltas_to_start: jnp.ndarray
 
 
 class CustomTrainState(TrainState):
@@ -422,6 +424,11 @@ def make_train(config):
                     rng_s, env_state, new_action, env_params
                 )
 
+                # Compute distance to origin for aux loss
+                starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
+                # dists_to_start = jnp.linalg.norm(env_state.player_position - starting_pos, ord=1, axis=-1)
+                deltas_to_start = env_state.env_state.player_position - starting_pos
+
                 transition = Transition(
                     obs=last_obs,
                     action=new_action,
@@ -429,6 +436,8 @@ def make_train(config):
                     done=new_done,
                     next_obs=new_obs,
                     q_val=q_vals,
+                    info=info,
+                    deltas_to_start=deltas_to_start,
                 )
                 return (new_obs, new_env_state, rng), (transition, info)
 

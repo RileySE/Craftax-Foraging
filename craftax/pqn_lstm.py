@@ -44,7 +44,7 @@ from craftax.models import BatchRenorm
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run PQN.")
+    parser = argparse.ArgumentParser(description="Run PQN LSTM.")
     parser.add_argument("--prune_step", type=int, default=20000, help="Step to prune")
     parser.add_argument('--featureless_world', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--run_name", type=str, default="default_run", help="Name of the run")
