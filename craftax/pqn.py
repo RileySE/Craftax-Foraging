@@ -680,7 +680,7 @@ def make_train(config):
                 last_obs,
                 rng,
             ) = runner_state
-            rng, _rng = jax.random.split(rng)
+            rng, _rngs = jax.random.split(rng, config["NUM_ENVS"])
 
             # SELECT ACTION
             q_vals, aux = network.apply(
@@ -692,7 +692,7 @@ def make_train(config):
                 train=False,
             )
             eps = jnp.full(config["NUM_ENVS"], eps_scheduler(train_state.n_updates))
-            new_action = jax.vmap(eps_greedy_exploration)(_rng, q_vals, eps)
+            new_action = jax.vmap(eps_greedy_exploration)(_rngs, q_vals, eps)
 
             # STEP ENV
             rng, _rng = jax.random.split(rng)
