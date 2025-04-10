@@ -692,7 +692,7 @@ def make_train(config):
                 train=False,
             )
             eps = jnp.full(config["NUM_ENVS"], eps_scheduler(train_state.n_updates))
-            new_action = jax.vmap(eps_greedy_exploration)(_rngs, q_vals, eps)
+            new_action = jax.vmap(eps_greedy_exploration)(_rng, q_vals, eps)
 
             # STEP ENV
             rng, _rng = jax.random.split(rng)
