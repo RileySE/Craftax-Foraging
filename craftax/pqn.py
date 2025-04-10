@@ -707,6 +707,7 @@ def make_train(config):
             # Compute distance to origin for aux loss
             starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
             deltas_to_start = env_state.env_state.player_position - starting_pos
+            info['pred_delta'] = aux
             info['delta'] = deltas_to_start
 
             transition = Transition(
