@@ -707,6 +707,11 @@ def make_train(config):
             # Compute distance to origin for aux loss
             starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
             deltas_to_start = env_state.env_state.player_position - starting_pos
+
+            # choose the q_vals corresponding to new_action
+            q_vals__actions_taken = jnp.take_along_axis(q_vals, jnp.expand_dims(new_action, axis=-1), axis=-1).squeeze(axis=-1)
+
+            info['value'] = q_vals__actions_taken
             info['pred_delta'] = aux
             info['delta'] = deltas_to_start
 
