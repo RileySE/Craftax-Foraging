@@ -638,6 +638,8 @@ def make_train(config):
 
             return runner_state, metrics
 
+
+
         def get_test_metrics(train_state, rng):
 
             if not config.get("TEST_DURING_TRAINING", False):
@@ -677,6 +679,178 @@ def make_train(config):
             )
             return done_infos
 
+        def _env_step_viz(runner_state, unused):
+            (
+                train_state,
+                env_state,
+                last_obs,
+                last_done,
+                hstate,
+                rng,
+                update_step,
+            ) = runner_state
+            rng, _rng = jax.random.split(rng)
+
+            # SELECT ACTION
+            ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
+            hstate, pi, value, aux = network.apply(train_state.params, hstate, ac_in)
+            action = pi.sample(seed=_rng)
+            log_prob = pi.log_prob(action)
+            value, action, log_prob = (
+                value.squeeze(0),
+                action.squeeze(0),
+                log_prob.squeeze(0),
+            )
+
+            # STEP ENV
+            rng, _rng = jax.random.split(rng)
+            obsv, env_state, reward, done, info = env_viz.step(
+                _rng, env_state, action, env_params
+            )
+
+            # Compute distance to origin for aux loss
+            starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
+            deltas_to_start = env_state.env_state.player_position - starting_pos
+
+            # Add hstate and other non-env metrics to info so they can be logged
+            info['value'] = value
+            info['hidden_state'] = hstate
+            info['pred_delta'] = aux
+            info['delta'] = deltas_to_start
+
+            transition = Transition(
+                last_done, action, value, reward, log_prob, last_obs, info, deltas_to_start,
+            )
+            runner_state = (
+                train_state,
+                env_state,
+                obsv,
+                done,
+                hstate,
+                rng,
+                update_step,
+            )
+            return runner_state, transition
+
+            # Do one "step" of logging, writing the result to a file.
+            # Several steps can be run in series using --logging_steps_per_viz to do long rollouts without hitting memory limits
+
+        def _logging_step(runner_state, unused, logging_threads):
+            # Visualization rollouts
+            runner_state, traj_batch = jax.lax.scan(
+                _env_step_viz, runner_state, None, config['STEPS_PER_VIZ']
+            )
+
+            # Finally, log data associated with the visualization runs
+            update_step = runner_state[-1]
+            hidden_states = traj_batch.info['hidden_state']
+            # Null this for memory savings
+            traj_batch.info['hidden_state'] = None
+
+            # Add new logging fields here
+            fields_to_log = ['health','food','drink','energy','done','is_sleeping','is_resting','player_position_x',
+                                      'player_position_y','recover','hunger','thirst','fatigue','light_level','dist_to_melee_l1',
+                                      'melee_on_screen','dist_to_passive_l1','passive_on_screen','dist_to_ranged_l1',
+                                      'ranged_on_screen','num_melee_nearby','num_passives_nearby','num_ranged_nearby','delta',
+                                      'pred_delta', 'num_monsters_killed', 'has_sword', 'has_pick', 'held_iron', 'value', 'episode_id']
+
+            # Callback function for logging hidden states
+            def write_rnn_hstate(hstate, scalars, increment=0):
+
+                header_field_names = ['health','food','drink','energy','done','is_sleeping','is_resting','player_position_x',
+                                      'player_position_y','recover','hunger','thirst','fatigue','light_level','dist_to_melee_l1',
+                                      'melee_on_screen','dist_to_passive_l1','passive_on_screen','dist_to_ranged_l1',
+                                      'ranged_on_screen','num_melee_nearby','num_passives_nearby','num_ranged_nearby','delta_x',
+                                      'delta_y', 'pred_delta_x', 'pred_delta_y', 'num_monsters_killed', 'has_sword',
+                                      'has_pick', 'held_iron', 'value', 'episode_id']
+
+                run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
+                os.makedirs(run_out_path, exist_ok=True)
+                # Assemble header for the scalar file(s)
+                scalar_file_header = 'action'
+                for key in header_field_names:
+                    scalar_file_header += ',' + key
+
+                # We save to temp files and then append to the target file since numpy apparently cannot write files in append mode for some reason
+                for i in range(logging_threads):
+                    out_filename_hstates = os.path.join(run_out_path, 'hstates_{}_{}.csv'.format(increment, i))
+                    temp_filename = os.path.join(run_out_path, 'temp.csv')
+                    np.savetxt(temp_filename,
+                               hstate[:, i, :], delimiter=',')
+                    temp_file = open(temp_filename, 'r')
+                    out_file_hstates = open(out_filename_hstates, 'a+')
+                    out_file_hstates.write(temp_file.read())
+                    out_file_hstates.close()
+                    temp_file.close()
+                    # Then do the same thing for the scalars
+                    out_filename_scalars = os.path.join(run_out_path, 'scalars_{}_{}.csv'.format(increment, i))
+                    np.savetxt(temp_filename,
+                               scalars[:, i, :], delimiter=',', fmt='%f',
+                               header=scalar_file_header
+                               )
+                    temp_file = open(temp_filename, 'r')
+                    out_file_scalars = open(out_filename_scalars, 'a+')
+                    out_file_scalars.write(temp_file.read())
+                    temp_file.close()
+                    out_file_scalars.close()
+                    print('Writing log file', out_filename_hstates)
+
+
+            # Add the specified field to the logging array
+            # Also assembles the header for the log file itself
+            def add_field_to_log_array(info_dict, log_array, field_key):
+                field_value = info_dict[field_key]
+                if len(field_value.shape) < 3:
+                    new_shape = field_value.shape + (1,)
+                    field_value = field_value.reshape(new_shape)
+                else:
+                    field_value = field_value.squeeze()
+                log_array = jnp.concatenate([log_array, field_value], axis=2)
+
+                return log_array
+
+            # Assemble logging variable array
+            log_array = traj_batch.info['action'].reshape(traj_batch.info['action'].shape + (1,))
+            # Yes this is a for loop in the JAX code but this stuff was getting done in serial before anyway and it's cheap operations
+            for field_to_log in fields_to_log:
+                log_array = add_field_to_log_array(traj_batch.info, log_array, field_to_log)
+
+            jax.debug.callback(write_rnn_hstate, hidden_states, log_array, update_step)
+
+            return runner_state, None
+
+        # Func to interleave update steps and plotting
+        def _update_plot(runner_state, unused):
+            # First, update
+            runner_state, metric = jax.lax.scan(
+                _update_step, runner_state, None, config["UPDATES_PER_VIZ"]
+            )
+
+            # Log model weights
+            def save_weights_callback(weights_flat, iter):
+                run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
+                os.makedirs(run_out_path, exist_ok=True)
+                weight_filename = os.path.join(run_out_path, 'weights_{}.csv'.format(iter))
+                weight_file = open(weight_filename, 'w')
+                for weights_set in weights_flat:
+                    if len(weights_set.shape) == 1:
+                        continue
+                    np.savetxt(weight_file, np.transpose(weights_set), delimiter=',', fmt='%f')
+                print('Saving weights in file', weight_filename)
+
+            weights_flat = jax.tree.flatten(runner_state[0].params)
+            jax.debug.callback(save_weights_callback, weights_flat[0], runner_state[-1])
+
+            # Can we save the environment state and resume training later?
+            #runner_state_copy = runner_state
+
+            # Then do iterations of logging
+            runner_state, empty = jax.lax.scan(
+                partial(_logging_step, logging_threads = config["LOGGING_THREADS_PER_VIZ"]), runner_state, None, config['LOGGING_STEPS_PER_VIZ']
+            )
+
+            return runner_state, metric
+
         rng, _rng = jax.random.split(rng)
         test_metrics = get_test_metrics(train_state, _rng)
 
@@ -687,8 +861,39 @@ def make_train(config):
         rng, _rng = jax.random.split(rng)
         runner_state = (train_state, expl_state, test_metrics, _rng)
 
-        runner_state, metrics = jax.lax.scan(
-            _update_step, runner_state, None, config["NUM_UPDATES"]
+        runner_state, metric = jax.lax.scan(
+            _update_plot, runner_state, None, config["NUM_UPDATES"]
+        )
+
+        # Do validation rollouts with a fixed random seed
+        # Generate rng from validation-specific random seed
+
+        val_rng_key = jax.random.PRNGKey(config["VALIDATION_SEED"])
+
+        rng, _rng = jax.random.split(val_rng_key)
+
+        # RE-INIT FOR VAL RUNS
+        obsv, log_state = env.reset(_rng, env_params)
+
+        # init_hstate = ScannedRNN.initialize_carry(
+        #     config["NUM_ENVS"], config["LAYER_SIZE"]
+        # )
+
+        val_runner_state = (
+            runner_state[0],
+            log_state,
+            obsv,
+            jnp.ones((config["NUM_ENVS"]), dtype=bool),
+            runner_state[4],
+            rng,
+            config['VALIDATION_STEP_OFFSET'] + runner_state[-1],
+        )
+
+        # Do validation logging iterations
+        # TODO separate command line argument for validation logging step count?
+        val_runner_state, empty = jax.lax.scan(
+            partial(_logging_step, logging_threads=config["LOGGING_THREADS_PER_VIZ_VAL"]), val_runner_state, None,
+            config['LOGGING_STEPS_PER_VIZ_VAL']
         )
 
         return {"runner_state": runner_state, "metrics": metrics}
