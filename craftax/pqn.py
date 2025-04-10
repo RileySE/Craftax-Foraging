@@ -563,7 +563,7 @@ def make_train(config):
 
                         # Calculate auxiliary loss (predict distance to origin)
                         # Simple L2
-                        aux_loss = jnp.square(aux - minibatch.deltas_to_start).mean()
+                        aux_loss = jnp.square(aux - jnp.concatenate((minibatch.deltas_to_start, minibatch.deltas_to_start))).mean()
 
                         total_loss = loss + config["AUX_COEF"] * aux_loss
 
