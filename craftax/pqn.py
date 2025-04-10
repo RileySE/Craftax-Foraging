@@ -525,7 +525,7 @@ def make_train(config):
                     def _loss_fn(params):
 
                         if config.get("Q_LAMBDA", False):
-                            q_vals, aux, updates = network.apply(
+                            (q_vals, aux), updates = network.apply(
                                 {
                                     "params": params,
                                     "batch_stats": train_state.batch_stats,
@@ -536,7 +536,7 @@ def make_train(config):
                             )
                         else:
                             # if not using q_lambda, re-pass the next_obs through the network to compute target
-                            all_q_vals, aux, updates = network.apply(
+                            (all_q_vals, aux), updates = network.apply(
                                 {
                                     "params": params,
                                     "batch_stats": train_state.batch_stats,
