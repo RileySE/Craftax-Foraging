@@ -39,7 +39,6 @@ from craftax.environment_base.wrappers import (
     CurriculumWrapper
 )
 from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
-from craftax.logz import Logger, Timer
 from craftax.models import BatchRenorm
 
 
@@ -297,9 +296,6 @@ def make_train(config):
     env_viz = VideoPlotWrapper(env, config['OUTPUT_PATH'], config['FRAMES_PER_FILE'], not config['NO_VIDEOS'])
 
     env = LogWrapper(env)
-
-    # create Logger
-    logger = Logger(config['OUTPUT_PATH'], use_wandb=config["USE_WANDB"])
 
     # epsilon-greedy exploration
     def eps_greedy_exploration(rng, q_vals, eps):
