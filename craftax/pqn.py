@@ -774,7 +774,7 @@ def make_train(config):
         # Func to interleave update steps and plotting
         def _update_plot(runner_state, unused):
             # First, update
-            runner_state, metric = jax.lax.scan(
+            runner_state, metrics = jax.lax.scan(
                 _update_step, runner_state, None, config["UPDATES_PER_VIZ"]
             )
 
@@ -801,7 +801,7 @@ def make_train(config):
                 partial(_logging_step, logging_threads = config["LOGGING_THREADS_PER_VIZ"]), runner_state, None, config['LOGGING_STEPS_PER_VIZ']
             )
 
-            return runner_state, metric
+            return runner_state, metrics
 
         rng, _rng = jax.random.split(rng)
         obsv, log_state = env.reset(_rng, env_params)
@@ -810,7 +810,7 @@ def make_train(config):
         rng, _rng = jax.random.split(rng)
         runner_state = (train_state, log_state, obsv, _rng, 0)
 
-        runner_state, metric = jax.lax.scan(
+        runner_state, metrics = jax.lax.scan(
             _update_plot, runner_state, None, config["NUM_UPDATES"]
         )
 
