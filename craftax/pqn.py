@@ -60,6 +60,7 @@ def parse_args():
     parser.add_argument("--update_epochs", type=int, default=4, help="Number of update epochs")
     parser.add_argument("--num_minibatches", type=int, default=8, help="Number of minibatches")
     parser.add_argument("--gamma", type=float, default=0.99, help="Gamma value")
+    parser.add_argument("--aux_coef", type=float, default=0.1, help="Auxiliary coefficient")
     parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Max gradient norm")
     parser.add_argument("--activation", type=str, default="tanh", help="Activation function")
     parser.add_argument("--anneal_lr", action=argparse.BooleanOptionalAction, default=True)
@@ -188,8 +189,6 @@ class QNetwork(nn.Module):
                 x = nn.Dense(self.hidden_size)(x)
                 x = normalize(x)
                 x = nn.relu(x)
-
-            x = nn.Dense(self.action_dim)(x)
         else:
 
             """
@@ -204,8 +203,25 @@ class QNetwork(nn.Module):
                 x_dummy = nn.BatchNorm(use_running_average=not train)(x)
                 x = x / 255.0
             x = CNN(norm_type=self.norm_type)(x, train)
-            x = nn.Dense(self.action_dim)(x)
-        return x
+        q_val = nn.Dense(self.action_dim)(x)
+
+        aux = nn.Dense(
+            self.config["LAYER_SIZE"],
+            kernel_init=orthogonal(2),
+            bias_init=constant(0.0),
+        )(x)
+        aux = nn.relu(aux)
+        aux = nn.Dense(
+            self.config["LAYER_SIZE"],
+            kernel_init=orthogonal(2),
+            bias_init=constant(0.0),
+        )(aux)
+        aux = nn.relu(aux)
+        aux = nn.Dense(2, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
+            aux
+        )
+
+        return q_val, aux
 
 
 @chex.dataclass(frozen=True)
@@ -307,9 +323,6 @@ def make_train(config):
 
     env = LogWrapper(env)
 
-    # create Logger
-    logger = Logger(config['OUTPUT_PATH'], use_wandb=config["USE_WANDB"])
-
     # epsilon-greedy exploration
     def eps_greedy_exploration(rng, q_vals, eps):
         rng_a, rng_e = jax.random.split(
@@ -397,16 +410,26 @@ def make_train(config):
         rng, _rng = jax.random.split(rng)
         train_state = create_agent(rng)
 
+        # INIT ENV
+        rng, _rng = jax.random.split(rng)
+        new_obs, log_state = env.reset(_rng, env_params)
+
         # TRAINING LOOP
         def _update_step(runner_state, unused):
 
-            train_state, expl_state, test_metrics, rng = runner_state
+            train_state, env_state, last_obs, rng = runner_state
 
             # SAMPLE PHASE
-            def _step_env(carry, _):
-                last_obs, env_state, rng = carry
+            def _step_env(runner_state, _):
+                # last_obs, env_state, rng = carry
+                (
+                    train_state,
+                    env_state,
+                    last_obs,
+                    rng,
+                ) = runner_state
                 rng, rng_a, rng_s = jax.random.split(rng, 3)
-                q_vals = network.apply(
+                q_vals, aux = network.apply(
                     {
                         "params": train_state.params,
                         "batch_stats": train_state.batch_stats,
@@ -439,24 +462,22 @@ def make_train(config):
                     info=info,
                     deltas_to_start=deltas_to_start,
                 )
-                return (new_obs, new_env_state, rng), (transition, info)
+
+                return (train_state, new_env_state, new_obs, rng), (transition, info)
 
             # step the env
-            rng, _rng = jax.random.split(rng)
-            (*expl_state, rng), (transitions, infos) = jax.lax.scan(
+            runner_state, (transitions, infos) = jax.lax.scan(
                 _step_env,
-                (*expl_state, _rng),
+                runner_state,
                 None,
                 config["NUM_STEPS"],
             )
-            expl_state = tuple(expl_state)
-
             train_state = train_state.replace(
                 timesteps=train_state.timesteps
                           + config["NUM_STEPS"] * config["NUM_ENVS"]
             )  # update timesteps count
 
-            last_q = network.apply(
+            last_q,_ = network.apply(
                 {
                     "params": train_state.params,
                     "batch_stats": train_state.batch_stats,
@@ -503,7 +524,7 @@ def make_train(config):
                     def _loss_fn(params):
 
                         if config.get("Q_LAMBDA", False):
-                            q_vals, updates = network.apply(
+                            q_vals, aux, updates = network.apply(
                                 {
                                     "params": params,
                                     "batch_stats": train_state.batch_stats,
@@ -514,7 +535,7 @@ def make_train(config):
                             )
                         else:
                             # if not using q_lambda, re-pass the next_obs through the network to compute target
-                            all_q_vals, updates = network.apply(
+                            all_q_vals, aux, updates = network.apply(
                                 {
                                     "params": params,
                                     "batch_stats": train_state.batch_stats,
@@ -539,9 +560,15 @@ def make_train(config):
 
                         loss = 0.5 * jnp.square(chosen_action_qvals - target).mean()
 
-                        return loss, (updates, chosen_action_qvals)
+                        # Calculate auxiliary loss (predict distance to origin)
+                        # Simple L2
+                        aux_loss = jnp.square(aux - minibatch.deltas_to_start).mean()
 
-                    (loss, (updates, qvals)), grads = jax.value_and_grad(
+                        total_loss = loss + config["AUX_COEF"] * aux_loss
+
+                        return total_loss, (updates, chosen_action_qvals, loss, aux_loss)
+
+                    (total_loss, (updates, qvals, critic_loss, aux_loss)), grads = jax.value_and_grad(
                         _loss_fn, has_aux=True
                     )(train_state.params)
                     train_state = train_state.apply_gradients(grads=grads)
@@ -549,7 +576,7 @@ def make_train(config):
                         grad_steps=train_state.grad_steps + 1,
                         batch_stats=updates["batch_stats"],
                     )
-                    return (train_state, rng), (loss, qvals)
+                    return (train_state, rng), (total_loss, qvals, critic_loss, aux_loss)
 
                 def preprocess_transition(x, rng):
                     x = x.reshape(
@@ -570,14 +597,14 @@ def make_train(config):
                 )
 
                 rng, _rng = jax.random.split(rng)
-                (train_state, rng), (loss, qvals) = jax.lax.scan(
+                (train_state, rng), (total_loss, qvals, critic_loss, aux_loss) = jax.lax.scan(
                     _learn_phase, (train_state, rng), (minibatches, targets)
                 )
 
-                return (train_state, rng), (loss, qvals)
+                return (train_state, rng), (total_loss, qvals, critic_loss, aux_loss)
 
             rng, _rng = jax.random.split(rng)
-            (train_state, rng), (loss, qvals) = jax.lax.scan(
+            (train_state, rng), (total_loss, qvals, critic_loss, aux_loss) = jax.lax.scan(
                 _learn_epoch, (train_state, rng), None, config["NUM_EPOCHS"]
             )
 
@@ -586,7 +613,9 @@ def make_train(config):
                 "env_step": train_state.timesteps,
                 "update_steps": train_state.n_updates,
                 "grad_steps": train_state.grad_steps,
-                "td_loss": loss.mean(),
+                "total_loss": total_loss.mean(),
+                "aux_loss": aux_loss.mean(),
+                "td_loss": critic_loss.mean(),
                 "qvals": qvals.mean(),
             }
             done_infos = jax.tree_util.tree_map(
@@ -638,84 +667,30 @@ def make_train(config):
 
             return runner_state, metrics
 
-
-
-        def get_test_metrics(train_state, rng):
-
-            if not config.get("TEST_DURING_TRAINING", False):
-                return None
-
-            def _env_step(carry, _):
-                env_state, last_obs, rng = carry
-                rng, _rng = jax.random.split(rng)
-                q_vals = network.apply(
-                    {
-                        "params": train_state.params,
-                        "batch_stats": train_state.batch_stats,
-                    },
-                    last_obs,
-                    train=False,
-                )
-                eps = jnp.full(config["TEST_NUM_ENVS"], config["EPS_TEST"])
-                new_action = jax.vmap(eps_greedy_exploration)(
-                    jax.random.split(_rng, config["TEST_NUM_ENVS"]), q_vals, eps
-                )
-                new_obs, new_env_state, reward, new_done, info = test_env.step(
-                    _rng, env_state, new_action, env_params
-                )
-                return (new_env_state, new_obs, rng), info
-
-            rng, _rng = jax.random.split(rng)
-            init_obs, env_state = test_env.reset(_rng, env_params)
-
-            _, infos = jax.lax.scan(
-                _env_step, (env_state, init_obs, _rng), None, config["TEST_NUM_STEPS"]
-            )
-            # return mean of done infos
-            done_infos = jax.tree_util.tree_map(
-                lambda x: (x * infos["returned_episode"]).sum()
-                          / infos["returned_episode"].sum(),
-                infos,
-            )
-            return done_infos
-
         def _env_step_viz(runner_state, unused):
             (
                 train_state,
                 env_state,
                 last_obs,
-                last_done,
-                hstate,
                 rng,
                 update_step,
             ) = runner_state
             rng, _rng = jax.random.split(rng)
 
             # SELECT ACTION
-            ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-            hstate, pi, value, aux = network.apply(train_state.params, hstate, ac_in)
-            action = pi.sample(seed=_rng)
-            log_prob = pi.log_prob(action)
-            value, action, log_prob = (
-                value.squeeze(0),
-                action.squeeze(0),
-                log_prob.squeeze(0),
-            )
+            q_val, aux = network.apply(train_state.params, ac_in)
+            eps = jnp.full(config["NUM_ENVS"], eps_scheduler(train_state.n_updates))
+            new_action = jax.vmap(eps_greedy_exploration)(_rngs, q_val, eps)
 
             # STEP ENV
             rng, _rng = jax.random.split(rng)
             obsv, env_state, reward, done, info = env_viz.step(
-                _rng, env_state, action, env_params
+                _rng, env_state, new_action, env_params
             )
 
             # Compute distance to origin for aux loss
             starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
             deltas_to_start = env_state.env_state.player_position - starting_pos
-
-            # Add hstate and other non-env metrics to info so they can be logged
-            info['value'] = value
-            info['hidden_state'] = hstate
-            info['pred_delta'] = aux
             info['delta'] = deltas_to_start
 
             transition = Transition(
@@ -726,9 +701,7 @@ def make_train(config):
                 env_state,
                 obsv,
                 done,
-                hstate,
                 rng,
-                update_step,
             )
             return runner_state, transition
 
@@ -737,15 +710,9 @@ def make_train(config):
 
         def _logging_step(runner_state, unused, logging_threads):
             # Visualization rollouts
-            runner_state, traj_batch = jax.lax.scan(
+            runner_state, transitions = jax.lax.scan(
                 _env_step_viz, runner_state, None, config['STEPS_PER_VIZ']
             )
-
-            # Finally, log data associated with the visualization runs
-            update_step = runner_state[-1]
-            hidden_states = traj_batch.info['hidden_state']
-            # Null this for memory savings
-            traj_batch.info['hidden_state'] = None
 
             # Add new logging fields here
             fields_to_log = ['health','food','drink','energy','done','is_sleeping','is_resting','player_position_x',
@@ -753,47 +720,6 @@ def make_train(config):
                                       'melee_on_screen','dist_to_passive_l1','passive_on_screen','dist_to_ranged_l1',
                                       'ranged_on_screen','num_melee_nearby','num_passives_nearby','num_ranged_nearby','delta',
                                       'pred_delta', 'num_monsters_killed', 'has_sword', 'has_pick', 'held_iron', 'value', 'episode_id']
-
-            # Callback function for logging hidden states
-            def write_rnn_hstate(hstate, scalars, increment=0):
-
-                header_field_names = ['health','food','drink','energy','done','is_sleeping','is_resting','player_position_x',
-                                      'player_position_y','recover','hunger','thirst','fatigue','light_level','dist_to_melee_l1',
-                                      'melee_on_screen','dist_to_passive_l1','passive_on_screen','dist_to_ranged_l1',
-                                      'ranged_on_screen','num_melee_nearby','num_passives_nearby','num_ranged_nearby','delta_x',
-                                      'delta_y', 'pred_delta_x', 'pred_delta_y', 'num_monsters_killed', 'has_sword',
-                                      'has_pick', 'held_iron', 'value', 'episode_id']
-
-                run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
-                os.makedirs(run_out_path, exist_ok=True)
-                # Assemble header for the scalar file(s)
-                scalar_file_header = 'action'
-                for key in header_field_names:
-                    scalar_file_header += ',' + key
-
-                # We save to temp files and then append to the target file since numpy apparently cannot write files in append mode for some reason
-                for i in range(logging_threads):
-                    out_filename_hstates = os.path.join(run_out_path, 'hstates_{}_{}.csv'.format(increment, i))
-                    temp_filename = os.path.join(run_out_path, 'temp.csv')
-                    np.savetxt(temp_filename,
-                               hstate[:, i, :], delimiter=',')
-                    temp_file = open(temp_filename, 'r')
-                    out_file_hstates = open(out_filename_hstates, 'a+')
-                    out_file_hstates.write(temp_file.read())
-                    out_file_hstates.close()
-                    temp_file.close()
-                    # Then do the same thing for the scalars
-                    out_filename_scalars = os.path.join(run_out_path, 'scalars_{}_{}.csv'.format(increment, i))
-                    np.savetxt(temp_filename,
-                               scalars[:, i, :], delimiter=',', fmt='%f',
-                               header=scalar_file_header
-                               )
-                    temp_file = open(temp_filename, 'r')
-                    out_file_scalars = open(out_filename_scalars, 'a+')
-                    out_file_scalars.write(temp_file.read())
-                    temp_file.close()
-                    out_file_scalars.close()
-                    print('Writing log file', out_filename_hstates)
 
 
             # Add the specified field to the logging array
@@ -810,12 +736,10 @@ def make_train(config):
                 return log_array
 
             # Assemble logging variable array
-            log_array = traj_batch.info['action'].reshape(traj_batch.info['action'].shape + (1,))
+            log_array = transitions.info['action'].reshape(transitions.info['action'].shape + (1,))
             # Yes this is a for loop in the JAX code but this stuff was getting done in serial before anyway and it's cheap operations
             for field_to_log in fields_to_log:
-                log_array = add_field_to_log_array(traj_batch.info, log_array, field_to_log)
-
-            jax.debug.callback(write_rnn_hstate, hidden_states, log_array, update_step)
+                log_array = add_field_to_log_array(transitions.info, log_array, field_to_log)
 
             return runner_state, None
 
@@ -852,14 +776,11 @@ def make_train(config):
             return runner_state, metric
 
         rng, _rng = jax.random.split(rng)
-        test_metrics = get_test_metrics(train_state, _rng)
-
-        rng, _rng = jax.random.split(rng)
-        expl_state = env.reset(_rng, env_params)
+        obsv, log_state = env.reset(_rng, env_params)
 
         # train
         rng, _rng = jax.random.split(rng)
-        runner_state = (train_state, expl_state, test_metrics, _rng)
+        runner_state = (train_state, log_state, obsv, _rng)
 
         runner_state, metric = jax.lax.scan(
             _update_plot, runner_state, None, config["NUM_UPDATES"]
@@ -875,18 +796,12 @@ def make_train(config):
         # RE-INIT FOR VAL RUNS
         obsv, log_state = env.reset(_rng, env_params)
 
-        # init_hstate = ScannedRNN.initialize_carry(
-        #     config["NUM_ENVS"], config["LAYER_SIZE"]
-        # )
-
         val_runner_state = (
             runner_state[0],
             log_state,
             obsv,
-            jnp.ones((config["NUM_ENVS"]), dtype=bool),
-            runner_state[4],
             rng,
-            config['VALIDATION_STEP_OFFSET'] + runner_state[-1],
+            config['VALIDATION_STEP_OFFSET'] + train_state.n_updates,
         )
 
         # Do validation logging iterations
