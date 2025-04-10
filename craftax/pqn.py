@@ -707,7 +707,14 @@ def make_train(config):
             info['delta'] = deltas_to_start
 
             transition = Transition(
-                done, action, value, reward, log_prob, last_obs, info, deltas_to_start,
+                obs=last_obs,
+                action=new_action,
+                reward=config.get("REW_SCALE", 1) * reward,
+                done=done,
+                next_obs=obsv,
+                q_val=q_vals,
+                info=info,
+                deltas_to_start=deltas_to_start,
             )
             runner_state = (
                 train_state,
