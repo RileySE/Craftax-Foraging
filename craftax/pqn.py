@@ -418,7 +418,7 @@ def make_train(config):
         # TRAINING LOOP
         def _update_step(runner_state, unused):
 
-            train_state, env_state, last_obs, rng = runner_state
+            train_state, env_state, last_obs, rng, update_step = runner_state
 
             # SAMPLE PHASE
             def _step_env(runner_state, _):
@@ -428,6 +428,7 @@ def make_train(config):
                     env_state,
                     last_obs,
                     rng,
+                    update_step,
                 ) = runner_state
                 rng, rng_a, rng_s = jax.random.split(rng, 3)
                 q_vals, aux = network.apply(
@@ -464,7 +465,7 @@ def make_train(config):
                     deltas_to_start=deltas_to_start,
                 )
 
-                return (train_state, new_env_state, new_obs, rng), (transition, info)
+                return (train_state, new_env_state, new_obs, rng, update_step), (transition, info)
 
             # step the env
             runner_state, (transitions, infos) = jax.lax.scan(
@@ -669,6 +670,7 @@ def make_train(config):
                 env_state,
                 last_obs,
                 rng,
+                update_step + 1,
             )
 
             return runner_state, metrics
@@ -679,6 +681,7 @@ def make_train(config):
                 env_state,
                 last_obs,
                 rng,
+                update_step,
             ) = runner_state
             rng, rng_a = jax.random.split(rng)
             _rngs = jax.random.split(rng_a, config["NUM_ENVS"])
@@ -722,6 +725,7 @@ def make_train(config):
                 obsv,
                 done,
                 rng,
+                update_step,
             )
             return runner_state, transition
 
@@ -733,7 +737,6 @@ def make_train(config):
             runner_state, transitions = jax.lax.scan(
                 _env_step_viz, runner_state, None, config['STEPS_PER_VIZ']
             )
-
             # Add new logging fields here
             fields_to_log = ['health','food','drink','energy','done','is_sleeping','is_resting','player_position_x',
                                       'player_position_y','recover','hunger','thirst','fatigue','light_level','dist_to_melee_l1',
@@ -800,7 +803,7 @@ def make_train(config):
 
         # train
         rng, _rng = jax.random.split(rng)
-        runner_state = (train_state, log_state, obsv, _rng)
+        runner_state = (train_state, log_state, obsv, _rng, 0)
 
         runner_state, metric = jax.lax.scan(
             _update_plot, runner_state, None, config["NUM_UPDATES"]
