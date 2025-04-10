@@ -707,7 +707,7 @@ def make_train(config):
             info['delta'] = deltas_to_start
 
             transition = Transition(
-                last_done, action, value, reward, log_prob, last_obs, info, deltas_to_start,
+                done, action, value, reward, log_prob, last_obs, info, deltas_to_start,
             )
             runner_state = (
                 train_state,
