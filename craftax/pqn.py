@@ -723,7 +723,6 @@ def make_train(config):
                 train_state,
                 env_state,
                 obsv,
-                done,
                 rng,
                 update_step,
             )
