@@ -664,7 +664,12 @@ def make_train(config):
 
                 jax.debug.callback(callback, metrics, original_rng)
 
-            runner_state = (train_state, tuple(expl_state), test_metrics, rng)
+            runner_state = (
+                train_state,
+                env_state,
+                last_obs,
+                rng,
+            )
 
             return runner_state, metrics
 
