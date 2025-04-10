@@ -160,6 +160,7 @@ class CNN(nn.Module):
 
 class QNetwork(nn.Module):
     action_dim: int
+    layer_size: int
     norm_type: str = "layer_norm"
     norm_input: bool = False
     num_layers: int = 4
@@ -206,13 +207,13 @@ class QNetwork(nn.Module):
         q_val = nn.Dense(self.action_dim)(x)
 
         aux = nn.Dense(
-            self.config["LAYER_SIZE"],
+            self.layer_size,
             kernel_init=orthogonal(2),
             bias_init=constant(0.0),
         )(x)
         aux = nn.relu(aux)
         aux = nn.Dense(
-            self.config["LAYER_SIZE"],
+            self.layer_size,
             kernel_init=orthogonal(2),
             bias_init=constant(0.0),
         )(aux)
@@ -372,7 +373,7 @@ def make_train(config):
         else:
             is_symbolic = True
 
-        network = QNetwork(action_dim=action_space_size, is_symbolic=is_symbolic)
+        network = QNetwork(action_dim=action_space_size, is_symbolic=is_symbolic, layer_size=config["LAYER_SIZE"],)
 
         original_rng = rng[0]
 
