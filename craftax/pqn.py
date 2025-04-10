@@ -679,7 +679,6 @@ def make_train(config):
                 env_state,
                 last_obs,
                 rng,
-                update_step,
             ) = runner_state
             rng, _rng = jax.random.split(rng)
 
