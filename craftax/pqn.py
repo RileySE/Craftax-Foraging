@@ -680,7 +680,8 @@ def make_train(config):
                 last_obs,
                 rng,
             ) = runner_state
-            rng, _rngs = jax.random.split(rng, config["NUM_ENVS"])
+            rng, rng_a = jax.random.split(rng)
+            _rngs = jax.random.split(rng_a, config["NUM_ENVS"])
 
             # SELECT ACTION
             q_vals, aux = network.apply(
