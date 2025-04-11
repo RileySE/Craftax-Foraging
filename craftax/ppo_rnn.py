@@ -657,6 +657,8 @@ def make_train(config):
             info['hidden_state'] = hstate
             info['pred_delta'] = aux
             info['delta'] = deltas_to_start
+            info['entropy'] = pi.entropy().squeeze(0)
+            info['log_prob'] = log_prob
 
             transition = Transition(
                 last_done, action, value, reward, log_prob, last_obs, info, deltas_to_start,
@@ -692,7 +694,8 @@ def make_train(config):
                                       'player_position_y','recover','hunger','thirst','fatigue','light_level','dist_to_melee_l1',
                                       'melee_on_screen','dist_to_passive_l1','passive_on_screen','dist_to_ranged_l1',
                                       'ranged_on_screen','num_melee_nearby','num_passives_nearby','num_ranged_nearby','delta',
-                                      'pred_delta', 'num_monsters_killed', 'has_sword', 'has_pick', 'held_iron', 'value', 'episode_id']
+                                      'pred_delta', 'num_monsters_killed', 'has_sword', 'has_pick', 'held_iron', 'value',
+                            'entropy', 'log_prob', 'episode_id']
 
             # Callback function for logging hidden states
             def write_rnn_hstate(hstate, scalars, increment=0):
@@ -702,7 +705,7 @@ def make_train(config):
                                       'melee_on_screen','dist_to_passive_l1','passive_on_screen','dist_to_ranged_l1',
                                       'ranged_on_screen','num_melee_nearby','num_passives_nearby','num_ranged_nearby','delta_x',
                                       'delta_y', 'pred_delta_x', 'pred_delta_y', 'num_monsters_killed', 'has_sword',
-                                      'has_pick', 'held_iron', 'value', 'episode_id']
+                                      'has_pick', 'held_iron', 'value', 'entropy', 'log_prob', 'episode_id']
 
                 run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
                 os.makedirs(run_out_path, exist_ok=True)
@@ -767,19 +770,42 @@ def make_train(config):
             )
 
             # Log model weights
-            def save_weights_callback(weights_flat, iter):
+            def save_weights_callback(weights, iter):
+                weights_flat = jax.tree.flatten(weights)
                 run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
                 os.makedirs(run_out_path, exist_ok=True)
                 weight_filename = os.path.join(run_out_path, 'weights_{}.csv'.format(iter))
                 weight_file = open(weight_filename, 'w')
-                for weights_set in weights_flat:
-                    if len(weights_set.shape) == 1:
-                        continue
-                    np.savetxt(weight_file, np.transpose(weights_set), delimiter=',', fmt='%f')
+                weights_params = weights['params']
+                for weights_key in weights_params.keys():
+                    weight_file.write(weights_key + '\n')
+                    for layer_key in weights_params[weights_key].keys():
+                        layer_blob = weights_params[weights_key][layer_key]
+                        print(weights_key, layer_key)
+                        weight_file.write(layer_key + '\n')
+                        # TODO make this properly recursive
+                        if type(layer_blob) == dict:
+                            for sublayer_key in layer_blob.keys():
+                                print(sublayer_key)
+                                sublayer_blob = layer_blob[sublayer_key]
+                                weight_file.write(sublayer_key + '\n')
+                                print(sublayer_blob)
+                                np.savetxt(weight_file, np.transpose(sublayer_blob), delimiter=',', fmt='%f')
+                        else:
+                            np.savetxt(weight_file, np.transpose(layer_blob), delimiter=',', fmt='%f')
+
+                #for weights_set_ind in range(len(weights_flat[0])):
+                #    weights_set = weights_flat[0][weights_set_ind]
+                    #weights_annotation = weights_flat[1][weights_set_ind]
+                #    if len(weights_set.shape) == 1:
+                #        continue
+                #    breakpoint()
+                    #np.savetxt(weight_file, weights_annotation)
+                #    np.savetxt(weight_file, np.transpose(weights_set), delimiter=',', fmt='%f')
                 print('Saving weights in file', weight_filename)
 
-            weights_flat = jax.tree.flatten(runner_state[0].params)
-            jax.debug.callback(save_weights_callback, weights_flat[0], runner_state[-1])
+
+            jax.debug.callback(save_weights_callback, runner_state[0].params, runner_state[-1])
 
             # Can we save the environment state and resume training later?
             #runner_state_copy = runner_state
