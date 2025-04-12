@@ -418,19 +418,12 @@ def make_train(config):
         # TRAINING LOOP
         def _update_step(runner_state, unused):
 
-            train_state, env_state, last_obs, test_metrics, update_step, rng, = runner_state
+            # train_state, env_state, last_obs, test_metrics, rng, = runner_state
+            train_state, expl_state, test_metrics, rng = runner_state
 
             # SAMPLE PHASE
-            def _step_env(runner_state, _):
-                # last_obs, env_state, rng = carry
-                (
-                    train_state,
-                    env_state,
-                    last_obs,
-                    test_metrics,
-                    update_step,
-                    rng,
-                ) = runner_state
+            def _step_env(carry, _):
+                last_obs, env_state, rng = carry
                 rng, rng_a, rng_s = jax.random.split(rng, 3)
                 q_vals, aux = network.apply(
                     {
@@ -466,7 +459,8 @@ def make_train(config):
                     deltas_to_start=deltas_to_start,
                 )
 
-                return (train_state, new_env_state, new_obs, test_metrics, update_step, rng), (transition, info)
+                # return (train_state, new_env_state, new_obs, test_metrics, update_step, rng), (transition, info)
+                return (new_obs, new_env_state, rng), (transition, info)
 
             # step the env
             rng, _rng = jax.random.split(rng)
@@ -664,16 +658,9 @@ def make_train(config):
 
                 jax.debug.callback(callback, metrics, original_rng)
 
-            runner_state = (
-                train_state,
-                env_state,
-                last_obs,
-                test_metrics,
-                update_step + 1,
-                rng,
-            )
+            runner_state = (train_state, tuple(expl_state), test_metrics, rng)
 
-            return runner_state, None
+            return runner_state, metrics
 
         def get_test_metrics(train_state, rng):
 
@@ -842,22 +829,22 @@ def make_train(config):
         #
         #     return runner_state, metrics
 
-        rng, _rng = jax.random.split(rng)
-        test_metrics = get_test_metrics(train_state, _rng)
-
-        obsv, log_state = env.reset(_rng, env_params)
-
-        # train
-        rng, _rng = jax.random.split(rng)
-        runner_state = (train_state, log_state, obsv, _rng, test_metrics, 0)
-
+        # rng, _rng = jax.random.split(rng)
+        # test_metrics = get_test_metrics(train_state, _rng)
+        #
+        # obsv, log_state = env.reset(_rng, env_params)
+        #
+        # # train
+        # rng, _rng = jax.random.split(rng)
+        # runner_state = (train_state, log_state, obsv, _rng, test_metrics, 0)
+        #
+        # # runner_state, metrics = jax.lax.scan(
+        # #     _update_plot, runner_state, None, config["NUM_UPDATES"]
+        # # )
+        #
         # runner_state, metrics = jax.lax.scan(
-        #     _update_plot, runner_state, None, config["NUM_UPDATES"]
+        #     _update_step, runner_state, None, config["NUM_UPDATES"]
         # )
-
-        runner_state, metrics = jax.lax.scan(
-            _update_step, runner_state, None, config["NUM_UPDATES"]
-        )
 
         # Do validation rollouts with a fixed random seed
         # Generate rng from validation-specific random seed
@@ -883,6 +870,20 @@ def make_train(config):
         #     partial(_logging_step, logging_threads=config["LOGGING_THREADS_PER_VIZ_VAL"]), val_runner_state, None,
         #     config['LOGGING_STEPS_PER_VIZ_VAL']
         # )
+
+        rng, _rng = jax.random.split(rng)
+        test_metrics = get_test_metrics(train_state, _rng)
+
+        rng, _rng = jax.random.split(rng)
+        expl_state = env.reset(_rng, env_params)
+
+        # train
+        rng, _rng = jax.random.split(rng)
+        runner_state = (train_state, expl_state, test_metrics, _rng)
+
+        runner_state, metrics = jax.lax.scan(
+            _update_step, runner_state, None, config["NUM_UPDATES"]
+        )
 
         return {"runner_state": runner_state, "metrics": metrics}
 
