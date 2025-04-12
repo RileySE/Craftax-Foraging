@@ -465,7 +465,7 @@ def make_train(config):
                     deltas_to_start=deltas_to_start,
                 )
 
-                return (train_state, new_env_state, new_obs, rng, update_step), (transition, info)
+                return (train_state, new_env_state, new_obs, rng, test_metrics, update_step), (transition, info)
 
             # step the env
             runner_state, (transitions, infos) = jax.lax.scan(
