@@ -774,22 +774,38 @@ def make_train(config):
                 rng,
             ), transition
 
+        # rng, _rng = jax.random.split(rng)
+        # (*expl_state, rng), memory_transitions = jax.lax.scan(
+        #     _random_step,
+        #     (*expl_state, _rng),
+        #     None,
+        #     config["MEMORY_WINDOW"] + config["NUM_STEPS"],
+        # )
+        # expl_state = tuple(expl_state)
+        #
+        # # train
+        # rng, _rng = jax.random.split(rng)
+        # runner_state = (train_state, memory_transitions, expl_state, test_metrics, _rng)
+        #
+        # runner_state, metrics = jax.lax.scan(
+        #     _update_step, runner_state, None, config["NUM_UPDATES"]
+        # )
+
         rng, _rng = jax.random.split(rng)
-        (*expl_state, rng), memory_transitions = jax.lax.scan(
-            _random_step,
-            (*expl_state, _rng),
-            None,
-            config["MEMORY_WINDOW"] + config["NUM_STEPS"],
-        )
-        expl_state = tuple(expl_state)
+        test_metrics = get_test_metrics(train_state, _rng)
+
+        rng, _rng = jax.random.split(rng)
+        expl_state = env.reset(_rng, env_params)
 
         # train
         rng, _rng = jax.random.split(rng)
-        runner_state = (train_state, memory_transitions, expl_state, test_metrics, _rng)
+        runner_state = (train_state, expl_state, test_metrics, _rng)
 
         runner_state, metrics = jax.lax.scan(
             _update_step, runner_state, None, config["NUM_UPDATES"]
         )
+
+        return {"runner_state": runner_state, "metrics": metrics}
 
         return {"runner_state": runner_state, "metrics": metrics}
 
