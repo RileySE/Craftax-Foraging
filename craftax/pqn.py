@@ -428,6 +428,7 @@ def make_train(config):
                     env_state,
                     last_obs,
                     rng,
+                    test_metrics,
                     update_step,
                 ) = runner_state
                 rng, rng_a, rng_s = jax.random.split(rng, 3)
