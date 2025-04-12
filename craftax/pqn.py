@@ -464,13 +464,13 @@ def make_train(config):
 
             # step the env
             rng, _rng = jax.random.split(rng)
-            (*runner_state, rng), (transitions, infos) = jax.lax.scan(
+            (*expl_state, rng), (transitions, infos) = jax.lax.scan(
                 _step_env,
-                (runner_state, _rng),
+                (*expl_state, _rng),
                 None,
                 config["NUM_STEPS"],
             )
-            runner_state = tuple(runner_state)
+            expl_state = tuple(expl_state)
 
             train_state = train_state.replace(
                 timesteps=train_state.timesteps
