@@ -821,27 +821,27 @@ def make_train(config):
         # Do validation rollouts with a fixed random seed
         # Generate rng from validation-specific random seed
 
-        val_rng_key = jax.random.PRNGKey(config["VALIDATION_SEED"])
-
-        rng, _rng = jax.random.split(val_rng_key)
+        # val_rng_key = jax.random.PRNGKey(config["VALIDATION_SEED"])
+        #
+        # rng, _rng = jax.random.split(val_rng_key)
 
         # RE-INIT FOR VAL RUNS
-        obsv, log_state = env.reset(_rng, env_params)
-
-        val_runner_state = (
-            runner_state[0],
-            log_state,
-            obsv,
-            rng,
-            config['VALIDATION_STEP_OFFSET'] + train_state.n_updates,
-        )
+        # obsv, log_state = env.reset(_rng, env_params)
+        #
+        # val_runner_state = (
+        #     runner_state[0],
+        #     log_state,
+        #     obsv,
+        #     rng,
+        #     config['VALIDATION_STEP_OFFSET'] + train_state.n_updates,
+        # )
 
         # Do validation logging iterations
         # TODO separate command line argument for validation logging step count?
-        val_runner_state, empty = jax.lax.scan(
-            partial(_logging_step, logging_threads=config["LOGGING_THREADS_PER_VIZ_VAL"]), val_runner_state, None,
-            config['LOGGING_STEPS_PER_VIZ_VAL']
-        )
+        # val_runner_state, empty = jax.lax.scan(
+        #     partial(_logging_step, logging_threads=config["LOGGING_THREADS_PER_VIZ_VAL"]), val_runner_state, None,
+        #     config['LOGGING_STEPS_PER_VIZ_VAL']
+        # )
 
         return {"runner_state": runner_state, "metrics": metrics}
 
