@@ -418,7 +418,7 @@ def make_train(config):
         # TRAINING LOOP
         def _update_step(runner_state, unused):
 
-            train_state, env_state, last_obs, rng, test_metrics, update_step = runner_state
+            train_state, env_state, last_obs, test_metrics, update_step, rng, = runner_state
 
             # SAMPLE PHASE
             def _step_env(runner_state, _):
@@ -427,9 +427,9 @@ def make_train(config):
                     train_state,
                     env_state,
                     last_obs,
-                    rng,
                     test_metrics,
                     update_step,
+                    rng,
                 ) = runner_state
                 rng, rng_a, rng_s = jax.random.split(rng, 3)
                 q_vals, aux = network.apply(
@@ -466,15 +466,18 @@ def make_train(config):
                     deltas_to_start=deltas_to_start,
                 )
 
-                return (train_state, new_env_state, new_obs, rng, test_metrics, update_step), (transition, info)
+                return (train_state, new_env_state, new_obs, test_metrics, update_step, rng), (transition, info)
 
             # step the env
-            runner_state, (transitions, infos) = jax.lax.scan(
+            rng, _rng = jax.random.split(rng)
+            (*runner_state, rng), (transitions, infos) = jax.lax.scan(
                 _step_env,
-                runner_state,
+                (runner_state, _rng),
                 None,
                 config["NUM_STEPS"],
             )
+            runner_state = tuple(runner_state)
+
             train_state = train_state.replace(
                 timesteps=train_state.timesteps
                           + config["NUM_STEPS"] * config["NUM_ENVS"]
@@ -650,19 +653,14 @@ def make_train(config):
             if config["WANDB_MODE"] != "disabled":
 
                 def callback(metrics, original_rng):
-
-                    # log at intervals
-                    if (
-                            metrics["update_steps"] % config.get("WANDB_LOG_INTERVAL", 128) == 0
-                    ):
-                        if config.get("WANDB_LOG_ALL_SEEDS", False):
-                            metrics.update(
-                                {
-                                    f"rng{int(original_rng)}/{k}": v
-                                    for k, v in metrics.items()
-                                }
-                            )
-                        wandb.log(metrics, step=metrics["update_steps"])
+                    if config.get("WANDB_LOG_ALL_SEEDS", False):
+                        metrics.update(
+                            {
+                                f"rng{int(original_rng)}/{k}": v
+                                for k, v in metrics.items()
+                            }
+                        )
+                    wandb.log(metrics, step=metrics["update_steps"])
 
                 jax.debug.callback(callback, metrics, original_rng)
 
@@ -670,12 +668,12 @@ def make_train(config):
                 train_state,
                 env_state,
                 last_obs,
-                rng,
                 test_metrics,
                 update_step + 1,
+                rng,
             )
 
-            return runner_state, metrics
+            return runner_state, None
 
         def get_test_metrics(train_state, rng):
 
@@ -707,32 +705,6 @@ def make_train(config):
 
             _, infos = jax.lax.scan(
                 _env_step, (env_state, init_obs, _rng), None, config["TEST_NUM_STEPS"]
-            )
-            # return mean of done infos
-            done_infos = jax.tree_util.tree_map(
-                lambda x: (x * infos["returned_episode"]).sum()
-                          / infos["returned_episode"].sum(),
-                infos,
-            )
-            return done_infos
-
-            rng, _rng = jax.random.split(rng)
-            init_obs, env_state = test_env.reset(_rng, env_params)
-            init_done = jnp.zeros((config["TEST_NUM_ENVS"]), dtype=bool)
-            init_action = jnp.zeros((config["TEST_NUM_ENVS"]), dtype=int)
-            init_hs = network.initialize_carry(
-                config["TEST_NUM_ENVS"]
-            )  # (n_envs, hs_size)
-            step_state = (
-                init_hs,
-                init_obs,
-                init_done,
-                init_action,
-                env_state,
-                _rng,
-            )
-            step_state, infos = jax.lax.scan(
-                _greedy_env_step, step_state, None, config["TEST_NUM_STEPS"]
             )
             # return mean of done infos
             done_infos = jax.tree_util.tree_map(
