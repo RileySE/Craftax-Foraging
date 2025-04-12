@@ -674,7 +674,7 @@ def make_train(config):
                 update_step + 1,
             )
 
-            return runner_state, metrics
+            return runner_state, None
 
         def get_test_metrics(train_state, rng):
 
