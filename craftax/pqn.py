@@ -725,7 +725,7 @@ def make_train(config):
 
             # step env
             rng, rng_s  = jax.random.split(rng)
-            new_obs, new_env_state, reward, new_done, info = env.step(
+            new_obs, new_env_state, reward, new_done, info = env_viz.step(
                 rng_s, env_state, new_action, env_params
             )
 
