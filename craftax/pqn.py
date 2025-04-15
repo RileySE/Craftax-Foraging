@@ -914,13 +914,13 @@ def make_train(config):
         rng, _rng = jax.random.split(rng)
         runner_state = (train_state, expl_state, test_metrics, _rng)
 
-        # runner_state, metrics = jax.lax.scan(
-        #     _update_step, runner_state, None, config["NUM_UPDATES"]
-        # )
-
         runner_state, metrics = jax.lax.scan(
-            _update_plot, runner_state, None, config["NUM_UPDATES"]
+            _update_step, runner_state, None, config["NUM_UPDATES"]
         )
+
+        # runner_state, metrics = jax.lax.scan(
+        #     _update_plot, runner_state, None, config["NUM_UPDATES"]
+        # )
 
         return {"runner_state": runner_state, "metrics": metrics}
 
