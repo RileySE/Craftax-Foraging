@@ -907,7 +907,7 @@ def make_train(config):
             return runner_state, metrics
 
         rng, _rng = jax.random.split(rng)
-        test_metrics = get_test_metrics(train_state, _rng)
+        # test_metrics = get_test_metrics(train_state, _rng)
 
         rng, _rng = jax.random.split(rng)
         expl_state = env.reset(_rng, env_params)
