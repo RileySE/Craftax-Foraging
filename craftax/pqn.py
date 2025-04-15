@@ -761,13 +761,77 @@ def make_train(config):
 
             return runner_state, transition
 
-
-
-
         def _logging_step(runner_state, unused, logging_threads):
             runner_state, minibatch = jax.lax.scan(
                 _env_step_viz, runner_state, None, config['STEPS_PER_VIZ']
             )
+
+            # Add new logging fields here
+            fields_to_log = ['health', 'food', 'drink', 'energy', 'done', 'is_sleeping', 'is_resting',
+                             'player_position_x',
+                             'player_position_y', 'recover', 'hunger', 'thirst', 'fatigue', 'light_level',
+                             'dist_to_melee_l1',
+                             'melee_on_screen', 'dist_to_passive_l1', 'passive_on_screen', 'dist_to_ranged_l1',
+                             'ranged_on_screen', 'num_melee_nearby', 'num_passives_nearby', 'num_ranged_nearby',
+                             'delta',
+                             'pred_delta', 'num_monsters_killed', 'has_sword', 'has_pick', 'held_iron', 'value',
+                             'episode_id']
+
+            # Callback function for logging the scalars
+            def write_scalars(scalars, increment=0):
+
+                header_field_names = ['health', 'food', 'drink', 'energy', 'done', 'is_sleeping', 'is_resting',
+                                      'player_position_x',
+                                      'player_position_y', 'recover', 'hunger', 'thirst', 'fatigue', 'light_level',
+                                      'dist_to_melee_l1',
+                                      'melee_on_screen', 'dist_to_passive_l1', 'passive_on_screen', 'dist_to_ranged_l1',
+                                      'ranged_on_screen', 'num_melee_nearby', 'num_passives_nearby',
+                                      'num_ranged_nearby', 'delta_x',
+                                      'delta_y', 'pred_delta_x', 'pred_delta_y', 'num_monsters_killed', 'has_sword',
+                                      'has_pick', 'held_iron', 'value', 'episode_id']
+
+                run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
+                os.makedirs(run_out_path, exist_ok=True)
+                # Assemble header for the scalar file(s)
+                scalar_file_header = 'action'
+                for key in header_field_names:
+                    scalar_file_header += ',' + key
+
+                # We save to temp files and then append to the target file since numpy apparently cannot write files in append mode for some reason
+                for i in range(logging_threads):
+                    out_filename_scalars = os.path.join(run_out_path, 'scalars_{}_{}.csv'.format(increment, i))
+                    np.savetxt(temp_filename,
+                               scalars[:, i, :], delimiter=',', fmt='%f',
+                               header=scalar_file_header
+                               )
+                    temp_file = open(temp_filename, 'r')
+                    out_file_scalars = open(out_filename_scalars, 'a+')
+                    out_file_scalars.write(temp_file.read())
+                    temp_file.close()
+                    out_file_scalars.close()
+                    print('Writing log file', out_filename_hstates)
+
+            # Add the specified field to the logging array
+            # Also assembles the header for the log file itself
+            def add_field_to_log_array(info_dict, log_array, field_key):
+                field_value = info_dict[field_key]
+                if len(field_value.shape) < 3:
+                    new_shape = field_value.shape + (1,)
+                    field_value = field_value.reshape(new_shape)
+                else:
+                    field_value = field_value.squeeze()
+                log_array = jnp.concatenate([log_array, field_value], axis=2)
+
+                return log_array
+
+            # Assemble logging variable array
+            log_array = minibatch.info['action'].reshape(minibatch.info['action'].shape + (1,))
+
+            # Yes this is a for loop in the JAX code but this stuff was getting done in serial before anyway and it's cheap operations
+            for field_to_log in fields_to_log:
+                log_array = add_field_to_log_array(traj_batch.info, log_array, field_to_log)
+
+            jax.debug.callback(write_scalars, log_array, runner_state[0].n_updates)
 
             return runner_state, None
 
