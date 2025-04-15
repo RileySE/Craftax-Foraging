@@ -705,7 +705,7 @@ def make_train(config):
             train_state, expl_state, test_metrics, rng = runner_state
             rng, rng_a  = jax.random.split(rng)
 
-            obs = expl_state[0]
+            last_obs = expl_state[0]
             env_state = expl_state[1]
 
             # select action using epsilon greedy
@@ -714,7 +714,7 @@ def make_train(config):
                     "params": train_state.params,
                     "batch_stats": train_state.batch_stats,
                 },
-                obs,
+                last_obs,
                 train=False,
             )
 
