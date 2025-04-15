@@ -733,9 +733,6 @@ def make_train(config):
             starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
             deltas_to_start = env_state.env_state.player_position - starting_pos
 
-            print("q_vals shape", q_vals.shape)
-            print("new_action shape", new_action.shape)
-
             # use the values in new_action to get the q_vals
             q_vals_action_taken = jnp.take_along_axis(q_vals, jnp.expand_dims(new_action, axis=-1), axis=-1).squeeze(axis=-1)
             print("q_vals_action_taken shape", q_vals_action_taken.shape)
