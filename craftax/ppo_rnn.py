@@ -655,10 +655,6 @@ def make_train(config):
             starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
             deltas_to_start = env_state.env_state.player_position - starting_pos
 
-            print("value shape: ", value.shape)
-            print("pred_delta shape: ", aux.shape)
-            print("delta shape: ", deltas_to_start.shape)
-
             # Add hstate and other non-env metrics to info so they can be logged
             info['value'] = value
             info['hidden_state'] = hstate
@@ -757,6 +753,7 @@ def make_train(config):
                 return log_array
 
             # Assemble logging variable array
+            print("action shape", traj_batch.info['action'].shape)
             log_array = traj_batch.info['action'].reshape(traj_batch.info['action'].shape + (1,))
             # Yes this is a for loop in the JAX code but this stuff was getting done in serial before anyway and it's cheap operations
             for field_to_log in fields_to_log:
