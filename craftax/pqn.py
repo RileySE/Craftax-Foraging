@@ -891,7 +891,7 @@ def make_train(config):
                 print('Saving weights in file', weight_filename)
 
             weights_flat = jax.tree.flatten(runner_state[0].params)
-            jax.debug.callback(save_weights_callback, weights_flat[0], runner_state.n_updates)
+            jax.debug.callback(save_weights_callback, weights_flat[0], runner_state[0].n_updates)
 
             # Can we save the environment state and resume training later?
             # runner_state_copy = runner_state
