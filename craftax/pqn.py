@@ -701,175 +701,66 @@ def make_train(config):
             )
             return done_infos
 
-        # def _env_step_viz(runner_state, unused):
-        #     (
-        #         train_state,
-        #         env_state,
-        #         last_obs,
-        #         rng,
-        #         update_step,
-        #     ) = runner_state
-        #     rng, rng_a = jax.random.split(rng)
-        #     _rngs = jax.random.split(rng_a, config["NUM_ENVS"])
-        #
-        #     # SELECT ACTION
-        #     q_vals, aux = network.apply(
-        #         {
-        #             "params": train_state.params,
-        #             "batch_stats": train_state.batch_stats,
-        #         },
-        #         last_obs,
-        #         train=False,
-        #     )
-        #     eps = jnp.full(config["NUM_ENVS"], eps_scheduler(train_state.n_updates))
-        #     new_action = jax.vmap(eps_greedy_exploration)(_rngs, q_vals, eps)
-        #
-        #     # STEP ENV
-        #     rng, _rng = jax.random.split(rng)
-        #     obsv, env_state, reward, done, info = env_viz.step(
-        #         _rng, env_state, new_action, env_params
-        #     )
-        #
-        #     # Compute distance to origin for aux loss
-        #     starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
-        #     deltas_to_start = env_state.env_state.player_position - starting_pos
-        #
-        #     # choose the q_vals corresponding to new_action
-        #     q_vals_actions_taken = jnp.take_along_axis(q_vals, jnp.expand_dims(new_action, axis=-1), axis=-1).squeeze(axis=-1)
-        #
-        #     info['value'] = q_vals_actions_taken
-        #     info['pred_delta'] = aux
-        #     info['delta'] = deltas_to_start
-        #
-        #     transition = Transition(
-        #         obs=last_obs,
-        #         action=new_action,
-        #         reward=config.get("REW_SCALE", 1) * reward,
-        #         done=done,
-        #         next_obs=obsv,
-        #         q_val=q_vals,
-        #         info=info,
-        #         deltas_to_start=deltas_to_start,
-        #     )
-        #     runner_state = (
-        #         train_state,
-        #         env_state,
-        #         obsv,
-        #         rng,
-        #         update_step,
-        #     )
-        #     return runner_state, transition
-        #
-        #     # Do one "step" of logging, writing the result to a file.
-        #     # Several steps can be run in series using --logging_steps_per_viz to do long rollouts without hitting memory limits
-        #
-        # def _logging_step(runner_state, unused, logging_threads):
-        #     # Visualization rollouts
-        #     runner_state, transitions = jax.lax.scan(
-        #         _env_step_viz, runner_state, None, config['STEPS_PER_VIZ']
-        #     )
-        #     # Add new logging fields here
-        #     fields_to_log = ['health','food','drink','energy','done','is_sleeping','is_resting','player_position_x',
-        #                               'player_position_y','recover','hunger','thirst','fatigue','light_level','dist_to_melee_l1',
-        #                               'melee_on_screen','dist_to_passive_l1','passive_on_screen','dist_to_ranged_l1',
-        #                               'ranged_on_screen','num_melee_nearby','num_passives_nearby','num_ranged_nearby','delta',
-        #                               'pred_delta', 'num_monsters_killed', 'has_sword', 'has_pick', 'held_iron', 'value', 'episode_id']
-        #
-        #
-        #     # Add the specified field to the logging array
-        #     # Also assembles the header for the log file itself
-        #     def add_field_to_log_array(info_dict, log_array, field_key):
-        #         field_value = info_dict[field_key]
-        #         if len(field_value.shape) < 3:
-        #             new_shape = field_value.shape + (1,)
-        #             field_value = field_value.reshape(new_shape)
-        #         else:
-        #             field_value = field_value.squeeze()
-        #         log_array = jnp.concatenate([log_array, field_value], axis=2)
-        #
-        #         return log_array
-        #
-        #     # Assemble logging variable array
-        #     log_array = transitions.info['action'].reshape(transitions.info['action'].shape + (1,))
-        #     # Yes this is a for loop in the JAX code but this stuff was getting done in serial before anyway and it's cheap operations
-        #     for field_to_log in fields_to_log:
-        #         log_array = add_field_to_log_array(transitions.info, log_array, field_to_log)
-        #
-        #     return runner_state, None
-        #
-        # # Func to interleave update steps and plotting
-        # def _update_plot(runner_state, unused):
-        #     # First, update
-        #     runner_state, metrics = jax.lax.scan(
-        #         _update_step, runner_state, None, config["UPDATES_PER_VIZ"]
-        #     )
-        #
-        #     # Log model weights
-        #     def save_weights_callback(weights_flat, iter):
-        #         run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
-        #         os.makedirs(run_out_path, exist_ok=True)
-        #         weight_filename = os.path.join(run_out_path, 'weights_{}.csv'.format(iter))
-        #         weight_file = open(weight_filename, 'w')
-        #         for weights_set in weights_flat:
-        #             if len(weights_set.shape) == 1:
-        #                 continue
-        #             np.savetxt(weight_file, np.transpose(weights_set), delimiter=',', fmt='%f')
-        #         print('Saving weights in file', weight_filename)
-        #
-        #     weights_flat = jax.tree.flatten(runner_state[0].params)
-        #     jax.debug.callback(save_weights_callback, weights_flat[0], runner_state[-1])
-        #
-        #     # Can we save the environment state and resume training later?
-        #     #runner_state_copy = runner_state
-        #
-        #     # Then do iterations of logging
-        #     runner_state, empty = jax.lax.scan(
-        #         partial(_logging_step, logging_threads = config["LOGGING_THREADS_PER_VIZ"]), runner_state, None, config['LOGGING_STEPS_PER_VIZ']
-        #     )
-        #
-        #     return runner_state, metrics
+        def _env_step_viz(runner_state, unused):
+            train_state, expl_state, test_metrics, rng = runner_state
+            rng, rng_a  = jax.random.split(rng)
 
-        # rng, _rng = jax.random.split(rng)
-        # test_metrics = get_test_metrics(train_state, _rng)
-        #
-        # obsv, log_state = env.reset(_rng, env_params)
-        #
-        # # train
-        # rng, _rng = jax.random.split(rng)
-        # runner_state = (train_state, log_state, obsv, _rng, test_metrics, 0)
-        #
-        # # runner_state, metrics = jax.lax.scan(
-        # #     _update_plot, runner_state, None, config["NUM_UPDATES"]
-        # # )
-        #
-        # runner_state, metrics = jax.lax.scan(
-        #     _update_step, runner_state, None, config["NUM_UPDATES"]
-        # )
+            obs = expl_state[0]
+            env_state = expl_state[1]
 
-        # Do validation rollouts with a fixed random seed
-        # Generate rng from validation-specific random seed
+            # select action using epsilon greedy
+            (q_vals, aux) = network.apply(
+                {
+                    "params": train_state.params,
+                    "batch_stats": train_state.batch_stats,
+                },
+                obs,
+                train=False,
+            )
 
-        # val_rng_key = jax.random.PRNGKey(config["VALIDATION_SEED"])
-        #
-        # rng, _rng = jax.random.split(val_rng_key)
+            # different eps for each env
+            _rngs = jax.random.split(rng_a, config["NUM_ENVS"])
+            eps = jnp.full(config["NUM_ENVS"], eps_scheduler(train_state.n_updates))
+            new_action = jax.vmap(eps_greedy_exploration)(_rngs, q_vals, eps)
 
-        # RE-INIT FOR VAL RUNS
-        # obsv, log_state = env.reset(_rng, env_params)
-        #
-        # val_runner_state = (
-        #     runner_state[0],
-        #     log_state,
-        #     obsv,
-        #     rng,
-        #     config['VALIDATION_STEP_OFFSET'] + train_state.n_updates,
-        # )
+            # step env
+            rng, rng_s  = jax.random.split(rng)
+            new_obs, new_env_state, reward, new_done, info = env.step(
+                rng_s, env_state, new_action, env_params
+            )
 
-        # Do validation logging iterations
-        # TODO separate command line argument for validation logging step count?
-        # val_runner_state, empty = jax.lax.scan(
-        #     partial(_logging_step, logging_threads=config["LOGGING_THREADS_PER_VIZ_VAL"]), val_runner_state, None,
-        #     config['LOGGING_STEPS_PER_VIZ_VAL']
-        # )
+            # Compute distance to origin for aux loss
+            starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
+            deltas_to_start = env_state.env_state.player_position - starting_pos
+
+            print("q_vals shape", q_vals.shape)
+            print("new_action shape", new_action.shape)
+
+            info['pred_delta'] = aux
+            info['delta'] = deltas_to_start
+
+            transition = Transition(
+                obs=last_obs,
+                action=new_action,
+                reward=config.get("REW_SCALE", 1) * reward,
+                done=new_done,
+                next_obs=new_obs,
+                q_val=q_vals,
+                info=info,
+                deltas_to_start=deltas_to_start,
+            )
+
+            return runner_state, transition
+
+
+
+
+        def _logging_step(runner_state, unused, logging_threads):
+            runner_state, minibatch = jax.lax.scan(
+                _env_step_viz, runner_state, None, config['STEPS_PER_VIZ']
+            )
+
+            return runner_state, None
 
         # Func to interleave update steps and plotting
         def _update_plot(runner_state, unused):
@@ -897,10 +788,10 @@ def make_train(config):
             # runner_state_copy = runner_state
 
             # Then do iterations of logging
-            # runner_state, empty = jax.lax.scan(
-            #     partial(_logging_step, logging_threads=config["LOGGING_THREADS_PER_VIZ"]), runner_state, None,
-            #     config['LOGGING_STEPS_PER_VIZ']
-            # )
+            runner_state, empty = jax.lax.scan(
+                partial(_logging_step, logging_threads=config["LOGGING_THREADS_PER_VIZ"]), runner_state, None,
+                config['LOGGING_STEPS_PER_VIZ']
+            )
 
             return runner_state, metrics
 
