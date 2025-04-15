@@ -744,7 +744,7 @@ def make_train(config):
             info['pred_delta'] = aux
             info['delta'] = deltas_to_start
 
-            print("info['q_vals'] shape", info['q_vals'].shape)
+            print("info['value'] shape", info['value'].shape)
             print("info['pred_delta'] shape", info['pred_delta'].shape)
             print("info['delta'] shape", info['delta'].shape)
 
