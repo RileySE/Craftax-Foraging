@@ -655,6 +655,10 @@ def make_train(config):
             starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
             deltas_to_start = env_state.env_state.player_position - starting_pos
 
+            print("value shape: ", value.shape)
+            print("pred_delta shape: ", aux.shape)
+            print("delta shape: ", deltas_to_start.shape)
+
             # Add hstate and other non-env metrics to info so they can be logged
             info['value'] = value
             info['hidden_state'] = hstate
