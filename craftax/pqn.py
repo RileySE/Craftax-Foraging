@@ -830,7 +830,7 @@ def make_train(config):
 
             # Yes this is a for loop in the JAX code but this stuff was getting done in serial before anyway and it's cheap operations
             for field_to_log in fields_to_log:
-                log_array = add_field_to_log_array(traj_batch.info, log_array, field_to_log)
+                log_array = add_field_to_log_array(minibatch.info, log_array, field_to_log)
 
             jax.debug.callback(write_scalars, log_array, runner_state[0].n_updates)
 
