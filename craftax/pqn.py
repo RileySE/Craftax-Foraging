@@ -740,9 +740,13 @@ def make_train(config):
             q_vals_action_taken = jnp.take_along_axis(q_vals, jnp.expand_dims(new_action, axis=-1), axis=-1).squeeze(axis=-1)
             print("q_vals_action_taken shape", q_vals_action_taken.shape)
 
-
+            info['q_vals'] = q_vals_action_taken
             info['pred_delta'] = aux
             info['delta'] = deltas_to_start
+
+            print("info['q_vals'] shape", info['q_vals'].shape)
+            print("info['pred_delta'] shape", info['pred_delta'].shape)
+            print("info['delta'] shape", info['delta'].shape)
 
             transition = Transition(
                 obs=last_obs,
