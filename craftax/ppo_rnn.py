@@ -753,7 +753,6 @@ def make_train(config):
                 return log_array
 
             # Assemble logging variable array
-            print("action shape", traj_batch.info['action'].shape)
             log_array = traj_batch.info['action'].reshape(traj_batch.info['action'].shape + (1,))
             # Yes this is a for loop in the JAX code but this stuff was getting done in serial before anyway and it's cheap operations
             for field_to_log in fields_to_log:

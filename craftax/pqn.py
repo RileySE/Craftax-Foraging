@@ -825,7 +825,6 @@ def make_train(config):
                 return log_array
 
             # Assemble logging variable array
-            print("minibatch.info['action'] shape", minibatch.info['action'].shape)
             log_array = minibatch.info['action'].reshape(minibatch.info['action'].shape + (1,))
 
             # Yes this is a for loop in the JAX code but this stuff was getting done in serial before anyway and it's cheap operations
