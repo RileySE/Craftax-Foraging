@@ -419,8 +419,7 @@ def make_train(config):
         def _update_step(runner_state, unused):
 
             # train_state, env_state, last_obs, test_metrics, rng, = runner_state
-            # train_state, expl_state, test_metrics, rng = runner_state
-            train_state, expl_state, rng = runner_state
+            train_state, expl_state, test_metrics, rng = runner_state
 
             # SAMPLE PHASE
             def _step_env(carry, _):
@@ -626,17 +625,17 @@ def make_train(config):
             )
             metrics.update(done_infos)
 
-            # if config.get("TEST_DURING_TRAINING", False):
-            #     rng, _rng = jax.random.split(rng)
-            #     test_metrics = jax.lax.cond(
-            #         train_state.n_updates
-            #         % int(config["NUM_UPDATES"] * config["TEST_INTERVAL"])
-            #         == 0,
-            #         lambda _: get_test_metrics(train_state, _rng),
-            #         lambda _: test_metrics,
-            #         operand=None,
-            #     )
-            #     metrics.update({f"test/{k}": v for k, v in test_metrics.items()})
+            if config.get("TEST_DURING_TRAINING", False):
+                rng, _rng = jax.random.split(rng)
+                test_metrics = jax.lax.cond(
+                    train_state.n_updates
+                    % int(config["NUM_UPDATES"] * config["TEST_INTERVAL"])
+                    == 0,
+                    lambda _: get_test_metrics(train_state, _rng),
+                    lambda _: test_metrics,
+                    operand=None,
+                )
+                metrics.update({f"test/{k}": v for k, v in test_metrics.items()})
 
             # remove achievement metrics if not logging them
             if not config.get("LOG_ACHIEVEMENTS", False):
@@ -659,49 +658,48 @@ def make_train(config):
 
                 jax.debug.callback(callback, metrics, original_rng)
 
-            # runner_state = (train_state, tuple(expl_state), test_metrics, rng)
-            runner_state = (train_state, tuple(expl_state), rng)
+            runner_state = (train_state, tuple(expl_state), test_metrics, rng)
 
             return runner_state, metrics
 
-        # def get_test_metrics(train_state, rng):
-        #
-        #     if not config.get("TEST_DURING_TRAINING", False):
-        #         return None
-        #
-        #     def _env_step(carry, _):
-        #         env_state, last_obs, rng = carry
-        #         rng, _rng = jax.random.split(rng)
-        #         q_vals = network.apply(
-        #             {
-        #                 "params": train_state.params,
-        #                 "batch_stats": train_state.batch_stats,
-        #             },
-        #             last_obs,
-        #             train=False,
-        #         )
-        #         eps = jnp.full(config["TEST_NUM_ENVS"], config["EPS_TEST"])
-        #         new_action = jax.vmap(eps_greedy_exploration)(
-        #             jax.random.split(_rng, config["TEST_NUM_ENVS"]), q_vals, eps
-        #         )
-        #         new_obs, new_env_state, reward, new_done, info = test_env.step(
-        #             _rng, env_state, new_action, env_params
-        #         )
-        #         return (new_env_state, new_obs, rng), info
-        #
-        #     rng, _rng = jax.random.split(rng)
-        #     init_obs, env_state = test_env.reset(_rng, env_params)
-        #
-        #     _, infos = jax.lax.scan(
-        #         _env_step, (env_state, init_obs, _rng), None, config["TEST_NUM_STEPS"]
-        #     )
-        #     # return mean of done infos
-        #     done_infos = jax.tree_util.tree_map(
-        #         lambda x: (x * infos["returned_episode"]).sum()
-        #                   / infos["returned_episode"].sum(),
-        #         infos,
-        #     )
-        #     return done_infos
+        def get_test_metrics(train_state, rng):
+
+            if not config.get("TEST_DURING_TRAINING", False):
+                return None
+
+            def _env_step(carry, _):
+                env_state, last_obs, rng = carry
+                rng, _rng = jax.random.split(rng)
+                q_vals = network.apply(
+                    {
+                        "params": train_state.params,
+                        "batch_stats": train_state.batch_stats,
+                    },
+                    last_obs,
+                    train=False,
+                )
+                eps = jnp.full(config["TEST_NUM_ENVS"], config["EPS_TEST"])
+                new_action = jax.vmap(eps_greedy_exploration)(
+                    jax.random.split(_rng, config["TEST_NUM_ENVS"]), q_vals, eps
+                )
+                new_obs, new_env_state, reward, new_done, info = test_env.step(
+                    _rng, env_state, new_action, env_params
+                )
+                return (new_env_state, new_obs, rng), info
+
+            rng, _rng = jax.random.split(rng)
+            init_obs, env_state = test_env.reset(_rng, env_params)
+
+            _, infos = jax.lax.scan(
+                _env_step, (env_state, init_obs, _rng), None, config["TEST_NUM_STEPS"]
+            )
+            # return mean of done infos
+            done_infos = jax.tree_util.tree_map(
+                lambda x: (x * infos["returned_episode"]).sum()
+                          / infos["returned_episode"].sum(),
+                infos,
+            )
+            return done_infos
 
         # def _env_step_viz(runner_state, unused):
         #     (
@@ -907,23 +905,22 @@ def make_train(config):
             return runner_state, metrics
 
         rng, _rng = jax.random.split(rng)
-        # test_metrics = get_test_metrics(train_state, _rng)
+        test_metrics = get_test_metrics(train_state, _rng)
 
         rng, _rng = jax.random.split(rng)
         expl_state = env.reset(_rng, env_params)
 
         # train
         rng, _rng = jax.random.split(rng)
-        # runner_state = (train_state, expl_state, test_metrics, _rng)
-        runner_state = (train_state, expl_state, _rng)
-
-        # runner_state, metrics = jax.lax.scan(
-        #     _update_step, runner_state, None, config["NUM_UPDATES"]
-        # )
+        runner_state = (train_state, expl_state, test_metrics, _rng)
 
         runner_state, metrics = jax.lax.scan(
-            _update_plot, runner_state, None, config["NUM_UPDATES"]
+            _update_step, runner_state, None, config["NUM_UPDATES"]
         )
+
+        # runner_state, metrics = jax.lax.scan(
+        #     _update_plot, runner_state, None, config["NUM_UPDATES"]
+        # )
 
         return {"runner_state": runner_state, "metrics": metrics}
 
