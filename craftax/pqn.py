@@ -249,7 +249,7 @@ def make_train(config):
     )
 
     config["NUM_UPDATES_DECAY"] = (
-            config["TOTAL_TIMESTEPS_DECAY"] // config["NUM_STEPS"] // config["NUM_ENVS"] // config['UPDATES_PER_VIZ']
+            config["TOTAL_TIMESTEPS_DECAY"] // config["NUM_STEPS"] // config["NUM_ENVS"]
     )
 
     assert (config["NUM_STEPS"] * config["NUM_ENVS"]) % config[
