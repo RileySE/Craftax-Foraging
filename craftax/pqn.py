@@ -871,6 +871,39 @@ def make_train(config):
         #     config['LOGGING_STEPS_PER_VIZ_VAL']
         # )
 
+        # Func to interleave update steps and plotting
+        def _update_plot(runner_state):
+            # First, update
+            runner_state, metrics = jax.lax.scan(
+                _update_step, runner_state, None, config["UPDATES_PER_VIZ"]
+            )
+
+            # Log model weights
+            def save_weights_callback(weights_flat, iter):
+                run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
+                os.makedirs(run_out_path, exist_ok=True)
+                weight_filename = os.path.join(run_out_path, 'weights_{}.csv'.format(iter))
+                weight_file = open(weight_filename, 'w')
+                for weights_set in weights_flat:
+                    if len(weights_set.shape) == 1:
+                        continue
+                    np.savetxt(weight_file, np.transpose(weights_set), delimiter=',', fmt='%f')
+                print('Saving weights in file', weight_filename)
+
+            weights_flat = jax.tree.flatten(runner_state[0].params)
+            jax.debug.callback(save_weights_callback, weights_flat[0], runner_state[-1])
+
+            # Can we save the environment state and resume training later?
+            # runner_state_copy = runner_state
+
+            # Then do iterations of logging
+            # runner_state, empty = jax.lax.scan(
+            #     partial(_logging_step, logging_threads=config["LOGGING_THREADS_PER_VIZ"]), runner_state, None,
+            #     config['LOGGING_STEPS_PER_VIZ']
+            # )
+
+            return runner_state, metrics
+
         rng, _rng = jax.random.split(rng)
         test_metrics = get_test_metrics(train_state, _rng)
 
@@ -881,8 +914,12 @@ def make_train(config):
         rng, _rng = jax.random.split(rng)
         runner_state = (train_state, expl_state, test_metrics, _rng)
 
+        # runner_state, metrics = jax.lax.scan(
+        #     _update_step, runner_state, None, config["NUM_UPDATES"]
+        # )
+
         runner_state, metrics = jax.lax.scan(
-            _update_step, runner_state, None, config["NUM_UPDATES"]
+            _update_plot, runner_state, None, config["NUM_UPDATES"]
         )
 
         return {"runner_state": runner_state, "metrics": metrics}
