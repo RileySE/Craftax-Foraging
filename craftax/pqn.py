@@ -872,7 +872,7 @@ def make_train(config):
         # )
 
         # Func to interleave update steps and plotting
-        def _update_plot(runner_state):
+        def _update_plot(runner_state, unused):
             # First, update
             runner_state, metrics = jax.lax.scan(
                 _update_step, runner_state, None, config["UPDATES_PER_VIZ"]
