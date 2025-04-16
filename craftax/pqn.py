@@ -735,7 +735,6 @@ def make_train(config):
 
             # use the values in new_action to get the q_vals
             q_vals_action_taken = jnp.take_along_axis(q_vals, jnp.expand_dims(new_action, axis=-1), axis=-1).squeeze(axis=-1)
-            print("q_vals_action_taken shape", q_vals_action_taken.shape)
 
             info['value'] = q_vals_action_taken
             info['pred_delta'] = aux
