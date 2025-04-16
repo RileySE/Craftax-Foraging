@@ -818,6 +818,173 @@ def make_train(config):
                 rng,
             ), transition
 
+        def _env_step_viz(runner_state, unused):
+            # train_state, expl_state, test_metrics, rng = runner_state
+            train_state, memory_transitions, expl_state, test_metrics, rng = runner_state
+            rng, rng_a  = jax.random.split(rng)
+
+            last_obs = expl_state[0]
+            env_state = expl_state[1]
+
+            # select action using epsilon greedy
+            new_hs, q_vals, aux = network.apply(
+                {
+                    "params": train_state.params,
+                    "batch_stats": train_state.batch_stats,
+                },
+                hs,
+                _obs,
+                _done,
+                _last_action,
+                train=False,
+            )  # (num_envs, hidden_size), (1, num_envs, num_actions)
+
+            # different eps for each env
+            _rngs = jax.random.split(rng_a, config["NUM_ENVS"])
+            eps = jnp.full(config["NUM_ENVS"], eps_scheduler(train_state.n_updates))
+            new_action = jax.vmap(eps_greedy_exploration)(_rngs, q_vals, eps)
+
+            # step env
+            rng, rng_s  = jax.random.split(rng)
+            new_obs, new_env_state, reward, new_done, info = env_viz.step(
+                rng_s, env_state, new_action, env_params
+            )
+
+            # Compute distance to origin for aux loss
+            starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
+            deltas_to_start = env_state.env_state.player_position - starting_pos
+
+            # use the values in new_action to get the q_vals
+            q_vals_action_taken = jnp.take_along_axis(q_vals, jnp.expand_dims(new_action, axis=-1), axis=-1).squeeze(axis=-1)
+
+            info['value'] = q_vals_action_taken
+            info['pred_delta'] = aux
+            info['delta'] = deltas_to_start
+
+            transition = Transition(
+                last_hs=hs,
+                obs=last_obs,
+                action=new_action,
+                reward=config.get("REW_SCALE", 1) * reward,
+                done=new_done,
+                last_done=last_done,
+                last_action=last_action,
+                q_val=q_vals,
+                info=info,
+                deltas_to_start=deltas_to_start,
+                next_obs=new_obs,
+            )
+
+            return runner_state, transition
+
+        def _logging_step(runner_state, unused, logging_threads):
+            runner_state, minibatch = jax.lax.scan(
+                _env_step_viz, runner_state, None, config['STEPS_PER_VIZ']
+            )
+
+            # Add new logging fields here
+            fields_to_log = ['health', 'food', 'drink', 'energy', 'done', 'is_sleeping', 'is_resting',
+                             'player_position_x',
+                             'player_position_y', 'recover', 'hunger', 'thirst', 'fatigue', 'light_level',
+                             'dist_to_melee_l1',
+                             'melee_on_screen', 'dist_to_passive_l1', 'passive_on_screen', 'dist_to_ranged_l1',
+                             'ranged_on_screen', 'num_melee_nearby', 'num_passives_nearby', 'num_ranged_nearby',
+                             'delta',
+                             'pred_delta', 'num_monsters_killed', 'has_sword', 'has_pick', 'held_iron', 'value',
+                             'episode_id']
+
+            # Callback function for logging the scalars
+            def write_scalars(scalars, increment=0):
+
+                header_field_names = ['health', 'food', 'drink', 'energy', 'done', 'is_sleeping', 'is_resting',
+                                      'player_position_x',
+                                      'player_position_y', 'recover', 'hunger', 'thirst', 'fatigue', 'light_level',
+                                      'dist_to_melee_l1',
+                                      'melee_on_screen', 'dist_to_passive_l1', 'passive_on_screen', 'dist_to_ranged_l1',
+                                      'ranged_on_screen', 'num_melee_nearby', 'num_passives_nearby',
+                                      'num_ranged_nearby', 'delta_x',
+                                      'delta_y', 'pred_delta_x', 'pred_delta_y', 'num_monsters_killed', 'has_sword',
+                                      'has_pick', 'held_iron', 'value', 'episode_id']
+
+                run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
+                os.makedirs(run_out_path, exist_ok=True)
+                # Assemble header for the scalar file(s)
+                scalar_file_header = 'action'
+                for key in header_field_names:
+                    scalar_file_header += ',' + key
+
+                # We save to temp files and then append to the target file since numpy apparently cannot write files in append mode for some reason
+                for i in range(logging_threads):
+                    out_filename_scalars = os.path.join(run_out_path, 'scalars_{}_{}.csv'.format(increment, i))
+                    temp_filename = os.path.join(run_out_path, 'temp.csv')
+                    np.savetxt(temp_filename,
+                               scalars[:, i, :], delimiter=',', fmt='%f',
+                               header=scalar_file_header
+                               )
+                    temp_file = open(temp_filename, 'r')
+                    out_file_scalars = open(out_filename_scalars, 'a+')
+                    out_file_scalars.write(temp_file.read())
+                    temp_file.close()
+                    out_file_scalars.close()
+                    print('Writing log file', temp_filename)
+
+            # Add the specified field to the logging array
+            # Also assembles the header for the log file itself
+            def add_field_to_log_array(info_dict, log_array, field_key):
+                field_value = info_dict[field_key]
+                if len(field_value.shape) < 3:
+                    new_shape = field_value.shape + (1,)
+                    field_value = field_value.reshape(new_shape)
+                else:
+                    field_value = field_value.squeeze()
+                log_array = jnp.concatenate([log_array, field_value], axis=2)
+
+                return log_array
+
+            # Assemble logging variable array
+            log_array = minibatch.info['action'].reshape(minibatch.info['action'].shape + (1,))
+
+            # Yes this is a for loop in the JAX code but this stuff was getting done in serial before anyway and it's cheap operations
+            for field_to_log in fields_to_log:
+                log_array = add_field_to_log_array(minibatch.info, log_array, field_to_log)
+
+            jax.debug.callback(write_scalars, log_array, runner_state[0].n_updates)
+
+            return runner_state, None
+
+        # Func to interleave update steps and plotting
+        def _update_plot(runner_state, unused):
+            # First, update
+            runner_state, metrics = jax.lax.scan(
+                _update_step, runner_state, None, config["UPDATES_PER_VIZ"]
+            )
+
+            # Log model weights
+            def save_weights_callback(weights_flat, iter):
+                run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
+                os.makedirs(run_out_path, exist_ok=True)
+                weight_filename = os.path.join(run_out_path, 'weights_{}.csv'.format(iter))
+                weight_file = open(weight_filename, 'w')
+                for weights_set in weights_flat:
+                    if len(weights_set.shape) == 1:
+                        continue
+                    np.savetxt(weight_file, np.transpose(weights_set), delimiter=',', fmt='%f')
+                print('Saving weights in file', weight_filename)
+
+            weights_flat = jax.tree.flatten(runner_state[0].params)
+            jax.debug.callback(save_weights_callback, weights_flat[0], runner_state[0].n_updates)
+
+            # Can we save the environment state and resume training later?
+            # runner_state_copy = runner_state
+
+            # Then do iterations of logging
+            runner_state, empty = jax.lax.scan(
+                partial(_logging_step, logging_threads=config["LOGGING_THREADS_PER_VIZ"]), runner_state, None,
+                config['LOGGING_STEPS_PER_VIZ']
+            )
+
+            return runner_state, metrics
+
         rng, _rng = jax.random.split(rng)
         (*expl_state, rng), memory_transitions = jax.lax.scan(
             _random_step,
@@ -831,8 +998,12 @@ def make_train(config):
         rng, _rng = jax.random.split(rng)
         runner_state = (train_state, memory_transitions, expl_state, test_metrics, _rng)
 
+        # runner_state, metrics = jax.lax.scan(
+        #     _update_step, runner_state, None, config["NUM_UPDATES"]
+        # )
+
         runner_state, metrics = jax.lax.scan(
-            _update_step, runner_state, None, config["NUM_UPDATES"]
+            _update_plot, runner_state, None, config["NUM_UPDATES"]
         )
 
         return {"runner_state": runner_state, "metrics": metrics}
