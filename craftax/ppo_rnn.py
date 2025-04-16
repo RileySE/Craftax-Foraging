@@ -606,6 +606,9 @@ def make_train(config):
                     to_log = create_log_dict(metric, config)
                     batch_log(update_step, to_log, config)
 
+                    for k, v in metric.items():
+                        print(f"{k}: {v}")
+
                 jax.debug.callback(callback, to_log, update_step)
 
             runner_state = (
