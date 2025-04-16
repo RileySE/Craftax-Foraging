@@ -825,6 +825,7 @@ def make_train(config):
 
             hs = expl_state[0]
             _obs = expl_state[1]
+            _done = expl_state[2]
             env_state = expl_state[4]
 
             # select action using epsilon greedy
