@@ -821,7 +821,7 @@ def make_train(config):
         def _env_step_viz(runner_state, unused):
             # train_state, expl_state, test_metrics, rng = runner_state
             train_state, memory_transitions, expl_state, test_metrics, rng = runner_state
-            hs, last_obs, last_done, last_action, env_state, rng = expl_state
+            hs, last_obs, last_done, last_action, env_state = expl_state
             rng, rng_a  = jax.random.split(rng)
 
             _obs = last_obs[np.newaxis]  # (1 (dummy time), num_envs, obs_size)
