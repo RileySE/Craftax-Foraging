@@ -824,7 +824,7 @@ def make_train(config):
             rng, rng_a  = jax.random.split(rng)
 
             hs = expl_state[0]
-            last_obs = expl_state[1]
+            _obs = expl_state[1]
             env_state = expl_state[4]
 
             # select action using epsilon greedy
