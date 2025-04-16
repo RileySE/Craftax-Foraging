@@ -59,6 +59,7 @@ def parse_args():
     parser.add_argument("--update_epochs", type=int, default=4, help="Number of update epochs")
     parser.add_argument("--num_minibatches", type=int, default=8, help="Number of minibatches")
     parser.add_argument("--gamma", type=float, default=0.99, help="Gamma value")
+    parser.add_argument("--aux_coef", type=float, default=0.1, help="Auxiliary coefficient")
     parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Max gradient norm")
     parser.add_argument("--activation", type=str, default="tanh", help="Activation function")
     parser.add_argument("--anneal_lr", action=argparse.BooleanOptionalAction, default=True)
@@ -190,7 +191,23 @@ class RNNQNetwork(nn.Module):
 
         q_vals = nn.Dense(self.action_dim)(x)
 
-        return new_hidden, q_vals
+        aux = nn.Dense(
+            self.layer_size,
+            kernel_init=orthogonal(2),
+            bias_init=constant(0.0),
+        )(x)
+        aux = nn.relu(aux)
+        aux = nn.Dense(
+            self.layer_size,
+            kernel_init=orthogonal(2),
+            bias_init=constant(0.0),
+        )(aux)
+        aux = nn.relu(aux)
+        aux = nn.Dense(2, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
+            aux
+        )
+
+        return new_hidden, q_vals, aux
 
     def initialize_carry(self, *batch_size):
         return [
@@ -207,7 +224,10 @@ class Transition:
     done: chex.Array
     last_done: chex.Array
     last_action: chex.Array
-    q_vals: chex.Array
+    next_obs: chex.Array
+    q_val: chex.Array
+    info: jnp.ndarray
+    deltas_to_start: jnp.ndarray
 
 
 class CustomTrainState(TrainState):
@@ -218,7 +238,7 @@ class CustomTrainState(TrainState):
 
 def make_train(config):
     config["NUM_UPDATES"] = (
-            config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
+            config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"] // config['UPDATES_PER_VIZ']
     )
 
     config["NUM_UPDATES_DECAY"] = (
@@ -416,7 +436,7 @@ def make_train(config):
                 _done = last_done[np.newaxis]  # (1 (dummy time), num_envs)
                 _last_action = last_action[np.newaxis]  # (1 (dummy time), num_envs)
 
-                new_hs, q_vals = network.apply(
+                new_hs, q_vals, aux = network.apply(
                     {
                         "params": train_state.params,
                         "batch_stats": train_state.batch_stats,
@@ -439,6 +459,11 @@ def make_train(config):
                     rng_s, env_state, new_action, env_params
                 )
 
+                # Compute distance to origin for aux loss
+                starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
+                # dists_to_start = jnp.linalg.norm(env_state.player_position - starting_pos, ord=1, axis=-1)
+                deltas_to_start = env_state.env_state.player_position - starting_pos
+
                 transition = Transition(
                     last_hs=hs,
                     obs=last_obs,
@@ -447,7 +472,10 @@ def make_train(config):
                     done=new_done,
                     last_done=last_done,
                     last_action=last_action,
-                    q_vals=q_vals,
+                    q_val=q_vals,
+                    next_obs=new_obs,
+                    info=info,
+                    deltas_to_start=deltas_to_start,
                 )
                 return (new_hs, new_obs, new_done, new_action, new_env_state, rng), (
                     transition,
@@ -523,7 +551,7 @@ def make_train(config):
                         return targets
 
                     def _loss_fn(params):
-                        (_, q_vals), updates = partial(
+                        (_, q_vals, aux), updates = partial(
                             network.apply, train=True, mutable=["batch_stats"]
                         )(
                             {"params": params, "batch_stats": train_state.batch_stats},
@@ -556,9 +584,15 @@ def make_train(config):
 
                         loss = 0.5 * jnp.square(chosen_action_qvals - target).mean()
 
-                        return loss, (updates, chosen_action_qvals)
+                        # Calculate auxiliary loss (predict distance to origin)
+                        # Simple L2
+                        aux_loss = jnp.square(aux - jnp.concatenate((minibatch.deltas_to_start, minibatch.deltas_to_start))).mean()
 
-                    (loss, (updates, qvals)), grads = jax.value_and_grad(
+                        total_loss = loss + config["AUX_COEF"] * aux_loss
+
+                        return total_loss, (updates, chosen_action_qvals, loss, aux_loss)
+
+                    (total_loss, (updates, qvals, critic_loss, aux_loss)), grads = jax.value_and_grad(
                         _loss_fn, has_aux=True
                     )(train_state.params)
                     train_state = train_state.apply_gradients(grads=grads)
@@ -566,7 +600,7 @@ def make_train(config):
                         grad_steps=train_state.grad_steps + 1,
                         batch_stats=updates["batch_stats"],
                     )
-                    return (train_state, rng), (loss, qvals)
+                    return (train_state, rng), (loss, qvals, critic_loss, aux_loss)
 
                 def preprocess_transition(x, rng):
                     # x: (num_steps, num_envs, ...)
@@ -588,14 +622,14 @@ def make_train(config):
                 )  # num_minibatches, num_steps+memory_window, batch_size/num_minbatches, ...
 
                 rng, _rng = jax.random.split(rng)
-                (train_state, rng), (loss, qvals) = jax.lax.scan(
+                (train_state, rng), (loss, qvals, critic_loss, aux_loss) = jax.lax.scan(
                     _learn_phase, (train_state, rng), minibatches
                 )
 
-                return (train_state, rng), (loss, qvals)
+                return (train_state, rng), (loss, qvals, critic_loss, aux_loss)
 
             rng, _rng = jax.random.split(rng)
-            (train_state, rng), (loss, qvals) = jax.lax.scan(
+            (train_state, rng), (loss, qvals, critic_loss, aux_loss) = jax.lax.scan(
                 _learn_epoch, (train_state, rng), None, config["NUM_EPOCHS"]
             )
 
@@ -604,7 +638,9 @@ def make_train(config):
                 "env_step": train_state.timesteps,
                 "update_steps": train_state.n_updates,
                 "grad_steps": train_state.grad_steps,
-                "td_loss": loss.mean(),
+                "total_loss": total_loss.mean(),
+                "aux_loss": aux_loss.mean(),
+                "td_loss": critic_loss.mean(),
                 "qvals": qvals.mean(),
             }
             done_infos = jax.tree_util.tree_map(
@@ -636,14 +672,8 @@ def make_train(config):
             if config["WANDB_MODE"] != "disabled":
 
                 def callback(metrics, original_rng):
-                    if config.get("WANDB_LOG_ALL_SEEDS", False):
-                        metrics.update(
-                            {
-                                f"rng{int(original_rng)}/{k}": v
-                                for k, v in metrics.items()
-                            }
-                        )
-                    wandb.log(metrics, step=metrics["update_steps"])
+                    to_log = create_log_dict(metrics, config)
+                    batch_log(metrics["update_steps"], to_log, config)
 
                 jax.debug.callback(callback, metrics, original_rng)
 
@@ -668,7 +698,7 @@ def make_train(config):
                 _obs = last_obs[np.newaxis]  # (1 (dummy time), num_envs, obs_size)
                 _done = last_done[np.newaxis]  # (1 (dummy time), num_envs)
                 _last_action = last_action[np.newaxis]  # (1 (dummy time), num_envs)
-                new_hs, q_vals = network.apply(
+                new_hs, q_vals, aux = network.apply(
                     {
                         "params": train_state.params,
                         "batch_stats": train_state.batch_stats,
@@ -735,7 +765,7 @@ def make_train(config):
             _obs = last_obs[np.newaxis]  # (1 (dummy time), num_envs, obs_size)
             _done = last_done[np.newaxis]  # (1 (dummy time), num_envs)
             _last_action = last_action[np.newaxis]  # (1 (dummy time), num_envs)
-            new_hs, q_vals = network.apply(
+            new_hs, q_vals, aux = network.apply(
                 {
                     "params": train_state.params,
                     "batch_stats": train_state.batch_stats,
@@ -755,6 +785,12 @@ def make_train(config):
             new_obs, new_env_state, reward, new_done, info = env.step(
                 rng_s, env_state, new_action, env_params
             )
+
+            # Compute distance to origin for aux loss
+            starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
+            # dists_to_start = jnp.linalg.norm(env_state.player_position - starting_pos, ord=1, axis=-1)
+            deltas_to_start = env_state.env_state.player_position - starting_pos
+
             transition = Transition(
                 last_hs=hs,
                 obs=last_obs,
@@ -763,7 +799,9 @@ def make_train(config):
                 done=new_done,
                 last_done=last_done,
                 last_action=last_action,
-                q_vals=q_vals,
+                q_val=q_vals,
+                info=info,
+                deltas_to_start=deltas_to_start,
             )
             return (
                 new_hs,
