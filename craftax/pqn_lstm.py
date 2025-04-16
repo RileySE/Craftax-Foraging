@@ -804,6 +804,7 @@ def make_train(config):
                 q_val=q_vals,
                 info=info,
                 deltas_to_start=deltas_to_start,
+                next_obs=new_obs,
             )
             return (
                 new_hs,
