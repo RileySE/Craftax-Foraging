@@ -823,8 +823,9 @@ def make_train(config):
             train_state, memory_transitions, expl_state, test_metrics, rng = runner_state
             rng, rng_a  = jax.random.split(rng)
 
-            last_obs = expl_state[0]
-            env_state = expl_state[1]
+            hs = expl_state[0]
+            last_obs = expl_state[1]
+            env_state = expl_state[4]
 
             # select action using epsilon greedy
             new_hs, q_vals, aux = network.apply(
