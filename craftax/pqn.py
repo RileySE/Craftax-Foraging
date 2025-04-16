@@ -802,7 +802,7 @@ def make_train(config):
                     out_file_scalars.write(temp_file.read())
                     temp_file.close()
                     out_file_scalars.close()
-                    print('Writing log file', out_filename_hstates)
+                    print('Writing log file', temp_filename)
 
             # Add the specified field to the logging array
             # Also assembles the header for the log file itself
