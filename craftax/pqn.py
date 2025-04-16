@@ -650,8 +650,8 @@ def make_train(config):
                     to_log = create_log_dict(metrics, config)
                     batch_log(metrics["update_steps"], to_log, config)
 
-                for k, v in metrics.items():
-                    print(f"{k}: {v}")
+                    for k, v in metrics.items():
+                        print(f"{k}: {v}")
 
                 jax.debug.callback(callback, metrics, original_rng)
 
