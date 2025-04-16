@@ -861,6 +861,7 @@ def make_train(config):
             q_vals_action_taken = jnp.take_along_axis(q_vals, jnp.expand_dims(new_action, axis=-1), axis=-1).squeeze(axis=-1)
 
             info['value'] = q_vals_action_taken
+            info['hidden_state'] = new_hs
             info['pred_delta'] = aux
             info['delta'] = deltas_to_start
 
