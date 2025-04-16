@@ -602,7 +602,7 @@ def make_train(config):
                         grad_steps=train_state.grad_steps + 1,
                         batch_stats=updates["batch_stats"],
                     )
-                    return (train_state, rng), (loss, qvals, critic_loss, aux_loss)
+                    return (train_state, rng), (total_loss, qvals, critic_loss, aux_loss)
 
                 def preprocess_transition(x, rng):
                     # x: (num_steps, num_envs, ...)
