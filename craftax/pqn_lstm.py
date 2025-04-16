@@ -150,6 +150,7 @@ class ScannedRNN(nn.Module):
 
 class RNNQNetwork(nn.Module):
     action_dim: int
+    layer_size: int
     hidden_size: int = 512
     num_layers: int = 4
     num_rnn_layers: int = 1
