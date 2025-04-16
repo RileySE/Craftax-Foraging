@@ -624,14 +624,14 @@ def make_train(config):
                 )  # num_minibatches, num_steps+memory_window, batch_size/num_minbatches, ...
 
                 rng, _rng = jax.random.split(rng)
-                (train_state, rng), (loss, qvals, critic_loss, aux_loss) = jax.lax.scan(
+                (train_state, rng), (total_loss, qvals, critic_loss, aux_loss) = jax.lax.scan(
                     _learn_phase, (train_state, rng), minibatches
                 )
 
-                return (train_state, rng), (loss, qvals, critic_loss, aux_loss)
+                return (train_state, rng), (total_loss, qvals, critic_loss, aux_loss)
 
             rng, _rng = jax.random.split(rng)
-            (train_state, rng), (loss, qvals, critic_loss, aux_loss) = jax.lax.scan(
+            (train_state, rng), (total_loss, qvals, critic_loss, aux_loss) = jax.lax.scan(
                 _learn_epoch, (train_state, rng), None, config["NUM_EPOCHS"]
             )
 
