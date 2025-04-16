@@ -792,6 +792,7 @@ def make_train(config):
                 # We save to temp files and then append to the target file since numpy apparently cannot write files in append mode for some reason
                 for i in range(logging_threads):
                     out_filename_scalars = os.path.join(run_out_path, 'scalars_{}_{}.csv'.format(increment, i))
+                    temp_filename = os.path.join(run_out_path, 'temp.csv')
                     np.savetxt(temp_filename,
                                scalars[:, i, :], delimiter=',', fmt='%f',
                                header=scalar_file_header
