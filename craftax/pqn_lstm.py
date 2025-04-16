@@ -845,9 +845,6 @@ def make_train(config):
             _rngs = jax.random.split(rng_a, config["NUM_ENVS"])
             eps = jnp.full(config["NUM_ENVS"], eps_scheduler(train_state.n_updates))
             q_vals = q_vals.squeeze()
-            print("eps shape: ", eps.shape)
-            print("q_vals shape: ", q_vals.shape)
-            print("_rngs shape: ", _rngs.shape)
             new_action = jax.vmap(eps_greedy_exploration)(_rngs, q_vals, eps)
 
             # step env
