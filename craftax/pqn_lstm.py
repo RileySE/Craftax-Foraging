@@ -374,6 +374,7 @@ def make_train(config):
             norm_type=config["NORM_TYPE"],
             norm_input=config.get("NORM_INPUT", False),
             add_last_action=config.get("ADD_LAST_ACTION", False),
+            layer_size=config["LAYER_SIZE"],
         )
 
 
