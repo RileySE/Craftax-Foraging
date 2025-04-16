@@ -885,6 +885,10 @@ def make_train(config):
                 _env_step_viz, runner_state, None, config['STEPS_PER_VIZ']
             )
 
+            hidden_states = minibatch.info['hidden_state']
+            # Null this for memory savings
+            minibatch.info['hidden_state'] = None
+
             # Add new logging fields here
             fields_to_log = ['health', 'food', 'drink', 'energy', 'done', 'is_sleeping', 'is_resting',
                              'player_position_x',
@@ -897,7 +901,7 @@ def make_train(config):
                              'episode_id']
 
             # Callback function for logging the scalars
-            def write_scalars(scalars, increment=0):
+            def write_rnn_hstate(hstate, scalars, increment=0):
 
                 header_field_names = ['health', 'food', 'drink', 'energy', 'done', 'is_sleeping', 'is_resting',
                                       'player_position_x',
@@ -918,6 +922,16 @@ def make_train(config):
 
                 # We save to temp files and then append to the target file since numpy apparently cannot write files in append mode for some reason
                 for i in range(logging_threads):
+                    out_filename_hstates = os.path.join(run_out_path, 'hstates_{}_{}.csv'.format(increment, i))
+                    temp_filename = os.path.join(run_out_path, 'temp.csv')
+                    np.savetxt(temp_filename,
+                               hstate[:, i, :], delimiter=',')
+                    temp_file = open(temp_filename, 'r')
+                    out_file_hstates = open(out_filename_hstates, 'a+')
+                    out_file_hstates.write(temp_file.read())
+                    out_file_hstates.close()
+                    temp_file.close()
+                    # Then do the same thing for the scalars
                     out_filename_scalars = os.path.join(run_out_path, 'scalars_{}_{}.csv'.format(increment, i))
                     temp_filename = os.path.join(run_out_path, 'temp.csv')
                     np.savetxt(temp_filename,
@@ -951,7 +965,7 @@ def make_train(config):
             for field_to_log in fields_to_log:
                 log_array = add_field_to_log_array(minibatch.info, log_array, field_to_log)
 
-            jax.debug.callback(write_scalars, log_array, runner_state[0].n_updates)
+            jax.debug.callback(write_rnn_hstate, hidden_states, log_array, runner_state[0].n_updates)
 
             return runner_state, None
 
