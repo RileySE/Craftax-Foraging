@@ -647,19 +647,8 @@ def make_train(config):
             if config["WANDB_MODE"] != "disabled":
 
                 def callback(metrics, original_rng):
-                    # if config.get("WANDB_LOG_ALL_SEEDS", False):
-                    #     metrics.update(
-                    #         {
-                    #             f"rng{int(original_rng)}/{k}": v
-                    #             for k, v in metrics.items()
-                    #         }
-                    #     )
-                    # wandb.log(metrics, step=metrics["update_steps"])
                     to_log = create_log_dict(metrics, config)
                     batch_log(metrics["update_steps"], to_log, config)
-
-                    for key, value in metrics.items():
-                        print(f"{key}: {value}, type: {type(value)}")
 
                 jax.debug.callback(callback, metrics, original_rng)
 
