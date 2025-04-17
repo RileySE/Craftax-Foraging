@@ -777,31 +777,18 @@ def make_train(config):
                 weight_filename = os.path.join(run_out_path, 'weights_{}.csv'.format(iter))
                 weight_file = open(weight_filename, 'w')
                 weights_params = weights['params']
-                for weights_key in weights_params.keys():
-                    weight_file.write(weights_key + '\n')
-                    for layer_key in weights_params[weights_key].keys():
-                        layer_blob = weights_params[weights_key][layer_key]
-                        print(weights_key, layer_key)
-                        weight_file.write(layer_key + '\n')
-                        # TODO make this properly recursive
-                        if type(layer_blob) == dict:
-                            for sublayer_key in layer_blob.keys():
-                                print(sublayer_key)
-                                sublayer_blob = layer_blob[sublayer_key]
-                                weight_file.write(sublayer_key + '\n')
-                                print(sublayer_blob)
-                                np.savetxt(weight_file, np.transpose(sublayer_blob), delimiter=',', fmt='%f')
-                        else:
-                            np.savetxt(weight_file, np.transpose(layer_blob), delimiter=',', fmt='%f')
 
-                #for weights_set_ind in range(len(weights_flat[0])):
-                #    weights_set = weights_flat[0][weights_set_ind]
-                    #weights_annotation = weights_flat[1][weights_set_ind]
-                #    if len(weights_set.shape) == 1:
-                #        continue
-                #    breakpoint()
-                    #np.savetxt(weight_file, weights_annotation)
-                #    np.savetxt(weight_file, np.transpose(weights_set), delimiter=',', fmt='%f')
+                def save_weight_dict(curr_value, key_string=''):
+                    if type(curr_value) != dict:
+                        np.savetxt(weight_file, np.transpose(curr_value), delimiter=',', fmt='%f', header=key_string)
+                        return True
+                    else:
+                        for key in curr_value.keys():
+                            save_weight_dict(curr_value[key], key_string + '/' + key)
+                    return True
+
+                save_weight_dict(weights_params)
+
                 print('Saving weights in file', weight_filename)
 
 
