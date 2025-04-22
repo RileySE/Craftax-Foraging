@@ -232,7 +232,7 @@ class RNNQNetwork(nn.Module):
         #     new_hidden.append(hidden_aux)
 
         rnn_in = (x, done)
-        hidden_aux, x = ScannedRNN()(hidden[i], rnn_in)
+        hidden_aux, x = ScannedRNN()(hidden, rnn_in)
 
         q_vals = nn.Dense(self.action_dim)(x)
 
