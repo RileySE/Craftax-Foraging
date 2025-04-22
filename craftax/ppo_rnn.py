@@ -109,11 +109,16 @@ class ScannedRNN(nn.Module):
         """Applies the module."""
         rnn_state = carry
         ins, resets = x
+
+        print("ins", ins)
+        print("rnn_state before", rnn_state)
+
         rnn_state = jnp.where(
             resets[:, np.newaxis],
             self.initialize_carry(ins.shape[0], ins.shape[1]),
             rnn_state,
         )
+
 
         print("rnn_state", rnn_state)
 
