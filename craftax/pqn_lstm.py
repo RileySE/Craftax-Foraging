@@ -130,13 +130,16 @@ class ScannedRNN(nn.Module):
         ins, resets = x
         hidden_size = rnn_state[0].shape[-1]
 
-        print("hidden_size", hidden_size)
-        print("resets", resets)
+        # init_rnn_state = self.initialize_carry(hidden_size, *resets.shape)
+        # rnn_state = jax.tree_util.tree_map(
+        #     lambda init, old: jnp.where(resets[:, np.newaxis], init, old),
+        #     init_rnn_state,
+        #     rnn_state,
+        # )
 
-        init_rnn_state = self.initialize_carry(hidden_size, *resets.shape)
-        rnn_state = jax.tree_util.tree_map(
-            lambda init, old: jnp.where(resets[:, np.newaxis], init, old),
-            init_rnn_state,
+        rnn_state = jnp.where(
+            resets[:, np.newaxis],
+            self.initialize_carry(hidden_size, *resets.shape),
             rnn_state,
         )
 
