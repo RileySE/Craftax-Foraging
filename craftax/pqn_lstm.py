@@ -887,6 +887,10 @@ def make_train(config):
             )
 
             hidden_states = minibatch.info['hidden_state']
+            print("minibatch hidden_states shape: ", hidden_states.shape)
+            print("minibatch hideden_states: ", hidden_states)
+
+
             # Null this for memory savings
             minibatch.info['hidden_state'] = None
 
@@ -925,6 +929,9 @@ def make_train(config):
                 for i in range(logging_threads):
                     out_filename_hstates = os.path.join(run_out_path, 'hstates_{}_{}.csv'.format(increment, i))
                     temp_filename = os.path.join(run_out_path, 'temp.csv')
+                    print("i: ", i)
+                    print("hstate shape: ", hstate.shape)
+                    print("hstate[:, i, :] ", hstate[:, i, :])
                     np.savetxt(temp_filename,
                                hstate[:, i, :], delimiter=',')
                     temp_file = open(temp_filename, 'r')
