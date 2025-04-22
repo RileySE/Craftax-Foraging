@@ -139,7 +139,7 @@ class ScannedRNN(nn.Module):
 
         rnn_state = jnp.where(
             resets[:, np.newaxis],
-            self.initialize_carry(hidden_size, *resets.shape),
+            self.initialize_carry(ins.shape[0], ins.shape[1] ),
             rnn_state,
         )
 
