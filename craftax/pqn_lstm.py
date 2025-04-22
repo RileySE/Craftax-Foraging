@@ -887,7 +887,7 @@ def make_train(config):
             )
 
             hidden_states = minibatch.info['hidden_state']
-            print("minibatch hidden_states shape: ", hidden_states.shape)
+            print("minibatch hidden_states shape: ", len(hidden_states))
             print("minibatch hideden_states: ", hidden_states)
 
 
