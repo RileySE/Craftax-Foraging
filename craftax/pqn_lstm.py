@@ -149,9 +149,15 @@ class ScannedRNN(nn.Module):
     @staticmethod
     def initialize_carry(hidden_size, *batch_size):
         # Use a dummy key since the default state init fn is just zeros.
-        return nn.OptimizedLSTMCell(hidden_size, parent=None).initialize_carry(
+        # return nn.OptimizedLSTMCell(hidden_size, parent=None).initialize_carry(
+        #     jax.random.PRNGKey(0), (*batch_size, hidden_size)
+        # )
+
+        temp = nn.OptimizedLSTMCell(hidden_size, parent=None).initialize_carry(
             jax.random.PRNGKey(0), (*batch_size, hidden_size)
         )
+        print("temp", temp)
+        return temp
 
 class RNNQNetwork(nn.Module):
     action_dim: int
