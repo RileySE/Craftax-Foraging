@@ -687,6 +687,8 @@ def make_train(config):
             # Finally, log data associated with the visualization runs
             update_step = runner_state[-1]
             hidden_states = traj_batch.info['hidden_state']
+            print("Hidden states shape", hidden_states.shape)
+            print("Hidden states", hidden_states)
             # Null this for memory savings
             traj_batch.info['hidden_state'] = None
 
