@@ -860,6 +860,9 @@ def make_train(config):
             # use the values in new_action to get the q_vals
             q_vals_action_taken = jnp.take_along_axis(q_vals, jnp.expand_dims(new_action, axis=-1), axis=-1).squeeze(axis=-1)
 
+            print("new_hs shape: ", new_hs.shape)
+            print("new_hs: ", new_hs)
+
             info['value'] = q_vals_action_taken
             info['hidden_state'] = new_hs
             info['pred_delta'] = aux
