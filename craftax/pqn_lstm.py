@@ -150,7 +150,6 @@ def parse_args():
     #     return nn.OptimizedLSTMCell(hidden_size, parent=None).initialize_carry(
     #         jax.random.PRNGKey(0), (*batch_size, hidden_size)
     #     )
-
 class ScannedRNN(nn.Module):
     @functools.partial(
         nn.scan,
@@ -226,11 +225,14 @@ class RNNQNetwork(nn.Module):
             last_action = jax.nn.one_hot(last_action, self.action_dim)
             x = jnp.concatenate([x, last_action], axis=-1)
 
-        new_hidden = []
-        for i in range(self.num_rnn_layers):
-            rnn_in = (x, done)
-            hidden_aux, x = ScannedRNN()(hidden[i], rnn_in)
-            new_hidden.append(hidden_aux)
+        # new_hidden = []
+        # for i in range(self.num_rnn_layers):
+        #     rnn_in = (x, done)
+        #     hidden_aux, x = ScannedRNN()(hidden[i], rnn_in)
+        #     new_hidden.append(hidden_aux)
+
+        rnn_in = (x, done)
+        hidden_aux, x = ScannedRNN()(hidden[i], rnn_in)
 
         q_vals = nn.Dense(self.action_dim)(x)
 
