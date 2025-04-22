@@ -910,8 +910,6 @@ def make_train(config):
             def write_rnn_hstate(hstate, scalars, increment=0):
 
                 cell_state, hidden_state = hstate[0]
-                print("cell_state shape: ", cell_state.shape)
-                print("hidden_state shape: ", hidden_state.shape)
 
                 header_field_names = ['health', 'food', 'drink', 'energy', 'done', 'is_sleeping', 'is_resting',
                                       'player_position_x',
