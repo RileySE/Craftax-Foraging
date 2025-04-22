@@ -763,6 +763,9 @@ def make_train(config):
         init_dones = jnp.zeros((config["NUM_ENVS"]), dtype=bool)
         init_action = jnp.zeros((config["NUM_ENVS"]), dtype=int)
         init_hs = network.initialize_carry(config["NUM_ENVS"])
+
+        print("init_hs: ", init_hs)
+
         expl_state = (init_hs, obs, init_dones, init_action, env_state)
 
         # step randomly to have the initial memory window
