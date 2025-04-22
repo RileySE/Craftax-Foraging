@@ -131,10 +131,6 @@ class ScannedRNN(nn.Module):
         rnn_state = carry
         ins, resets = x
         hidden_size = rnn_state[0].shape[-1]
-
-        print("ins", ins)
-        print("rnn_state before", rnn_state)
-
         init_rnn_state = self.initialize_carry(hidden_size, *resets.shape)
         rnn_state = jax.tree_util.tree_map(
             lambda init, old: jnp.where(resets[:, np.newaxis], init, old),
@@ -149,17 +145,9 @@ class ScannedRNN(nn.Module):
     @staticmethod
     def initialize_carry(hidden_size, *batch_size):
         # Use a dummy key since the default state init fn is just zeros.
-        # return nn.OptimizedLSTMCell(hidden_size, parent=None).initialize_carry(
-        #     jax.random.PRNGKey(0), (*batch_size, hidden_size)
-        # )
-
-        temp = nn.OptimizedLSTMCell(hidden_size, parent=None).initialize_carry(
+        return nn.OptimizedLSTMCell(hidden_size, parent=None).initialize_carry(
             jax.random.PRNGKey(0), (*batch_size, hidden_size)
         )
-        print("temp", temp)
-        print("batch_size", batch_size)
-        print("hidden_size", hidden_size)
-        return temp
 
 class RNNQNetwork(nn.Module):
     action_dim: int
@@ -778,9 +766,6 @@ def make_train(config):
         init_action = jnp.zeros((config["NUM_ENVS"]), dtype=int)
         init_hs = network.initialize_carry(config["NUM_ENVS"])
 
-        print("init_hs: ", init_hs)
-        print("obs: ", obs)
-
         expl_state = (init_hs, obs, init_dones, init_action, env_state)
 
         # step randomly to have the initial memory window
@@ -914,8 +899,6 @@ def make_train(config):
             )
 
             hidden_states = minibatch.info['hidden_state']
-            print("minibatch hidden_states shape: ", len(hidden_states))
-            print("minibatch hideden_states: ", hidden_states)
 
 
             # Null this for memory savings
@@ -934,6 +917,10 @@ def make_train(config):
 
             # Callback function for logging the scalars
             def write_rnn_hstate(hstate, scalars, increment=0):
+
+                cell_state, hidden_state = hstate
+                print("cell_state shape: ", cell_state.shape)
+                print("hidden_state shape: ", hidden_state.shape)
 
                 header_field_names = ['health', 'food', 'drink', 'energy', 'done', 'is_sleeping', 'is_resting',
                                       'player_position_x',
