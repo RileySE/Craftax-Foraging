@@ -448,7 +448,10 @@ def make_train(config):
                 jnp.zeros((1, 1)),  # (time_step, batch size)
                 jnp.zeros((1, 1)),  # (time_step, batch size)
             )  # (obs, dones, last_actions)
-            init_hs = network.initialize_carry(1)  # (batch_size, hidden_dim)
+            # init_hs = network.initialize_carry(1)  # (batch_size, hidden_dim)
+            init_hstate = ScannedRNN.initialize_carry(
+                config["NUM_ENVS"], config["LAYER_SIZE"]
+            )
             network_variables = network.init(rng, init_hs, *init_x, train=False)
             tx = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
