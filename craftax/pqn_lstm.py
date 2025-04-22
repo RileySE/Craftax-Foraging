@@ -864,6 +864,7 @@ def make_train(config):
 
             print("new_hs: ", new_hs)
             print("len new_hs: ", len(new_hs))
+            print("_obs shape: ", _obs.shape)
 
             info['value'] = q_vals_action_taken
             info['hidden_state'] = new_hs
@@ -887,6 +888,9 @@ def make_train(config):
             return runner_state, transition
 
         def _logging_step(runner_state, unused, logging_threads):
+
+            print("runner_state in logging step: ", runner_state)
+
             runner_state, minibatch = jax.lax.scan(
                 _env_step_viz, runner_state, None, config['STEPS_PER_VIZ']
             )
