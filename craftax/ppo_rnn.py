@@ -131,8 +131,11 @@ class ScannedRNN(nn.Module):
     @staticmethod
     def initialize_carry(batch_size, hidden_size):
         # Use a dummy key since the default state init fn is just zeros.
-        cell = nn.GRUCell(features=hidden_size)
-        return cell.initialize_carry(jax.random.PRNGKey(0), (batch_size, hidden_size))
+        # cell = nn.GRUCell(features=hidden_size)
+        # return cell.initialize_carry(jax.random.PRNGKey(0), (batch_size, hidden_size))
+        temp = nn.GRUCell(features=hidden_size).initialize_carry(jax.random.PRNGKey(0), (batch_size, hidden_size))
+        print("temp", temp)
+        return temp
 
 class ActorCriticRNN(nn.Module):
     action_dim: Sequence[int]
