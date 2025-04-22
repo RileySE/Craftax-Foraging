@@ -137,6 +137,8 @@ class ScannedRNN(nn.Module):
             rnn_state,
         )
 
+        print("rnn_state", rnn_state)
+
         new_rnn_state, y = nn.OptimizedLSTMCell(hidden_size)(rnn_state, ins)
 
         print("new_rnn_state", new_rnn_state)

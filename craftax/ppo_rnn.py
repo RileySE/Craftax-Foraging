@@ -114,6 +114,9 @@ class ScannedRNN(nn.Module):
             self.initialize_carry(ins.shape[0], ins.shape[1]),
             rnn_state,
         )
+
+        print("rnn_state", rnn_state)
+
         new_rnn_state, y = nn.GRUCell(features=ins.shape[1])(rnn_state, ins)
 
         print("new_rnn_state", new_rnn_state)
