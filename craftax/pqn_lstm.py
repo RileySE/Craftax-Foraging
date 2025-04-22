@@ -918,7 +918,8 @@ def make_train(config):
             # Callback function for logging the scalars
             def write_rnn_hstate(hstate, scalars, increment=0):
 
-                cell_state, hidden_state = hstate
+                cell_state = hstate[0]
+                hidden_state = hstate[1]
                 print("cell_state shape: ", cell_state.shape)
                 print("hidden_state shape: ", hidden_state.shape)
 
