@@ -946,8 +946,10 @@ def make_train(config):
                     print("i: ", i)
                     print("hstate shape: ", hstate.shape)
                     print("hstate[:, i, :] ", hstate[:, i, :])
+                    print("cell_state shape: ", cell_state.shape)
+                    print("cell_state[:, i, :] ", cell_state[:, i, :])
                     np.savetxt(temp_filename,
-                               hstate[:, i, :], delimiter=',')
+                               cell_state[:, i, :], delimiter=',')
                     temp_file = open(temp_filename, 'r')
                     out_file_hstates = open(out_filename_hstates, 'a+')
                     out_file_hstates.write(temp_file.read())
