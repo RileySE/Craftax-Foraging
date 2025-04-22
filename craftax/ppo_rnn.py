@@ -110,34 +110,22 @@ class ScannedRNN(nn.Module):
         rnn_state = carry
         ins, resets = x
 
-        print("ins", ins)
-        print("rnn_state before", rnn_state)
-
         rnn_state = jnp.where(
             resets[:, np.newaxis],
             self.initialize_carry(ins.shape[0], ins.shape[1]),
             rnn_state,
         )
 
-
-        print("rnn_state", rnn_state)
-
         new_rnn_state, y = nn.GRUCell(features=ins.shape[1])(rnn_state, ins)
-
-        print("new_rnn_state", new_rnn_state)
 
         return new_rnn_state, y
 
     @staticmethod
     def initialize_carry(batch_size, hidden_size):
         # Use a dummy key since the default state init fn is just zeros.
-        # cell = nn.GRUCell(features=hidden_size)
-        # return cell.initialize_carry(jax.random.PRNGKey(0), (batch_size, hidden_size))
-        temp = nn.GRUCell(features=hidden_size).initialize_carry(jax.random.PRNGKey(0), (batch_size, hidden_size))
-        print("temp", temp)
-        print("batch_size", batch_size)
-        print("hidden_size", hidden_size)
-        return temp
+        cell = nn.GRUCell(features=hidden_size)
+        return cell.initialize_carry(jax.random.PRNGKey(0), (batch_size, hidden_size))
+
 
 class ActorCriticRNN(nn.Module):
     action_dim: Sequence[int]
