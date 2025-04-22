@@ -130,6 +130,9 @@ class ScannedRNN(nn.Module):
         ins, resets = x
         hidden_size = rnn_state[0].shape[-1]
 
+        print("hidden_size", hidden_size)
+        print("resets", resets)
+
         init_rnn_state = self.initialize_carry(hidden_size, *resets.shape)
         rnn_state = jax.tree_util.tree_map(
             lambda init, old: jnp.where(resets[:, np.newaxis], init, old),
@@ -137,11 +140,7 @@ class ScannedRNN(nn.Module):
             rnn_state,
         )
 
-        print("rnn_state", rnn_state)
-
         new_rnn_state, y = nn.OptimizedLSTMCell(hidden_size)(rnn_state, ins)
-
-        print("new_rnn_state", new_rnn_state)
 
         return new_rnn_state, y
 
