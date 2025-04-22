@@ -406,7 +406,6 @@ def make_train(config):
                 jnp.zeros((1, 1)),  # (time_step, batch size)
             )  # (obs, dones, last_actions)
             init_hs = network.initialize_carry(1)  # (batch_size, hidden_dim)
-            print("init_hs", init_hs)
             network_variables = network.init(rng, init_hs, *init_x, train=False)
             tx = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
@@ -435,8 +434,6 @@ def make_train(config):
             def _step_env(carry, _):
                 hs, last_obs, last_done, last_action, env_state, rng = carry
                 rng, rng_a, rng_s = jax.random.split(rng, 3)
-
-                print("hs", hs)
 
                 _obs = last_obs[np.newaxis]  # (1 (dummy time), num_envs, obs_size)
                 _done = last_done[np.newaxis]  # (1 (dummy time), num_envs)
