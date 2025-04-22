@@ -944,8 +944,6 @@ def make_train(config):
                     out_filename_hstates = os.path.join(run_out_path, 'hstates_{}_{}.csv'.format(increment, i))
                     temp_filename = os.path.join(run_out_path, 'temp.csv')
                     print("i: ", i)
-                    print("hstate shape: ", hstate.shape)
-                    print("hstate[:, i, :] ", hstate[:, i, :])
                     print("cell_state shape: ", cell_state.shape)
                     print("cell_state[:, i, :] ", cell_state[:, i, :])
                     np.savetxt(temp_filename,
