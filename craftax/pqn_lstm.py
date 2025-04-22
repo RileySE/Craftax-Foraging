@@ -934,9 +934,6 @@ def make_train(config):
                 for i in range(logging_threads):
                     out_filename_hstates = os.path.join(run_out_path, 'hstates_{}_{}.csv'.format(increment, i))
                     temp_filename = os.path.join(run_out_path, 'temp.csv')
-                    print("i: ", i)
-                    print("cell_state shape: ", cell_state.shape)
-                    print("cell_state[:, i, :] ", cell_state[:, i, :])
                     np.savetxt(temp_filename,
                                cell_state[:, i, :], delimiter=',')
                     temp_file = open(temp_filename, 'r')
@@ -956,7 +953,7 @@ def make_train(config):
                     out_file_scalars.write(temp_file.read())
                     temp_file.close()
                     out_file_scalars.close()
-                    print('Writing log file', temp_filename)
+                    print('Writing log file', out_filename_hstates)
 
             # Add the specified field to the logging array
             # Also assembles the header for the log file itself

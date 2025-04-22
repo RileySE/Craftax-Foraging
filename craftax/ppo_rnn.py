@@ -691,8 +691,6 @@ def make_train(config):
             # Finally, log data associated with the visualization runs
             update_step = runner_state[-1]
             hidden_states = traj_batch.info['hidden_state']
-            print("Hidden states shape", hidden_states.shape)
-            print("Hidden states", hidden_states)
             # Null this for memory savings
             traj_batch.info['hidden_state'] = None
 
@@ -724,7 +722,6 @@ def make_train(config):
                 for i in range(logging_threads):
                     out_filename_hstates = os.path.join(run_out_path, 'hstates_{}_{}.csv'.format(increment, i))
                     temp_filename = os.path.join(run_out_path, 'temp.csv')
-                    print("hstate[:, i, :] shape", hstate[:, i, :].shape)
                     np.savetxt(temp_filename,
                                hstate[:, i, :], delimiter=',')
                     temp_file = open(temp_filename, 'r')
