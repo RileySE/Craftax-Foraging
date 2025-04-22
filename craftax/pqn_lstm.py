@@ -434,6 +434,8 @@ def make_train(config):
                 hs, last_obs, last_done, last_action, env_state, rng = carry
                 rng, rng_a, rng_s = jax.random.split(rng, 3)
 
+                print("hs: ", hs)
+
                 _obs = last_obs[np.newaxis]  # (1 (dummy time), num_envs, obs_size)
                 _done = last_done[np.newaxis]  # (1 (dummy time), num_envs)
                 _last_action = last_action[np.newaxis]  # (1 (dummy time), num_envs)
