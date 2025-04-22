@@ -114,9 +114,45 @@ def parse_args():
     return parser.parse_args()
 
 
-class ScannedRNN(nn.Module):
+# class ScannedRNN(nn.Module):
+#
+#     @partial(
+#         nn.scan,
+#         variable_broadcast="params",
+#         in_axes=0,
+#         out_axes=0,
+#         split_rngs={"params": False},
+#     )
+#     @nn.compact
+#     def __call__(self, carry, x):
+#         """Applies the module."""
+#         rnn_state = carry
+#         ins, resets = x
+#         hidden_size = rnn_state[0].shape[-1]
+#
+#         print("ins", ins)
+#         print("rnn_state before", rnn_state)
+#
+#         init_rnn_state = self.initialize_carry(hidden_size, *resets.shape)
+#         rnn_state = jax.tree_util.tree_map(
+#             lambda init, old: jnp.where(resets[:, np.newaxis], init, old),
+#             init_rnn_state,
+#             rnn_state,
+#         )
+#
+#         new_rnn_state, y = nn.OptimizedLSTMCell(hidden_size)(rnn_state, ins)
+#
+#         return new_rnn_state, y
 
-    @partial(
+    # @staticmethod
+    # def initialize_carry(hidden_size, *batch_size):
+    #     # Use a dummy key since the default state init fn is just zeros.
+    #     return nn.OptimizedLSTMCell(hidden_size, parent=None).initialize_carry(
+    #         jax.random.PRNGKey(0), (*batch_size, hidden_size)
+    #     )
+
+class ScannedRNN(nn.Module):
+    @functools.partial(
         nn.scan,
         variable_broadcast="params",
         in_axes=0,
@@ -128,31 +164,30 @@ class ScannedRNN(nn.Module):
         """Applies the module."""
         rnn_state = carry
         ins, resets = x
-        hidden_size = rnn_state[0].shape[-1]
 
-        # init_rnn_state = self.initialize_carry(hidden_size, *resets.shape)
-        # rnn_state = jax.tree_util.tree_map(
-        #     lambda init, old: jnp.where(resets[:, np.newaxis], init, old),
-        #     init_rnn_state,
-        #     rnn_state,
-        # )
+        print("ins", ins)
+        print("rnn_state before", rnn_state)
 
         rnn_state = jnp.where(
             resets[:, np.newaxis],
-            self.initialize_carry(ins.shape[0], ins.shape[1] ),
+            self.initialize_carry(ins.shape[0], ins.shape[1]),
             rnn_state,
         )
 
-        new_rnn_state, y = nn.OptimizedLSTMCell(hidden_size)(rnn_state, ins)
+
+        print("rnn_state", rnn_state)
+
+        new_rnn_state, y = nn.GRUCell(features=ins.shape[1])(rnn_state, ins)
+
+        print("new_rnn_state", new_rnn_state)
 
         return new_rnn_state, y
 
     @staticmethod
-    def initialize_carry(hidden_size, *batch_size):
+    def initialize_carry(batch_size, hidden_size):
         # Use a dummy key since the default state init fn is just zeros.
-        return nn.OptimizedLSTMCell(hidden_size, parent=None).initialize_carry(
-            jax.random.PRNGKey(0), (*batch_size, hidden_size)
-        )
+        cell = nn.GRUCell(features=hidden_size)
+        return cell.initialize_carry(jax.random.PRNGKey(0), (batch_size, hidden_size))
 
 
 class RNNQNetwork(nn.Module):
