@@ -135,6 +135,8 @@ class ScannedRNN(nn.Module):
         # return cell.initialize_carry(jax.random.PRNGKey(0), (batch_size, hidden_size))
         temp = nn.GRUCell(features=hidden_size).initialize_carry(jax.random.PRNGKey(0), (batch_size, hidden_size))
         print("temp", temp)
+        print("batch_size", batch_size)
+        print("hidden_size", hidden_size)
         return temp
 
 class ActorCriticRNN(nn.Module):
