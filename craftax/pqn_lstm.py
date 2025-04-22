@@ -765,6 +765,7 @@ def make_train(config):
         init_hs = network.initialize_carry(config["NUM_ENVS"])
 
         print("init_hs: ", init_hs)
+        print("obs: ", obs)
 
         expl_state = (init_hs, obs, init_dones, init_action, env_state)
 
