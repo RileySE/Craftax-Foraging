@@ -115,6 +115,9 @@ class ScannedRNN(nn.Module):
             rnn_state,
         )
         new_rnn_state, y = nn.GRUCell(features=ins.shape[1])(rnn_state, ins)
+
+        print("new_rnn_state", new_rnn_state)
+
         return new_rnn_state, y
 
     @staticmethod
