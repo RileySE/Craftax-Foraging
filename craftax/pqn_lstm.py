@@ -830,6 +830,8 @@ def make_train(config):
             _done = last_done[np.newaxis]  # (1 (dummy time), num_envs)
             _last_action = last_action[np.newaxis]  # (1 (dummy time), num_envs)
 
+            print("hs: ", hs)
+
             # select action using epsilon greedy
             new_hs, q_vals, aux = network.apply(
                 {
@@ -888,8 +890,6 @@ def make_train(config):
             return runner_state, transition
 
         def _logging_step(runner_state, unused, logging_threads):
-
-            print("runner_state in logging step: ", runner_state)
 
             runner_state, minibatch = jax.lax.scan(
                 _env_step_viz, runner_state, None, config['STEPS_PER_VIZ']
