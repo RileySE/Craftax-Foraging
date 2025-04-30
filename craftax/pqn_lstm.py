@@ -115,6 +115,7 @@ def parse_args():
     parser.add_argument("--NUM_LAYERS", type=int, default=1, help="Number of layers")
     parser.add_argument("--ADD_LAST_ACTION", type=bool, default=True, help="Add last action to input")
     parser.add_argument("--HIDDEN_SIZE", type=int, default=512, help="Hidden size")
+    parser.add_argument("--NORM_INPUT", type=bool, default=True, help="Normalize input")
     return parser.parse_args()
 
 
