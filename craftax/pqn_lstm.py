@@ -681,7 +681,7 @@ def make_train(config):
                     # for k,v in metrics.items():
                     #     print(f"{k}: {v}")
 
-                jax.debug.callback(callback, metrics, original_rng)
+                jax.debug.callback(callback, to_log, original_rng)
 
             runner_state = (
                 train_state,
