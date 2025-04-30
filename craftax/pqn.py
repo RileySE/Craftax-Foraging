@@ -656,7 +656,7 @@ def make_train(config):
 
             runner_state = (train_state, tuple(expl_state), test_metrics, rng)
 
-            return runner_state, metrics
+            return runner_state, test_metrics
 
         def get_test_metrics(train_state, rng):
 

@@ -689,7 +689,7 @@ def make_train(config):
                 train_state,
                 memory_transitions,
                 tuple(expl_state),
-                metrics,
+                test_metrics,
                 rng,
             )
 
