@@ -92,7 +92,7 @@ def parse_args():
     parser.add_argument("--curriculum", type=bool, default=False, help="Use curriculum learning")
     parser.add_argument("--map_size", type=int, default=96, help="The side length for the map")
     parser.add_argument("--directional_vision", action=argparse.BooleanOptionalAction, default=False, help="Turn on directional vision cones")
-    parser.add_argument("--EPS_START", type=float, default=1, help="Initial epsilon")
+    parser.add_argument("--EPS_START", type=float, default=0.1, help="Initial epsilon")
     parser.add_argument("--EPS_FINISH", type=float, default=0.005, help="Final epsilon")
     parser.add_argument("--EPS_DECAY", type=float, default=0.2, help="Epsilon decay")
     parser.add_argument("--TOTAL_TIMESTEPS_DECAY", type=int, default=1e9, help="Total timesteps for decay")
@@ -643,8 +643,6 @@ def make_train(config):
                 metrics = {
                     k: v for k, v in metrics.items() if "achievement" not in k.lower()
                 }
-
-            to_log = metrics
 
             # report on wandb if required
             if config["WANDB_MODE"] != "disabled":
