@@ -643,6 +643,8 @@ def make_train(config):
                     k: v for k, v in metrics.items() if "achievement" not in k.lower()
                 }
 
+            to_log = metric
+
             # report on wandb if required
             if config["WANDB_MODE"] != "disabled":
 
