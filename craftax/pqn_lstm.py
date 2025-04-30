@@ -54,13 +54,13 @@ def parse_args():
     parser.add_argument("--max_cows", type=int, default=72, help="Maximum number of cows that can exist at a time")
     parser.add_argument("--num_envs", type=int, default=1024, help="Number of environments")
     parser.add_argument("--total_timesteps", type=float, default=3e9, help="Total timesteps")
-    parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=0.0003, help="Learning rate")
     parser.add_argument("--num_env_steps", type=int, default=64, help="Number of environment steps")
     parser.add_argument("--update_epochs", type=int, default=4, help="Number of update epochs")
     parser.add_argument("--num_minibatches", type=int, default=8, help="Number of minibatches")
     parser.add_argument("--gamma", type=float, default=0.99, help="Gamma value")
     parser.add_argument("--aux_coef", type=float, default=0.1, help="Auxiliary coefficient")
-    parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Max gradient norm")
+    parser.add_argument("--max_grad_norm", type=float, default=0.5, help="Max gradient norm")
     parser.add_argument("--activation", type=str, default="tanh", help="Activation function")
     parser.add_argument("--anneal_lr", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=True)
@@ -96,10 +96,10 @@ def parse_args():
     parser.add_argument("--EPS_DECAY", type=float, default=0.2, help="Epsilon decay")
     parser.add_argument("--TOTAL_TIMESTEPS_DECAY", type=int, default=1e9, help="Total timesteps for decay")
     parser.add_argument("--NUM_STEPS", type=int, default=8, help="steps per environment in each update")
-    parser.add_argument("--LR_LINEAR_DECAY", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--LR_LINEAR_DECAY", action=bool, default=True)
     parser.add_argument("--REW_SCALE", type=float, default=1.0, help="Reward scale")
     parser.add_argument("--Q_LAMBDA", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--LAMBDA", type=float, default=0, help="Lambda value")
+    parser.add_argument("--LAMBDA", type=float, default=0.5, help="Lambda value")
     parser.add_argument("--LOG_ACHIEVEMENTS", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--WANDB_LOG_INTERVAL", type=int, default=100, help="WandB log interval")
     parser.add_argument("--TEST_DURING_TRAINING", action=argparse.BooleanOptionalAction, default=False)
@@ -113,6 +113,7 @@ def parse_args():
     parser.add_argument("--MEMORY_WINDOW", type=int, default=0, help="steps of previous episode added in the rnn training horizon")
     parser.add_argument("--NUM_RNN_LAYERS", type=int, default=1, help="Number of RNN layers")
     parser.add_argument("--NUM_LAYERS", type=int, default=1, help="Number of layers")
+    parser.add_argument("--ADD_LAST_ACTION", type=bool, default=True, help="Add last action to input")
     return parser.parse_args()
 
 
@@ -375,7 +376,7 @@ def make_train(config):
             num_rnn_layers=config.get("NUM_RNN_LAYERS", 1),
             norm_type=config["NORM_TYPE"],
             norm_input=config.get("NORM_INPUT", False),
-            add_last_action=config.get("ADD_LAST_ACTION", False),
+            add_last_action=config.get("ADD_LAST_ACTION", True),
             layer_size=config["LAYER_SIZE"],
         )
 
