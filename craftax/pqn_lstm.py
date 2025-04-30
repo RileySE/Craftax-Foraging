@@ -645,6 +645,7 @@ def make_train(config):
                 "aux_loss": aux_loss.mean(),
                 "td_loss": critic_loss.mean(),
                 "qvals": qvals.mean(),
+                "eps:": eps_scheduler(train_state.n_updates),
             }
             done_infos = jax.tree_util.tree_map(
                 lambda x: (x * infos["returned_episode"]).sum()
@@ -678,12 +679,13 @@ def make_train(config):
 
                 def callback(metrics, original_rng):
                     to_log = create_log_dict(metrics, config)
-                    batch_log(metrics["update_steps"], to_log, config)
+                    metrics.update({k: v for k, v in to_log.items()})
+                    batch_log(metrics["update_steps"], metrics, config)
 
                     for k,v in to_log.items():
                         print(f"{k}: {v}")
 
-                jax.debug.callback(callback, to_log, original_rng)
+                jax.debug.callback(callback, metrics, original_rng)
 
             runner_state = (
                 train_state,
