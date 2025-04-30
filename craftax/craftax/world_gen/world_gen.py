@@ -1,11 +1,11 @@
 import jax
 import jax.scipy as jsp
 
-from craftax.craftax.constants import *
-from craftax.craftax.game_logic import calculate_light_level, get_distance_map
-from craftax.craftax.craftax_state import EnvState, Inventory, Mobs
-from craftax.craftax.util.noise import generate_fractal_noise_2d
-from craftax.craftax.world_gen.world_gen_configs import (
+from craftax.constants import *
+from craftax.game_logic import calculate_light_level, get_distance_map
+from craftax.craftax_state import EnvState, Inventory, Mobs
+from craftax.util.noise import generate_fractal_noise_2d
+from craftax.world_gen.world_gen_configs import (
     ALL_DUNGEON_CONFIGS,
     ALL_SMOOTHGEN_CONFIGS,
     FEATURELESS_SMOOTHGEN_CONFIGS,
@@ -565,7 +565,7 @@ def generate_world(rng, params, static_params):
         _rng[0],
         static_params,
         player_position,
-        jax.tree_map(lambda x: x[0], world_configs),
+        jax.tree_util.tree_map(lambda x: x[0], world_configs),
         params=params,
     )
 
@@ -573,10 +573,10 @@ def generate_world(rng, params, static_params):
         _rng[1:],
         static_params,
         player_position,
-        jax.tree_map(lambda x: x[1:], world_configs),
+        jax.tree_util.tree_map(lambda x: x[1:], world_configs),
     )
 
-    smoothgens = jax.tree_map(
+    smoothgens = jax.tree_util.tree_map(
         lambda over, others: jnp.concatenate([jnp.array([over]), others], axis=0),
         overworld,
         smoothgens,
@@ -590,7 +590,7 @@ def generate_world(rng, params, static_params):
     )
 
     # Splice smoothgens and dungeons in order of levels
-    map, item_map, light_map, ladders_down, ladders_up = jax.tree_map(
+    map, item_map, light_map, ladders_down, ladders_up = jax.tree_util.tree_map(
         lambda x, y: jnp.stack(
             (x[0], y[0], x[1], y[1], y[2], x[2], x[3], x[4], x[5]), axis=0
         ),
@@ -645,7 +645,7 @@ def generate_world(rng, params, static_params):
     potion_mapping = jax.random.permutation(_rng, jnp.arange(6))
 
     # Inventory
-    inventory = jax.tree_map(
+    inventory = jax.tree_util.tree_map(
         lambda x, y: jax.lax.select(params.god_mode, x, y),
         get_new_full_inventory(),
         get_new_empty_inventory(),

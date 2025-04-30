@@ -1,4 +1,4 @@
-from craftax.craftax.util.game_logic_utils import *
+from craftax.util.game_logic_utils import *
 
 
 def update_plants_with_eat(state, plant_position, static_params):
@@ -474,7 +474,7 @@ def do_action(rng, state, action, static_params):
     new_map = jax.lax.select(
         action_block_in_bounds, new_map, state.map[state.player_level]
     )
-    new_inventory = jax.tree_map(
+    new_inventory = jax.tree_util.tree_map(
         lambda x, y: jax.lax.select(action_block_in_bounds, x, y),
         new_inventory,
         state.inventory,
@@ -509,7 +509,7 @@ def do_action(rng, state, action, static_params):
 
     # Do?
     doing_mining = action == Action.DO.value
-    state = jax.tree_map(
+    state = jax.tree_util.tree_map(
         lambda x, y: jax.lax.select(doing_mining, x, y),
         state,
         old_state,
@@ -1049,12 +1049,12 @@ def place_block(state, action, static_params):
     new_item_map = jax.lax.select(
         action_block_in_bounds, new_item_map, state.item_map[state.player_level]
     )
-    new_inventory = jax.tree_map(
+    new_inventory = jax.tree_util.tree_map(
         lambda x, y: jax.lax.select(action_block_in_bounds, x, y),
         new_inventory,
         state.inventory,
     )
-    new_achievements = jax.tree_map(
+    new_achievements = jax.tree_util.tree_map(
         lambda x, y: jax.lax.select(action_block_in_bounds, x, y),
         new_achievements,
         state.achievements,

@@ -27,8 +27,8 @@ import distrax
 import functools
 from ml_collections import ConfigDict
 
-from craftax.craftax import craftax_state
-from craftax.environment_base.wrappers import (
+from craftax import craftax_state
+from environment_base.wrappers import (
     LogWrapper,
     OptimisticResetVecEnvWrapper,
     AutoResetEnvWrapper,
@@ -37,7 +37,7 @@ from craftax.environment_base.wrappers import (
     ReduceActionSpaceWrapper, AppendActionToObsWrapper, AppendActionToObsWrapper,
     CurriculumWrapper
 )
-from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
+from logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
 
 
 def parse_args():
@@ -237,26 +237,26 @@ def make_train(config):
     static_params.max_passive_mobs = config['MAX_COWS']
 
     if config["ENV_NAME"] == "Craftax-Classic-Symbolic-v1":
-        from craftax.craftax_classic.envs.craftax_symbolic_env import (
+        from craftax_classic.envs.craftax_symbolic_env import (
             CraftaxClassicSymbolicEnv,
         )
 
         env = CraftaxClassicSymbolicEnv()
         is_symbolic = True
     elif config["ENV_NAME"] == "Craftax-Classic-Pixels-v1":
-        from craftax.craftax_classic.envs.craftax_pixels_env import (
+        from craftax_classic.envs.craftax_pixels_env import (
             CraftaxClassicPixelsEnv,
         )
 
         env = CraftaxClassicPixelsEnv()
         is_symbolic = False
     elif config["ENV_NAME"] == "Craftax-Symbolic-v1":
-        from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
+        from craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
 
         env = CraftaxSymbolicEnv(static_params)
         is_symbolic = True
     elif config["ENV_NAME"] == "Craftax-Pixels-v1":
-        from craftax.craftax.envs.craftax_pixels_env import CraftaxPixelsEnv
+        from craftax.envs.craftax_pixels_env import CraftaxPixelsEnv
 
         env = CraftaxPixelsEnv(static_params)
         is_symbolic = False
@@ -588,7 +588,7 @@ def make_train(config):
             #traj_batch.info['total_loss'] = loss_info[0].mean()
             #traj_batch.info['aux_loss'] = loss_info[1][-1].mean()
 
-            metric = jax.tree_map(
+            metric = jax.tree_util.tree_map(
                 lambda x: (x * traj_batch.info["returned_episode"]).sum()
                 / traj_batch.info["returned_episode"].sum(),
                 traj_batch.info,
@@ -771,7 +771,7 @@ def make_train(config):
 
             # Log model weights
             def save_weights_callback(weights, iter):
-                weights_flat = jax.tree.flatten(weights)
+                weights_flat = jax.tree_util.tree_flatten(weights)
                 run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
                 os.makedirs(run_out_path, exist_ok=True)
                 weight_filename = os.path.join(run_out_path, 'weights_{}.csv'.format(iter))
@@ -877,7 +877,7 @@ def run_ppo(config):
 
     def _save_network(rs_index, dir_name):
         train_states = out["runner_state"][rs_index]
-        train_state = jax.tree_map(lambda x: x[0], train_states)
+        train_state = jax.tree_util.tree_map(lambda x: x[0], train_states)
         orbax_checkpointer = PyTreeCheckpointer()
         options = CheckpointManagerOptions(max_to_keep=1, create=True)
         path = os.path.join(wandb.run.dir, dir_name)

@@ -10,7 +10,7 @@ from typing import Optional, Tuple, Union, Any
 from gymnax.environments import environment, spaces
 from matplotlib import pyplot as plt, animation
 
-from craftax.craftax.renderer import render_craftax_pixels
+from craftax.renderer import render_craftax_pixels
 
 
 class GymnaxWrapper(object):
@@ -77,7 +77,7 @@ class AutoResetEnvWrapper(GymnaxWrapper):
 
         # Auto-reset environment based on termination
         def auto_reset(done, state_re, state_st, obs_re, obs_st):
-            state = jax.tree_map(
+            state = jax.tree_util.tree_map(
                 lambda x, y: jax.lax.select(done, x, y), state_re, state_st
             )
             obs = jax.lax.select(done, obs_re, obs_st)
@@ -142,11 +142,11 @@ class OptimisticResetVecEnvWrapper(GymnaxWrapper):
         reset_indexes.at[being_reset].set(jnp.arange(self.num_resets))
 
         obs_re = obs_re[reset_indexes]
-        state_re = jax.tree_map(lambda x: x[reset_indexes], state_re)
+        state_re = jax.tree_util.tree_map(lambda x: x[reset_indexes], state_re)
 
         # Auto-reset environment based on termination
         def auto_reset(done, state_re, state_st, obs_re, obs_st):
-            state = jax.tree_map(
+            state = jax.tree_util.tree_map(
                 lambda x, y: jax.lax.select(done, x, y), state_re, state_st
             )
             obs = jax.lax.select(done, obs_re, obs_st)

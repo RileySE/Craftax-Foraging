@@ -1,7 +1,7 @@
 import chex
 
-from craftax.craftax.constants import *
-from craftax.craftax.craftax_state import *
+from craftax.constants import *
+from craftax.craftax_state import *
 
 # For utility functions - functions called more than once in meaningfully different parts of the codebase
 
@@ -382,7 +382,7 @@ def get_max_mana(state):
 
 
 def clip_inventory_and_intrinsics(state, params):
-    capped_inv = jax.tree_map(lambda x: jnp.minimum(x, 99), state.inventory)
+    capped_inv = jax.tree_util.tree_map(lambda x: jnp.minimum(x, 99), state.inventory)
 
     min_health = jax.lax.select(params.god_mode, 9, 0)
 
