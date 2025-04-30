@@ -99,7 +99,7 @@ def parse_args():
     parser.add_argument("--NUM_STEPS", type=int, default=8, help="steps per environment in each update")
     parser.add_argument("--LR_LINEAR_DECAY", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--REW_SCALE", type=float, default=1.0, help="Reward scale")
-    parser.add_argument("--Q_LAMBDA", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--Q_LAMBDA", action=bool, default=False)
     parser.add_argument("--LAMBDA", type=float, default=0, help="Lambda value")
     parser.add_argument("--LOG_ACHIEVEMENTS", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--WANDB_LOG_INTERVAL", type=int, default=100, help="WandB log interval")
@@ -110,6 +110,7 @@ def parse_args():
     parser.add_argument("--EPS_TEST", type=float, default=0.00, help="For greedy policy")
     parser.add_argument("--NUM_EPOCHS", type=int, default=1, help="Number of epochs")
     parser.add_argument("--WANDB_MODE", type=str, default="online", help="WandB mode")
+    parser.add_argument("--HIDDEN_SIZE", type=int, default=1024, help="Hidden size")
     return parser.parse_args()
 
 class CNN(nn.Module):
@@ -373,7 +374,7 @@ def make_train(config):
         else:
             is_symbolic = True
 
-        network = QNetwork(action_dim=action_space_size, is_symbolic=is_symbolic, layer_size=config["LAYER_SIZE"],)
+        network = QNetwork(action_dim=action_space_size, is_symbolic=is_symbolic, layer_size=config["LAYER_SIZE"], hidden_size=config["HIDDEN_SIZE"])
 
         original_rng = rng[0]
 
