@@ -85,7 +85,7 @@ def parse_args():
         "--update_epochs", type=int, default=4, help="Number of update epochs"
     )
     parser.add_argument(
-        "--num_minibatches", type=int, default=8, help="Number of minibatches"
+        "--num_minibatches", type=int, default=1, help="Number of minibatches"
     )
     parser.add_argument("--gamma", type=float, default=0.99, help="Gamma value")
     parser.add_argument(
@@ -198,7 +198,7 @@ def parse_args():
         help="Total timesteps for decay",
     )
     parser.add_argument(
-        "--NUM_STEPS", type=int, default=8, help="steps per environment in each update"
+        "--NUM_STEPS", type=int, default=1, help="steps per environment in each update"
     )
     parser.add_argument(
         "--LR_LINEAR_DECAY", action=argparse.BooleanOptionalAction, default=True
