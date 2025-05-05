@@ -98,6 +98,8 @@ def parse_args():
     parser.add_argument("--directional_vision", action=argparse.BooleanOptionalAction, default=False, help="Turn on directional vision cones")
     return parser.parse_args()
 
+NUM_CAN = 4
+
 class ScannedRNN(nn.Module):
     @functools.partial(
         nn.scan,
@@ -302,7 +304,7 @@ class ActorCriticRNN(nn.Module):
 
     @nn.compact
     def __call__(self, hidden, x):
-        rnn_state, can_state = hidden
+        rnn_state, can_states = hidden          # can_states ≡ (s1, s2, s3)
         obs, dones = x
         embedding = nn.Dense(
             self.config["LAYER_SIZE"],
@@ -314,19 +316,28 @@ class ActorCriticRNN(nn.Module):
         rnn_in = (embedding, dones)
         new_rnn_state, embedding = ScannedRNN()(rnn_state, rnn_in)
 
-        # 3. Velocity head  v = (v_x, v_y)  ∈  [-1, 1]²
-        vel_raw = nn.Dense(
-            2,
-            kernel_init=orthogonal(1.0),     # keep gain moderate
-            bias_init=constant(0.0),
-            name="velocity_head",
-        )(embedding)
-
-        velocity = nn.tanh(vel_raw) 
-        #print(f"Velocity - shape: {velocity.shape}. Type: {type(velocity)}")
-
+        #########################################################
+        # 3. Velocity heads  
+        #########################################################
+        new_can_states = []
+        vel_embeds = []
         
-        new_can_state, vel_embed = VelocityMatMul()(can_state, velocity)
+        for i in range(NUM_CAN):
+            vel_raw = nn.Dense(
+                2,
+                kernel_init=orthogonal(1.0),     # keep gain moderate
+                bias_init=constant(0.0),
+                name=f"velocity_head{i+1}",
+            )(embedding)
+            
+            velocity = nn.tanh(vel_raw)
+            new_can_state, vel_embed = VelocityMatMul()(can_states[i], velocity)
+            
+            new_can_states.append(new_can_state)
+            vel_embeds.append(vel_embed)
+        
+        new_can_states = tuple(new_can_states)
+
         #print(f"Velocity embed - shape: {vel_embed.shape}. Type: {type(vel_embed)}")
 
         actor_mean = nn.Dense(
@@ -379,7 +390,7 @@ class ActorCriticRNN(nn.Module):
         aux = nn.Dense(2, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
             aux
         )
-        new_hidden = (new_rnn_state, new_can_state)
+        new_hidden = (new_rnn_state, new_can_states)
 
         return new_hidden, pi, jnp.squeeze(critic, axis=-1), aux
 
@@ -520,10 +531,13 @@ def make_train(config):
             config["NUM_ENVS"], config["LAYER_SIZE"]
         )
         N = 12
-        init_can_state = VelocityMatMul.initialize_carry(
-            config["NUM_ENVS"], N
+        init_can_states = tuple(
+            VelocityMatMul.initialize_carry(
+                config["NUM_ENVS"], N
+            )
+            for _ in range(NUM_CAN)
         )
-        init_hstate = (init_rnn_state, init_can_state)
+        init_hstate = (init_rnn_state, init_can_states)
         network_params = network.init(_rng, init_hstate, init_x)
         if config["ANNEAL_LR"]:
             tx = optax.chain(
@@ -559,10 +573,13 @@ def make_train(config):
             config["NUM_ENVS"], config["LAYER_SIZE"]
         )
         N = 12
-        init_can_state = VelocityMatMul.initialize_carry(
-            config["NUM_ENVS"], N
+        init_can_states = tuple(
+            VelocityMatMul.initialize_carry(
+                config["NUM_ENVS"], N
+            )
+            for _ in range(NUM_CAN)
         )
-        init_hstate = (init_rnn_state, init_can_state)
+        init_hstate = (init_rnn_state, init_can_states)
 
         # TRAIN LOOP
         def _update_step(runner_state, unused):
