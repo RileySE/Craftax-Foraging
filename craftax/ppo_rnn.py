@@ -10,6 +10,8 @@ import jaxpruner
 import numpy as np
 import optax
 import time
+from jax import lax
+import jax.nn as jnn
 
 from flax.training import orbax_utils
 from matplotlib import pyplot as plt, animation
@@ -123,12 +125,184 @@ class ScannedRNN(nn.Module):
         cell = nn.GRUCell(features=hidden_size)
         return cell.initialize_carry(jax.random.PRNGKey(0), (batch_size, hidden_size))
 
+def direction_preference_grid(N: int) -> jnp.ndarray:
+    """
+    Build the (N², 2) table of unit vectors
+    (0,1), (1,0), (0,‑1), (‑1,0) in a 2 × 2 tiling pattern.
+    """
+    # Pattern for a 2×2 tile, shape (2,2,2)
+    tile = jnp.array([
+        [[0.,  1.],  # North
+         [1.,  0.]], # East
+        [[0., -1.],  # South
+         [-1., 0.]]  # West
+    ])
+    # Repeat it until we get an (N,N,2) array, then flatten to (N²,2)
+    reps = (N // 2, N // 2, 1)
+    return jnp.tile(tile, reps).reshape(-1, 2)      # (N*N, 2)
+
+def rhombus_coords(N: int) -> jnp.ndarray:                   # (N², 2)
+    i = jnp.arange(N)
+    j = jnp.arange(N)
+    ii, jj = jnp.meshgrid(i, j, indexing="ij")               # shape (N,N)
+
+    # eqn (28) from the paper …  (cells are in [0, 1)  ×  [0, √3/2) )
+    x = (ii + 0.5 * jj + 0.75) / N
+    y = (jnp.sqrt(3) / 2) * (jj + 0.5) / N
+    return jnp.stack([x, y], axis=-1).reshape(-1, 2)
+
+"""def make_dist_matrix(n_rows: int, n_cols: int):
+    i = jnp.arange(n_rows, dtype=jnp.float32).reshape(n_rows, 1)  # shape (n_rows, 1)
+    j = jnp.arange(n_cols, dtype=jnp.float32).reshape(1, n_cols)  # shape (1, n_cols)
+    M = jnp.abs(i - j) / 512.0                                    # element‑wise formula
+    return M
+"""
+
+def make_dist_matrix(
+    N: int,
+    *,
+    a: float   = 1.0,      # centre‑surround gain
+    sigma: float = 4.5,    # width of the excitatory bump   (in “r” units below)
+    l: float   = 1.5,      # shift strength (cf. equation (18))
+    dtype=jnp.float32
+) -> jnp.ndarray:          # (N², N²)
+    P = N * N                                      # total number of neurons
+
+    pos   = rhombus_coords(N)                      # (P, 2)
+    e     = direction_preference_grid(N)           # (P, 2)
+
+    # ------------------------------------------------------------------
+    # base (unshifted) displacement  …  (P, P, 2)
+    # Δ = r_i  –  r_j  –  (l/N) · e_j     ––– eqn (18)
+    # ------------------------------------------------------------------
+    diff = (pos[:, None, :]                       # (P,1,2)
+            - pos[None, :, :]                     # (1,P,2)
+            - (l / N) * e[None, :, :])            # (1,P,2)
+
+    # nine slip‑vectors that realise the triangular torus tiling
+    shifts = jnp.asarray([
+        [ 0.0,  0.0],
+        [-0.5,  jnp.sqrt(3)/2],  [-0.5, -jnp.sqrt(3)/2],
+        [ 0.5,  jnp.sqrt(3)/2],  [ 0.5, -jnp.sqrt(3)/2],
+        [-1.0,  0.0],            [ 1.0,  0.0],
+        [-1.5, -jnp.sqrt(3)/2],  [ 1.5,  jnp.sqrt(3)/2],
+    ], dtype=dtype)                                # (9, 2)
+
+    # ------------------------------------------------------------------
+    # for every pair (i,j) take the *minimum* distance over the 9 shifts
+    # ------------------------------------------------------------------
+    d2   = jnp.sum(                                # (9,P,P)
+        (diff[None, :, :, :] + shifts[:, None, None, :]) ** 2,
+        axis=-1
+    )
+    d2_min    = d2.min(axis=0)               # (P,P)   – actual distance
+    r2    = d2_min * (N*N)                                  # scale exactly as in the
+                                                  # reference implementation
+
+    # ------------------------------------------------------------------
+    # centre‑surround profile  W₀(r)  (eqn (15))
+    # ------------------------------------------------------------------
+    W = a * jnp.exp(-r2 / (2.0 * sigma**2)) - a    # (P,P)
+
+    return W.astype(dtype)
+
+class VelocityMatMul(nn.Module):
+    """Batched mat‑mul:  v  ↦  M·v  with a fixed N*N×N*N matrix.
+
+    * Input  shape:  (T, B, 2)   – because we keep the same scan
+      convention as `ScannedRNN` (time axis 0, batch axis 1, features 2).
+    * Output shape:  (T, B, N*N)
+    * No parameters are created; `M` lives in the non‑trainable
+      `constants` collection so it is saved/restored with checkpoints
+      but never updated by the optimiser.
+
+      Recurrent layer
+        hₜ   ∈ ℝ^{N²}   (stored in `carry`)
+        vₜ   ∈ ℝ²        (fed in every step)
+
+        outₜ = hₜ·Mᵀ + (1 + α vₜ·dir_prefᵀ)
+        hₜ₊₁ = outₜ
+    """
+    N: int = 12
+    alpha: float = 0.1
+
+    dt: float = 0.05
+    tau: float = 1.0
+    steps: int = 50
+
+    @functools.partial(
+        nn.scan,
+        variable_broadcast=("constants",),       # nothing in "params", but keeps the signature identical
+        variable_axes={"intermediates": 0}, # stack W along the time axis
+        in_axes=0,
+        out_axes=0,
+        split_rngs={"params": False},
+    )
+    @nn.compact
+    def __call__(self, carry, velocity):
+        # --------------------------------------------------
+        # carry is unused – we just echo it back
+        # --------------------------------------------------
+
+        # Create / retrieve the fixed matrix once.
+        # Shape (512, 2); dtype=float32  (match your other layers).
+        M = self.variable(
+            "constants", # Ensures that the matrix is only created once.
+            "fixed_M",
+            lambda: make_dist_matrix(self.N)   # (N*N, 2)
+        )
+
+        dir_pref = self.variable(
+            "constants",
+            "dir_pref",
+            lambda: direction_preference_grid(self.N) # (N*N, 2)
+        )
+
+        # --------------------------------------------------------
+        # 2.  Core computation each time step
+        # --------------------------------------------------------
+        
+
+        dot = jnp.matmul(velocity, dir_pref.value.T) # (B, 2) @ (2, N*N) → (B, N*N)
+        W = 1.0 + self.alpha * dot
+
+        self.sow("intermediates", "W", W)
+
+        def step(_, s):
+            rec_input = jnp.matmul(s, M.value.T)
+            ds = (-s + jnn.relu(rec_input + W)) / self.tau
+            return s + self.dt * ds
+        
+        carry = lax.fori_loop(0, self.steps, step, carry)
+
+        #mv_term = jnp.matmul(carry, M.value.T)  # (B, N*N) @ (N*N, N*N) → (B, N*N)
+
+        out = carry # (B, N*N) + (B, N*N) → (B, N*N) 
+        new_carry = out
+      
+        # I need to add more of these VelocityMatMul layers to the network
+        # I need to make the recurrency so that the GRU has the carries and input as well.
+
+        return new_carry, out
+    
+    @staticmethod
+    def initialize_carry(batch_size: int,
+                         N: int,
+                         dtype = jnp.float32) -> jnp.ndarray:
+        
+        return jax.random.uniform(
+            jax.random.PRNGKey(0),
+            shape=(batch_size, N * N),
+            dtype=dtype
+        )
+
 class ActorCriticRNN(nn.Module):
     action_dim: Sequence[int]
     config: Dict
 
     @nn.compact
     def __call__(self, hidden, x):
+        rnn_state, can_state = hidden
         obs, dones = x
         embedding = nn.Dense(
             self.config["LAYER_SIZE"],
@@ -138,7 +312,22 @@ class ActorCriticRNN(nn.Module):
         embedding = nn.relu(embedding)
 
         rnn_in = (embedding, dones)
-        hidden, embedding = ScannedRNN()(hidden, rnn_in)
+        new_rnn_state, embedding = ScannedRNN()(rnn_state, rnn_in)
+
+        # 3. Velocity head  v = (v_x, v_y)  ∈  [-1, 1]²
+        vel_raw = nn.Dense(
+            2,
+            kernel_init=orthogonal(1.0),     # keep gain moderate
+            bias_init=constant(0.0),
+            name="velocity_head",
+        )(embedding)
+
+        velocity = nn.tanh(vel_raw) 
+        #print(f"Velocity - shape: {velocity.shape}. Type: {type(velocity)}")
+
+        
+        new_can_state, vel_embed = VelocityMatMul()(can_state, velocity)
+        #print(f"Velocity embed - shape: {vel_embed.shape}. Type: {type(vel_embed)}")
 
         actor_mean = nn.Dense(
             self.config["LAYER_SIZE"],
@@ -146,6 +335,7 @@ class ActorCriticRNN(nn.Module):
             bias_init=constant(0.0),
         )(embedding)
         actor_mean = nn.relu(actor_mean)
+        #print(f"Actor mean - shape: {actor_mean.shape}. Type: {type(actor_mean)}")
         actor_mean = nn.Dense(
             self.config["LAYER_SIZE"],
             kernel_init=orthogonal(2),
@@ -189,8 +379,9 @@ class ActorCriticRNN(nn.Module):
         aux = nn.Dense(2, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
             aux
         )
+        new_hidden = (new_rnn_state, new_can_state)
 
-        return hidden, pi, jnp.squeeze(critic, axis=-1), aux
+        return new_hidden, pi, jnp.squeeze(critic, axis=-1), aux
 
 
 class Transition(NamedTuple):
@@ -325,9 +516,14 @@ def make_train(config):
             ),
             jnp.zeros((1, config["NUM_ENVS"])),
         )
-        init_hstate = ScannedRNN.initialize_carry(
+        init_rnn_state = ScannedRNN.initialize_carry(
             config["NUM_ENVS"], config["LAYER_SIZE"]
         )
+        N = 12
+        init_can_state = VelocityMatMul.initialize_carry(
+            config["NUM_ENVS"], N
+        )
+        init_hstate = (init_rnn_state, init_can_state)
         network_params = network.init(_rng, init_hstate, init_x)
         if config["ANNEAL_LR"]:
             tx = optax.chain(
@@ -359,9 +555,14 @@ def make_train(config):
         # INIT ENV
         rng, _rng = jax.random.split(rng)
         obsv, log_state = env.reset(_rng, env_params)
-        init_hstate = ScannedRNN.initialize_carry(
+        init_rnn_state = ScannedRNN.initialize_carry(
             config["NUM_ENVS"], config["LAYER_SIZE"]
         )
+        N = 12
+        init_can_state = VelocityMatMul.initialize_carry(
+            config["NUM_ENVS"], N
+        )
+        init_hstate = (init_rnn_state, init_can_state)
 
         # TRAIN LOOP
         def _update_step(runner_state, unused):
@@ -472,7 +673,7 @@ def make_train(config):
                     def _loss_fn(params, init_hstate, traj_batch, gae, targets):
                         # RERUN NETWORK
                         _, pi, value, aux = network.apply(
-                            params, init_hstate[0], (traj_batch.obs, traj_batch.done)
+                            params, init_hstate, (traj_batch.obs, traj_batch.done)
                         )
                         log_prob = pi.log_prob(traj_batch.action)
 
@@ -570,7 +771,9 @@ def make_train(config):
                 )
                 return update_state, total_loss
 
-            init_hstate = initial_hstate[None, :]  # TBH
+            #init_hstate = initial_hstate[None, :]  # TBH
+            init_hstate = jax.tree_util.tree_map(lambda x: x[None, ...], initial_hstate)
+
             update_state = (
                 train_state,
                 init_hstate,
@@ -654,7 +857,8 @@ def make_train(config):
 
             # Add hstate and other non-env metrics to info so they can be logged
             info['value'] = value
-            info['hidden_state'] = hstate
+            info['hidden_state'] = hstate[0] # can also add the can state here if we want to log that
+            info['can_state'] = hstate[1]
             info['pred_delta'] = aux
             info['delta'] = deltas_to_start
             info['entropy'] = pi.entropy().squeeze(0)
@@ -893,9 +1097,77 @@ def run_ppo(config):
     if config["SAVE_POLICY"]:
         _save_network(0, "policies")
 
+import matplotlib.pyplot as plt
+import numpy as np
+
+def test_velocity_matmul():
+    vm          = VelocityMatMul()                    # N = 12
+    batch_size  = 1
+    carry0      = vm.initialize_carry(batch_size, vm.N)
+    vel_seq     = jnp.asarray(
+        [[ 1.0,  0.0],
+         [ 1.0,  0.0],
+         [ 1.0,  0.0],
+         [ 1.0,  0.0],
+         [ 1.0,  0.0],
+         [ 1.0,  0.0],
+         [ 1.0,  0.0],
+         [ 1.0,  0.0],
+         [ 1.0,  0.0],
+         [ 1.0,  0.0],
+         [ 1.0,  0.0],
+         [ 1.0,  0.0],
+         [ 1.0,  0.0],
+         [ 1.0,  0.0],
+         ],
+        dtype=jnp.float32
+    ).reshape(14, batch_size, 2)                       # (T, B, 2)
+
+    rng       = jax.random.PRNGKey(0)
+    variables = vm.init(rng, carry0, vel_seq)
+
+    carryT, outs = vm.apply(variables, carry0, vel_seq)   # outs → (3, 1, N²)
+
+    np.set_printoptions(precision=4, suppress=True)       # nicer console output
+    for t in range(14):
+        grid = np.asarray(outs[t, 0]).reshape(vm.N, vm.N) # (12, 12)
+        print(f"\n=== carry after input #{t+1}  velocity={vel_seq[t,0]} ===")
+        print(grid)
+
+        # Plot heatmap
+        plt.figure()
+        plt.imshow(grid, origin='lower')
+        plt.title(f"Carry after input #{t+1}  velocity={np.asarray(vel_seq[t,0])}")
+        plt.colorbar()
+        plt.tight_layout()
+        plt.show()
 
 if __name__ == "__main__":
+    """
+    model   = VelocityMatMul(N=12, alpha=0.1)
 
+    #  (T=1, batch=1, 2)   – one time‑step, one example, velocity = (1, 0)
+    v_seq   = jnp.array([[[1.0, -0.5]]], dtype=jnp.float32)
+    carry0  = ()                       # unused but must be passed in
+
+    # 1️⃣ initialise parameters & constants
+    variables = model.init(jax.random.PRNGKey(0), carry0, v_seq)
+
+    # 2️⃣ forward pass while asking for the “intermediates” collection
+    (_, _), inter = model.apply(
+            variables, carry0, v_seq,
+            mutable=["intermediates"])
+    
+ 
+    # 3️⃣ pull out the feed‑forward term
+    W_val = inter["intermediates"]["W"][0]   # (1, N²)
+
+    print("W shape:", W_val.shape)       # (1, 144)  for N=12
+    print(W_val.reshape(model.N, model.N))  # nicer 12×12 view
+    """
+
+    #test_velocity_matmul()
+    
     args = parse_args()
 
     wandb.init(
@@ -906,3 +1178,6 @@ if __name__ == "__main__":
     )
 
     run_ppo(wandb.config)
+
+    
+    
