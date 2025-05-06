@@ -383,7 +383,6 @@ def make_train(config):
         "NUM_MINIBATCHES"
     ] == 0, "NUM_MINIBATCHES must divide NUM_STEPS*NUM_ENVS"
 
-
     config["NUM_LOG_STEPS"] = config["NUM_UPDATES"] * config["UPDATES_PER_VIZ"]
 
     # HACK: We have to use the original formula for num_updates for LR annealing,
