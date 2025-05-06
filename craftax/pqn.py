@@ -204,7 +204,7 @@ def parse_args():
         "--LR_LINEAR_DECAY", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument("--REW_SCALE", type=float, default=1.0, help="Reward scale")
-    parser.add_argument("--Q_LAMBDA", action=bool, default=False)
+    parser.add_argument("--Q_LAMBDA", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--LAMBDA", type=float, default=0, help="Lambda value")
     parser.add_argument(
         "--LOG_ACHIEVEMENTS", action=argparse.BooleanOptionalAction, default=True
