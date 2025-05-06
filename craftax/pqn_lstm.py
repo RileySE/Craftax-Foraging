@@ -35,8 +35,10 @@ from craftax.environment_base.wrappers import (
     AutoResetEnvWrapper,
     BatchEnvWrapper,
     VideoPlotWrapper,
-    ReduceActionSpaceWrapper, AppendActionToObsWrapper, AppendActionToObsWrapper,
-    CurriculumWrapper
+    ReduceActionSpaceWrapper,
+    AppendActionToObsWrapper,
+    AppendActionToObsWrapper,
+    CurriculumWrapper,
 )
 from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
 from craftax.models import BatchRenorm
@@ -45,82 +47,214 @@ from craftax.models import BatchRenorm
 def parse_args():
     parser = argparse.ArgumentParser(description="Run PQN LSTM.")
     parser.add_argument("--prune_step", type=int, default=20000, help="Step to prune")
-    parser.add_argument('--featureless_world', action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--run_name", type=str, default="default_run", help="Name of the run")
-    parser.add_argument("--env_name", type=str, default="Craftax-Symbolic-v1", help="Environment name")
-    parser.add_argument("--sparse_alg", type=str, default="magnitude", help="options, magnitude, no_prune, saliency, random")
+    parser.add_argument(
+        "--featureless_world", action=argparse.BooleanOptionalAction, default=False
+    )
+    parser.add_argument(
+        "--run_name", type=str, default="default_run", help="Name of the run"
+    )
+    parser.add_argument(
+        "--env_name", type=str, default="Craftax-Symbolic-v1", help="Environment name"
+    )
+    parser.add_argument(
+        "--sparse_alg",
+        type=str,
+        default="magnitude",
+        help="options, magnitude, no_prune, saliency, random",
+    )
     parser.add_argument("--gpu_id", type=int, default=0, help="GPU ID")
     parser.add_argument("--predators", type=bool, default=True, help="Use predators")
-    parser.add_argument("--max_cows", type=int, default=72, help="Maximum number of cows that can exist at a time")
-    parser.add_argument("--num_envs", type=int, default=1024, help="Number of environments")
-    parser.add_argument("--total_timesteps", type=float, default=3e9, help="Total timesteps")
+    parser.add_argument(
+        "--max_cows",
+        type=int,
+        default=72,
+        help="Maximum number of cows that can exist at a time",
+    )
+    parser.add_argument(
+        "--num_envs", type=int, default=1024, help="Number of environments"
+    )
+    parser.add_argument(
+        "--total_timesteps", type=float, default=3e9, help="Total timesteps"
+    )
     parser.add_argument("--lr", type=float, default=0.0003, help="Learning rate")
-    parser.add_argument("--num_env_steps", type=int, default=64, help="Number of environment steps")
-    parser.add_argument("--update_epochs", type=int, default=4, help="Number of update epochs")
-    parser.add_argument("--num_minibatches", type=int, default=8, help="Number of minibatches")
+    parser.add_argument(
+        "--num_env_steps", type=int, default=64, help="Number of environment steps"
+    )
+    parser.add_argument(
+        "--update_epochs", type=int, default=4, help="Number of update epochs"
+    )
+    parser.add_argument(
+        "--num_minibatches", type=int, default=4, help="Number of minibatches"
+    )
     parser.add_argument("--gamma", type=float, default=0.99, help="Gamma value")
-    parser.add_argument("--aux_coef", type=float, default=0.1, help="Auxiliary coefficient")
-    parser.add_argument("--max_grad_norm", type=float, default=0.5, help="Max gradient norm")
-    parser.add_argument("--activation", type=str, default="tanh", help="Activation function")
-    parser.add_argument("--anneal_lr", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--aux_coef", type=float, default=0.1, help="Auxiliary coefficient"
+    )
+    parser.add_argument(
+        "--max_grad_norm", type=float, default=0.5, help="Max gradient norm"
+    )
+    parser.add_argument(
+        "--activation", type=str, default="tanh", help="Activation function"
+    )
+    parser.add_argument(
+        "--anneal_lr", action=argparse.BooleanOptionalAction, default=True
+    )
     parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--jit", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument('--action_in_obs', action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--seed", type=int, default=np.random.randint(2 ** 31), help="Random seed")
-    parser.add_argument("--use_wandb", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--save_policy", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument(
+        "--action_in_obs", action=argparse.BooleanOptionalAction, default=False
+    )
+    parser.add_argument(
+        "--seed", type=int, default=np.random.randint(2**31), help="Random seed"
+    )
+    parser.add_argument(
+        "--use_wandb", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument(
+        "--save_policy", action=argparse.BooleanOptionalAction, default=False
+    )
     parser.add_argument("--num_repeats", type=int, default=1, help="Number of repeats")
     parser.add_argument("--layer_size", type=int, default=512, help="Layer size")
-    parser.add_argument("--wandb_project", type=str, default="sparsity_project", help="WandB project name")
-    parser.add_argument("--wandb_entity", type=str, default=None, help="WandB entity name")
-    parser.add_argument("--use_optimistic_resets", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--optimistic_reset_ratio", type=int, default=16, help="Optimistic reset ratio")
-    parser.add_argument("--updates_per_viz", type=int, default=2048, help="Updates per visualization")
-    parser.add_argument("--steps_per_viz", type=int, default=1024, help="Steps per visualization")
-    parser.add_argument("--logging_steps_per_viz", type=int, default=8, help="Logging steps per viz")
-    parser.add_argument("--logging_steps_per_viz_val", type=int, default=8, help="Logging steps per viz validation")
-    parser.add_argument("--output_path", type=str, default='./output/', help="Output path")
-    parser.add_argument("--frames_per_file", type=int, default=512, help="Frames per file")
-    parser.add_argument('--no_videos', action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument('--full_action_space', action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--reward_function", type=str, default='foraging', help="Reward function")
-    parser.add_argument("--validation_seed", type=int, default=777, help="Validation seed")
-    parser.add_argument("--validation_step_offset", type=int, default=0, help="Validation step offset")
-    parser.add_argument("--logging_threads_per_viz", type=int, default=1, help="Logging threads per viz")
-    parser.add_argument("--logging_threads_per_viz_val", type=int, default=1, help="Logging threads per viz validation")
-    parser.add_argument("--curriculum", type=bool, default=False, help="Use curriculum learning")
-    parser.add_argument("--map_size", type=int, default=96, help="The side length for the map")
-    parser.add_argument("--directional_vision", action=argparse.BooleanOptionalAction, default=False, help="Turn on directional vision cones")
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default="sparsity_project",
+        help="WandB project name",
+    )
+    parser.add_argument(
+        "--wandb_entity", type=str, default=None, help="WandB entity name"
+    )
+    parser.add_argument(
+        "--use_optimistic_resets", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument(
+        "--optimistic_reset_ratio", type=int, default=16, help="Optimistic reset ratio"
+    )
+    parser.add_argument(
+        "--updates_per_viz", type=int, default=2048, help="Updates per visualization"
+    )
+    parser.add_argument(
+        "--steps_per_viz", type=int, default=1024, help="Steps per visualization"
+    )
+    parser.add_argument(
+        "--logging_steps_per_viz", type=int, default=8, help="Logging steps per viz"
+    )
+    parser.add_argument(
+        "--logging_steps_per_viz_val",
+        type=int,
+        default=8,
+        help="Logging steps per viz validation",
+    )
+    parser.add_argument(
+        "--output_path", type=str, default="./output/", help="Output path"
+    )
+    parser.add_argument(
+        "--frames_per_file", type=int, default=512, help="Frames per file"
+    )
+    parser.add_argument(
+        "--no_videos", action=argparse.BooleanOptionalAction, default=False
+    )
+    parser.add_argument(
+        "--full_action_space", action=argparse.BooleanOptionalAction, default=False
+    )
+    parser.add_argument(
+        "--reward_function", type=str, default="foraging", help="Reward function"
+    )
+    parser.add_argument(
+        "--validation_seed", type=int, default=777, help="Validation seed"
+    )
+    parser.add_argument(
+        "--validation_step_offset", type=int, default=0, help="Validation step offset"
+    )
+    parser.add_argument(
+        "--logging_threads_per_viz", type=int, default=1, help="Logging threads per viz"
+    )
+    parser.add_argument(
+        "--logging_threads_per_viz_val",
+        type=int,
+        default=1,
+        help="Logging threads per viz validation",
+    )
+    parser.add_argument(
+        "--curriculum", type=bool, default=False, help="Use curriculum learning"
+    )
+    parser.add_argument(
+        "--map_size", type=int, default=96, help="The side length for the map"
+    )
+    parser.add_argument(
+        "--directional_vision",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Turn on directional vision cones",
+    )
     parser.add_argument("--EPS_START", type=float, default=0.1, help="Initial epsilon")
     parser.add_argument("--EPS_FINISH", type=float, default=0.005, help="Final epsilon")
     parser.add_argument("--EPS_DECAY", type=float, default=0.2, help="Epsilon decay")
-    parser.add_argument("--TOTAL_TIMESTEPS_DECAY", type=int, default=1e9, help="Total timesteps for decay")
-    parser.add_argument("--NUM_STEPS", type=int, default=8, help="steps per environment in each update")
-    parser.add_argument("--LR_LINEAR_DECAY", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--TOTAL_TIMESTEPS_DECAY",
+        type=int,
+        default=1e9,
+        help="Total timesteps for decay",
+    )
+    parser.add_argument(
+        "--NUM_STEPS", type=int, default=128, help="steps per environment in each update"
+    )
+    parser.add_argument(
+        "--LR_LINEAR_DECAY", action=argparse.BooleanOptionalAction, default=True
+    )
     parser.add_argument("--REW_SCALE", type=float, default=1.0, help="Reward scale")
-    parser.add_argument("--Q_LAMBDA", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument(
+        "--Q_LAMBDA", action=argparse.BooleanOptionalAction, default=False
+    )
     parser.add_argument("--LAMBDA", type=float, default=0.5, help="Lambda value")
-    parser.add_argument("--LOG_ACHIEVEMENTS", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--WANDB_LOG_INTERVAL", type=int, default=100, help="WandB log interval")
-    parser.add_argument("--TEST_DURING_TRAINING", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--TEST_INTERVAL", type=float, default=0.01, help="Test interval in terms of total updates")
-    parser.add_argument("--TEST_NUM_ENVS", type=int, default=512, help="Number of environments to test")
-    parser.add_argument("--TEST_NUM_STEPS", type=int, default=10000, help="Number of steps to test")
-    parser.add_argument("--EPS_TEST", type=float, default=0.00, help="For greedy policy")
-    parser.add_argument("--NUM_EPOCHS", type=int, default=1, help="Number of epochs")
+    parser.add_argument(
+        "--LOG_ACHIEVEMENTS", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument(
+        "--WANDB_LOG_INTERVAL", type=int, default=100, help="WandB log interval"
+    )
+    parser.add_argument(
+        "--TEST_DURING_TRAINING", action=argparse.BooleanOptionalAction, default=False
+    )
+    parser.add_argument(
+        "--TEST_INTERVAL",
+        type=float,
+        default=0.01,
+        help="Test interval in terms of total updates",
+    )
+    parser.add_argument(
+        "--TEST_NUM_ENVS", type=int, default=512, help="Number of environments to test"
+    )
+    parser.add_argument(
+        "--TEST_NUM_STEPS", type=int, default=10000, help="Number of steps to test"
+    )
+    parser.add_argument(
+        "--EPS_TEST", type=float, default=0.00, help="For greedy policy"
+    )
+    parser.add_argument("--NUM_EPOCHS", type=int, default=4, help="Number of epochs")
     parser.add_argument("--WANDB_MODE", type=str, default="online", help="WandB mode")
-    parser.add_argument("--NORM_TYPE", type=str, default="layer_norm", help="layer_norm or batch_norm")
-    parser.add_argument("--MEMORY_WINDOW", type=int, default=0, help="steps of previous episode added in the rnn training horizon")
-    parser.add_argument("--NUM_RNN_LAYERS", type=int, default=1, help="Number of RNN layers")
+    parser.add_argument(
+        "--NORM_TYPE", type=str, default="layer_norm", help="layer_norm or batch_norm"
+    )
+    parser.add_argument(
+        "--MEMORY_WINDOW",
+        type=int,
+        default=0,
+        help="steps of previous episode added in the rnn training horizon",
+    )
+    parser.add_argument(
+        "--NUM_RNN_LAYERS", type=int, default=1, help="Number of RNN layers"
+    )
     parser.add_argument("--NUM_LAYERS", type=int, default=1, help="Number of layers")
-    parser.add_argument("--ADD_LAST_ACTION", type=bool, default=True, help="Add last action to input")
+    parser.add_argument(
+        "--ADD_LAST_ACTION", type=bool, default=True, help="Add last action to input"
+    )
     parser.add_argument("--HIDDEN_SIZE", type=int, default=512, help="Hidden size")
     parser.add_argument("--NORM_INPUT", type=bool, default=True, help="Normalize input")
     return parser.parse_args()
 
 
 class ScannedRNN(nn.Module):
-
     @partial(
         nn.scan,
         variable_broadcast="params",
@@ -151,6 +285,7 @@ class ScannedRNN(nn.Module):
         return nn.OptimizedLSTMCell(hidden_size, parent=None).initialize_carry(
             jax.random.PRNGKey(0), (*batch_size, hidden_size)
         )
+
 
 class RNNQNetwork(nn.Module):
     action_dim: int
@@ -208,9 +343,7 @@ class RNNQNetwork(nn.Module):
             bias_init=constant(0.0),
         )(aux)
         aux = nn.relu(aux)
-        aux = nn.Dense(2, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
-            aux
-        )
+        aux = nn.Dense(2, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(aux)
 
         return new_hidden, q_vals, aux
 
@@ -219,6 +352,7 @@ class RNNQNetwork(nn.Module):
             ScannedRNN.initialize_carry(self.hidden_size, *batch_size)
             for _ in range(self.num_rnn_layers)
         ]
+
 
 @chex.dataclass(frozen=True)
 class Transition:
@@ -241,13 +375,16 @@ class CustomTrainState(TrainState):
     n_updates: int = 0
     grad_steps: int = 0
 
+
 def make_train(config):
     config["NUM_UPDATES"] = (
-            config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"] // config['UPDATES_PER_VIZ']
+        config["TOTAL_TIMESTEPS"]
+        // config["NUM_STEPS"]
+        // config["NUM_ENVS"]
     )
 
     config["NUM_UPDATES_DECAY"] = (
-            config["TOTAL_TIMESTEPS_DECAY"] // config["NUM_STEPS"] // config["NUM_ENVS"]
+        config["TOTAL_TIMESTEPS_DECAY"] // config["NUM_STEPS"] // config["NUM_ENVS"]
     )
 
     assert (config["NUM_STEPS"] * config["NUM_ENVS"]) % config[
@@ -258,7 +395,7 @@ def make_train(config):
 
     # HACK: We have to use the original formula for num_updates for LR annealing,
     # modifying it breaks training due to its effect on LR scheduling
-    config['NUM_UPDATES_FOR_LR_ANNEALING'] = (
+    config["NUM_UPDATES_FOR_LR_ANNEALING"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_ENV_STEPS"] // config["NUM_ENVS"]
     )
 
@@ -270,16 +407,16 @@ def make_train(config):
     # We modify static params here because there's a number of core game logic functions that take static params
     # And don't take the normal "params" blob
     static_params = craftax_state.StaticEnvParams()
-    if config['REWARD_FUNCTION'] == 'vanilla':
-        static_params.reward_func = 'vanilla'
-    if config['FEATURELESS_WORLD']:
+    if config["REWARD_FUNCTION"] == "vanilla":
+        static_params.reward_func = "vanilla"
+    if config["FEATURELESS_WORLD"]:
         static_params.featureless_world = True
-    if config['PREDATORS']:
+    if config["PREDATORS"]:
         static_params.predators = True
-    static_params.map_size = (config['MAP_SIZE'],config['MAP_SIZE'])
-    static_params.directional_vision = config['DIRECTIONAL_VISION']
+    static_params.map_size = (config["MAP_SIZE"], config["MAP_SIZE"])
+    static_params.directional_vision = config["DIRECTIONAL_VISION"]
 
-    static_params.max_passive_mobs = config['MAX_COWS']
+    static_params.max_passive_mobs = config["MAX_COWS"]
 
     if config["ENV_NAME"] == "Craftax-Classic-Symbolic-v1":
         from craftax.craftax_classic.envs.craftax_symbolic_env import (
@@ -310,15 +447,17 @@ def make_train(config):
     env_params = env.default_params
 
     # Restrict action space
-    if not config['FULL_ACTION_SPACE']:
+    if not config["FULL_ACTION_SPACE"]:
         env = ReduceActionSpaceWrapper(env)
 
-    if config['ACTION_IN_OBS']:
+    if config["ACTION_IN_OBS"]:
         env = AppendActionToObsWrapper(env)
 
     # Env version to log videos, use only for occasional visualization as plotting is expensive/slow
     # TODO why do I need to put this wrapper early in the stack? It can't just layer on top
-    env_viz = VideoPlotWrapper(env, config['OUTPUT_PATH'], config['FRAMES_PER_FILE'], not config['NO_VIDEOS'])
+    env_viz = VideoPlotWrapper(
+        env, config["OUTPUT_PATH"], config["FRAMES_PER_FILE"], not config["NO_VIDEOS"]
+    )
 
     env = LogWrapper(env)
 
@@ -338,8 +477,8 @@ def make_train(config):
         )
         return chosed_actions
 
-    if not os.path.isdir(config['OUTPUT_PATH']):
-        os.makedirs(config['OUTPUT_PATH'])
+    if not os.path.isdir(config["OUTPUT_PATH"]):
+        os.makedirs(config["OUTPUT_PATH"])
 
     if config["USE_OPTIMISTIC_RESETS"]:
         env = OptimisticResetVecEnvWrapper(
@@ -361,7 +500,7 @@ def make_train(config):
     def train(rng):
 
         # INIT NETWORK
-        if config['FULL_ACTION_SPACE']:
+        if config["FULL_ACTION_SPACE"]:
             action_space_size = env.action_space(env_params).n
         else:
             action_space_size = 17
@@ -382,7 +521,6 @@ def make_train(config):
             layer_size=config["LAYER_SIZE"],
         )
 
-
         original_rng = rng[0]
 
         eps_scheduler = optax.linear_schedule(
@@ -395,8 +533,8 @@ def make_train(config):
             init_value=config["LR"],
             end_value=1e-20,
             transition_steps=(config["NUM_UPDATES_DECAY"])
-                             * config["NUM_MINIBATCHES"]
-                             * config["NUM_EPOCHS"],
+            * config["NUM_MINIBATCHES"]
+            * config["NUM_EPOCHS"],
         )
         lr = lr_scheduler if config.get("LR_LINEAR_DECAY", False) else config["LR"]
 
@@ -429,9 +567,13 @@ def make_train(config):
         # TRAINING LOOP
         def _update_step(runner_state, unused):
 
-            train_state, memory_transitions, expl_state, test_metrics, rng = (
-                runner_state
-            )
+            (
+                train_state,
+                memory_transitions,
+                expl_state,
+                test_metrics,
+                rng,
+            ) = runner_state
 
             # SAMPLE PHASE
             def _step_env(carry, _):
@@ -466,7 +608,9 @@ def make_train(config):
                 )
 
                 # Compute distance to origin for aux loss
-                starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
+                starting_pos = env_state.env_state.player_starting_position[
+                    env_state.env_state.player_level
+                ]
                 # dists_to_start = jnp.linalg.norm(env_state.player_position - starting_pos, ord=1, axis=-1)
                 deltas_to_start = env_state.env_state.player_position - starting_pos
 
@@ -500,12 +644,12 @@ def make_train(config):
 
             train_state = train_state.replace(
                 timesteps=train_state.timesteps
-                          + config["NUM_STEPS"] * config["NUM_ENVS"]
+                + config["NUM_STEPS"] * config["NUM_ENVS"]
             )  # update timesteps count
 
             # insert the transitions into the memory
             memory_transitions = jax.tree_util.tree_map(
-                lambda x, y: jnp.concatenate([x[config["NUM_STEPS"]:], y], axis=0),
+                lambda x, y: jnp.concatenate([x[config["NUM_STEPS"] :], y], axis=0),
                 memory_transitions,
                 transitions,
             )
@@ -519,8 +663,9 @@ def make_train(config):
                     # with batch_size = num_envs/num_minibatches
 
                     train_state, rng = carry
-                    hs = jax.tree_util.tree_map(lambda x: x[0],
-                                                minibatch.last_hs)  # hs of oldest step (batch_size, hidden_size)
+                    hs = jax.tree_util.tree_map(
+                        lambda x: x[0], minibatch.last_hs
+                    )  # hs of oldest step (batch_size, hidden_size)
                     agent_in = (
                         minibatch.obs,
                         minibatch.last_done,
@@ -532,25 +677,27 @@ def make_train(config):
                             reward, q, done = rew_q_done
                             lambda_returns, next_q = lambda_returns_and_next_q
                             target_bootstrap = (
-                                    reward + config["GAMMA"] * (1 - done) * next_q
+                                reward + config["GAMMA"] * (1 - done) * next_q
                             )
                             delta = lambda_returns - next_q
                             lambda_returns = (
-                                    target_bootstrap
-                                    + config["GAMMA"] * config["LAMBDA"] * delta
+                                target_bootstrap
+                                + config["GAMMA"] * config["LAMBDA"] * delta
                             )
                             lambda_returns = (1 - done) * lambda_returns + done * reward
                             next_q = jnp.max(q, axis=-1)
                             return (lambda_returns, next_q), lambda_returns
 
                         lambda_returns = (
-                                reward[-1] + config["GAMMA"] * (1 - done[-1]) * last_q
+                            reward[-1] + config["GAMMA"] * (1 - done[-1]) * last_q
                         )
                         last_q = jnp.max(q_vals[-1], axis=-1)
                         _, targets = jax.lax.scan(
                             _get_target,
                             (lambda_returns, last_q),
-                            jax.tree_util.tree_map(lambda x: x[:-1], (reward, q_vals, done)),
+                            jax.tree_util.tree_map(
+                                lambda x: x[:-1], (reward, q_vals, done)
+                            ),
                             reverse=True,
                         )
                         targets = jnp.concatenate([targets, lambda_returns[np.newaxis]])
@@ -596,17 +743,30 @@ def make_train(config):
 
                         total_loss = loss + config["AUX_COEF"] * aux_loss
 
-                        return total_loss, (updates, chosen_action_qvals, loss, aux_loss)
+                        return total_loss, (
+                            updates,
+                            chosen_action_qvals,
+                            loss,
+                            aux_loss,
+                        )
 
-                    (total_loss, (updates, qvals, critic_loss, aux_loss)), grads = jax.value_and_grad(
-                        _loss_fn, has_aux=True
-                    )(train_state.params)
+                    (
+                        total_loss,
+                        (updates, qvals, critic_loss, aux_loss),
+                    ), grads = jax.value_and_grad(_loss_fn, has_aux=True)(
+                        train_state.params
+                    )
                     train_state = train_state.apply_gradients(grads=grads)
                     train_state = train_state.replace(
                         grad_steps=train_state.grad_steps + 1,
                         batch_stats=updates["batch_stats"],
                     )
-                    return (train_state, rng), (total_loss, qvals, critic_loss, aux_loss)
+                    return (train_state, rng), (
+                        total_loss,
+                        qvals,
+                        critic_loss,
+                        aux_loss,
+                    )
 
                 def preprocess_transition(x, rng):
                     # x: (num_steps, num_envs, ...)
@@ -628,14 +788,22 @@ def make_train(config):
                 )  # num_minibatches, num_steps+memory_window, batch_size/num_minbatches, ...
 
                 rng, _rng = jax.random.split(rng)
-                (train_state, rng), (total_loss, qvals, critic_loss, aux_loss) = jax.lax.scan(
-                    _learn_phase, (train_state, rng), minibatches
-                )
+                (train_state, rng), (
+                    total_loss,
+                    qvals,
+                    critic_loss,
+                    aux_loss,
+                ) = jax.lax.scan(_learn_phase, (train_state, rng), minibatches)
 
                 return (train_state, rng), (total_loss, qvals, critic_loss, aux_loss)
 
             rng, _rng = jax.random.split(rng)
-            (train_state, rng), (total_loss, qvals, critic_loss, aux_loss) = jax.lax.scan(
+            (train_state, rng), (
+                total_loss,
+                qvals,
+                critic_loss,
+                aux_loss,
+            ) = jax.lax.scan(
                 _learn_epoch, (train_state, rng), None, config["NUM_EPOCHS"]
             )
 
@@ -652,7 +820,7 @@ def make_train(config):
             }
             done_infos = jax.tree_util.tree_map(
                 lambda x: (x * infos["returned_episode"]).sum()
-                          / infos["returned_episode"].sum(),
+                / infos["returned_episode"].sum(),
                 infos,
             )
             metrics.update(done_infos)
@@ -683,7 +851,7 @@ def make_train(config):
                     metrics.update({k: v for k, v in to_log.items()})
                     batch_log(metrics["update_steps"], metrics, config)
 
-                    for k,v in metrics.items():
+                    for k, v in metrics.items():
                         print(f"{k}: {v}")
 
                 jax.debug.callback(callback, metrics, original_rng)
@@ -754,7 +922,7 @@ def make_train(config):
             # return mean of done infos
             done_infos = jax.tree_util.tree_map(
                 lambda x: (x * infos["returned_episode"]).sum()
-                          / infos["returned_episode"].sum(),
+                / infos["returned_episode"].sum(),
                 infos,
             )
             return done_infos
@@ -799,7 +967,9 @@ def make_train(config):
             )
 
             # Compute distance to origin for aux loss
-            starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
+            starting_pos = env_state.env_state.player_starting_position[
+                env_state.env_state.player_level
+            ]
             # dists_to_start = jnp.linalg.norm(env_state.player_position - starting_pos, ord=1, axis=-1)
             deltas_to_start = env_state.env_state.player_position - starting_pos
 
@@ -827,9 +997,15 @@ def make_train(config):
 
         def _env_step_viz(runner_state, unused):
             # train_state, expl_state, test_metrics, rng = runner_state
-            train_state, memory_transitions, expl_state, test_metrics, rng = runner_state
+            (
+                train_state,
+                memory_transitions,
+                expl_state,
+                test_metrics,
+                rng,
+            ) = runner_state
             hs, last_obs, last_done, last_action, env_state = expl_state
-            rng, rng_a  = jax.random.split(rng)
+            rng, rng_a = jax.random.split(rng)
 
             _obs = last_obs[np.newaxis]  # (1 (dummy time), num_envs, obs_size)
             _done = last_done[np.newaxis]  # (1 (dummy time), num_envs)
@@ -855,22 +1031,26 @@ def make_train(config):
             new_action = jax.vmap(eps_greedy_exploration)(_rngs, q_vals, eps)
 
             # step env
-            rng, rng_s  = jax.random.split(rng)
+            rng, rng_s = jax.random.split(rng)
             new_obs, new_env_state, reward, new_done, info = env_viz.step(
                 rng_s, env_state, new_action, env_params
             )
 
             # Compute distance to origin for aux loss
-            starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
+            starting_pos = env_state.env_state.player_starting_position[
+                env_state.env_state.player_level
+            ]
             deltas_to_start = env_state.env_state.player_position - starting_pos
 
             # use the values in new_action to get the q_vals
-            q_vals_action_taken = jnp.take_along_axis(q_vals, jnp.expand_dims(new_action, axis=-1), axis=-1).squeeze(axis=-1)
+            q_vals_action_taken = jnp.take_along_axis(
+                q_vals, jnp.expand_dims(new_action, axis=-1), axis=-1
+            ).squeeze(axis=-1)
 
-            info['value'] = q_vals_action_taken
-            info['hidden_state'] = new_hs
-            info['pred_delta'] = aux
-            info['delta'] = deltas_to_start
+            info["value"] = q_vals_action_taken
+            info["hidden_state"] = new_hs
+            info["pred_delta"] = aux
+            info["delta"] = deltas_to_start
 
             transition = Transition(
                 last_hs=hs,
@@ -891,72 +1071,127 @@ def make_train(config):
         def _logging_step(runner_state, unused, logging_threads):
 
             runner_state, minibatch = jax.lax.scan(
-                _env_step_viz, runner_state, None, config['STEPS_PER_VIZ']
+                _env_step_viz, runner_state, None, config["STEPS_PER_VIZ"]
             )
 
-            hidden_states = minibatch.info['hidden_state']
-
+            hidden_states = minibatch.info["hidden_state"]
 
             # Null this for memory savings
-            minibatch.info['hidden_state'] = None
+            minibatch.info["hidden_state"] = None
 
             # Add new logging fields here
-            fields_to_log = ['health', 'food', 'drink', 'energy', 'done', 'is_sleeping', 'is_resting',
-                             'player_position_x',
-                             'player_position_y', 'recover', 'hunger', 'thirst', 'fatigue', 'light_level',
-                             'dist_to_melee_l1',
-                             'melee_on_screen', 'dist_to_passive_l1', 'passive_on_screen', 'dist_to_ranged_l1',
-                             'ranged_on_screen', 'num_melee_nearby', 'num_passives_nearby', 'num_ranged_nearby',
-                             'delta',
-                             'pred_delta', 'num_monsters_killed', 'has_sword', 'has_pick', 'held_iron', 'value',
-                             'episode_id']
+            fields_to_log = [
+                "health",
+                "food",
+                "drink",
+                "energy",
+                "done",
+                "is_sleeping",
+                "is_resting",
+                "player_position_x",
+                "player_position_y",
+                "recover",
+                "hunger",
+                "thirst",
+                "fatigue",
+                "light_level",
+                "dist_to_melee_l1",
+                "melee_on_screen",
+                "dist_to_passive_l1",
+                "passive_on_screen",
+                "dist_to_ranged_l1",
+                "ranged_on_screen",
+                "num_melee_nearby",
+                "num_passives_nearby",
+                "num_ranged_nearby",
+                "delta",
+                "pred_delta",
+                "num_monsters_killed",
+                "has_sword",
+                "has_pick",
+                "held_iron",
+                "value",
+                "episode_id",
+            ]
 
             # Callback function for logging the scalars
             def write_rnn_hstate(hstate, scalars, increment=0):
 
                 cell_state, hidden_state = hstate[0]
 
-                header_field_names = ['health', 'food', 'drink', 'energy', 'done', 'is_sleeping', 'is_resting',
-                                      'player_position_x',
-                                      'player_position_y', 'recover', 'hunger', 'thirst', 'fatigue', 'light_level',
-                                      'dist_to_melee_l1',
-                                      'melee_on_screen', 'dist_to_passive_l1', 'passive_on_screen', 'dist_to_ranged_l1',
-                                      'ranged_on_screen', 'num_melee_nearby', 'num_passives_nearby',
-                                      'num_ranged_nearby', 'delta_x',
-                                      'delta_y', 'pred_delta_x', 'pred_delta_y', 'num_monsters_killed', 'has_sword',
-                                      'has_pick', 'held_iron', 'value', 'episode_id']
+                header_field_names = [
+                    "health",
+                    "food",
+                    "drink",
+                    "energy",
+                    "done",
+                    "is_sleeping",
+                    "is_resting",
+                    "player_position_x",
+                    "player_position_y",
+                    "recover",
+                    "hunger",
+                    "thirst",
+                    "fatigue",
+                    "light_level",
+                    "dist_to_melee_l1",
+                    "melee_on_screen",
+                    "dist_to_passive_l1",
+                    "passive_on_screen",
+                    "dist_to_ranged_l1",
+                    "ranged_on_screen",
+                    "num_melee_nearby",
+                    "num_passives_nearby",
+                    "num_ranged_nearby",
+                    "delta_x",
+                    "delta_y",
+                    "pred_delta_x",
+                    "pred_delta_y",
+                    "num_monsters_killed",
+                    "has_sword",
+                    "has_pick",
+                    "held_iron",
+                    "value",
+                    "episode_id",
+                ]
 
-                run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
+                run_out_path = os.path.join(config["OUTPUT_PATH"], wandb.run.id)
                 os.makedirs(run_out_path, exist_ok=True)
                 # Assemble header for the scalar file(s)
-                scalar_file_header = 'action'
+                scalar_file_header = "action"
                 for key in header_field_names:
-                    scalar_file_header += ',' + key
+                    scalar_file_header += "," + key
 
                 # We save to temp files and then append to the target file since numpy apparently cannot write files in append mode for some reason
                 for i in range(logging_threads):
-                    out_filename_hstates = os.path.join(run_out_path, 'hstates_{}_{}.csv'.format(increment, i))
-                    temp_filename = os.path.join(run_out_path, 'temp.csv')
-                    np.savetxt(temp_filename,
-                               cell_state[:, i, :], delimiter=',')
-                    temp_file = open(temp_filename, 'r')
-                    out_file_hstates = open(out_filename_hstates, 'a+')
+                    out_filename_hstates = os.path.join(
+                        run_out_path, "hstates_{}_{}.csv".format(increment, i)
+                    )
+                    temp_filename = os.path.join(run_out_path, "temp.csv")
+                    np.savetxt(temp_filename, cell_state[:, i, :], delimiter=",")
+                    temp_file = open(temp_filename, "r")
+                    out_file_hstates = open(out_filename_hstates, "a+")
                     out_file_hstates.write(temp_file.read())
                     out_file_hstates.close()
                     temp_file.close()
                     # Then do the same thing for the scalars
-                    out_filename_scalars = os.path.join(run_out_path, 'scalars_{}_{}.csv'.format(increment, i))
-                    temp_filename = os.path.join(run_out_path, 'temp.csv')
-                    np.savetxt(temp_filename,
-                               scalars[:, i, :], delimiter=',', fmt='%f',
-                               header=scalar_file_header
-                               )
-                    temp_file = open(temp_filename, 'r')
-                    out_file_scalars = open(out_filename_scalars, 'a+')
+                    out_filename_scalars = os.path.join(
+                        run_out_path, "scalars_{}_{}.csv".format(increment, i)
+                    )
+                    temp_filename = os.path.join(run_out_path, "temp.csv")
+                    np.savetxt(
+                        temp_filename,
+                        scalars[:, i, :],
+                        delimiter=",",
+                        fmt="%f",
+                        header=scalar_file_header,
+                    )
+                    temp_file = open(temp_filename, "r")
+                    out_file_scalars = open(out_filename_scalars, "a+")
                     out_file_scalars.write(temp_file.read())
                     temp_file.close()
                     out_file_scalars.close()
-                    print('Writing log file', out_filename_hstates)
+                    print("Writing log file", out_filename_hstates)
 
             # Add the specified field to the logging array
             # Also assembles the header for the log file itself
@@ -972,13 +1207,19 @@ def make_train(config):
                 return log_array
 
             # Assemble logging variable array
-            log_array = minibatch.info['action'].reshape(minibatch.info['action'].shape + (1,))
+            log_array = minibatch.info["action"].reshape(
+                minibatch.info["action"].shape + (1,)
+            )
 
             # Yes this is a for loop in the JAX code but this stuff was getting done in serial before anyway and it's cheap operations
             for field_to_log in fields_to_log:
-                log_array = add_field_to_log_array(minibatch.info, log_array, field_to_log)
+                log_array = add_field_to_log_array(
+                    minibatch.info, log_array, field_to_log
+                )
 
-            jax.debug.callback(write_rnn_hstate, hidden_states, log_array, runner_state[0].n_updates)
+            jax.debug.callback(
+                write_rnn_hstate, hidden_states, log_array, runner_state[0].n_updates
+            )
 
             return runner_state, None
 
@@ -991,26 +1232,36 @@ def make_train(config):
 
             # Log model weights
             def save_weights_callback(weights_flat, iter):
-                run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
+                run_out_path = os.path.join(config["OUTPUT_PATH"], wandb.run.id)
                 os.makedirs(run_out_path, exist_ok=True)
-                weight_filename = os.path.join(run_out_path, 'weights_{}.csv'.format(iter))
-                weight_file = open(weight_filename, 'w')
+                weight_filename = os.path.join(
+                    run_out_path, "weights_{}.csv".format(iter)
+                )
+                weight_file = open(weight_filename, "w")
                 for weights_set in weights_flat:
                     if len(weights_set.shape) == 1:
                         continue
-                    np.savetxt(weight_file, np.transpose(weights_set), delimiter=',', fmt='%f')
-                print('Saving weights in file', weight_filename)
+                    np.savetxt(
+                        weight_file, np.transpose(weights_set), delimiter=",", fmt="%f"
+                    )
+                print("Saving weights in file", weight_filename)
 
             weights_flat = jax.tree.flatten(runner_state[0].params)
-            jax.debug.callback(save_weights_callback, weights_flat[0], runner_state[0].n_updates)
+            jax.debug.callback(
+                save_weights_callback, weights_flat[0], runner_state[0].n_updates
+            )
 
             # Can we save the environment state and resume training later?
             # runner_state_copy = runner_state
 
             # Then do iterations of logging
             runner_state, empty = jax.lax.scan(
-                partial(_logging_step, logging_threads=config["LOGGING_THREADS_PER_VIZ"]), runner_state, None,
-                config['LOGGING_STEPS_PER_VIZ']
+                partial(
+                    _logging_step, logging_threads=config["LOGGING_THREADS_PER_VIZ"]
+                ),
+                runner_state,
+                None,
+                config["LOGGING_STEPS_PER_VIZ"],
             )
 
             return runner_state, metrics
@@ -1039,6 +1290,7 @@ def make_train(config):
         return {"runner_state": runner_state, "metrics": metrics}
 
     return train
+
 
 def run_pqn(config):
 
