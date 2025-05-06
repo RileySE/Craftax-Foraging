@@ -99,8 +99,17 @@ def parse_args():
     return parser.parse_args()
 
 NUM_CAN = 4
+N = 12
 
 class ScannedRNN(nn.Module):
+    """
+    GRU layer that now consumes                        ┌─────────────┐
+      • the previous RNN hidden state  hₜ₋₁            │ carry        │
+      • the standard network input      xₜ   = ins     │ rnn_state    │
+      • a reset flag                    dₜ   = resets  ├─────────────┤
+      • the three CAN states,           cₜ             │              │
+                                                       └─────────────┘
+    """
     @functools.partial(
         nn.scan,
         variable_broadcast="params",
@@ -112,13 +121,14 @@ class ScannedRNN(nn.Module):
     def __call__(self, carry, x):
         """Applies the module."""
         rnn_state = carry
-        ins, resets = x
+        ins, resets, can_states = x
         rnn_state = jnp.where(
             resets[:, np.newaxis],
             self.initialize_carry(ins.shape[0], ins.shape[1]),
             rnn_state,
         )
-        new_rnn_state, y = nn.GRUCell(features=ins.shape[1])(rnn_state, ins)
+        gru_input = jnp.concatenate([ins, can_states], axis=-1)  # (B, 512+3·144)
+        new_rnn_state, y = nn.GRUCell(features=ins.shape[1])(rnn_state, gru_input)
         return new_rnn_state, y
 
     @staticmethod
@@ -242,6 +252,8 @@ class VelocityMatMul(nn.Module):
     )
     @nn.compact
     def __call__(self, carry, velocity):
+
+        vel, dones = velocity
         # --------------------------------------------------
         # carry is unused – we just echo it back
         # --------------------------------------------------
@@ -260,12 +272,18 @@ class VelocityMatMul(nn.Module):
             lambda: direction_preference_grid(self.N) # (N*N, 2)
         )
 
+        can_state = carry
+        can_state = jnp.where(
+            dones[:, np.newaxis],
+            self.initialize_carry(vel.shape[0], N),
+            can_state,
+        )
         # --------------------------------------------------------
         # 2.  Core computation each time step
         # --------------------------------------------------------
         
 
-        dot = jnp.matmul(velocity, dir_pref.value.T) # (B, 2) @ (2, N*N) → (B, N*N)
+        dot = jnp.matmul(vel, dir_pref.value.T) # (B, 2) @ (2, N*N) → (B, N*N)
         W = 1.0 + self.alpha * dot
 
         self.sow("intermediates", "W", W)
@@ -275,11 +293,11 @@ class VelocityMatMul(nn.Module):
             ds = (-s + jnn.relu(rec_input + W)) / self.tau
             return s + self.dt * ds
         
-        carry = lax.fori_loop(0, self.steps, step, carry)
+        can_state = lax.fori_loop(0, self.steps, step, can_state)
 
         #mv_term = jnp.matmul(carry, M.value.T)  # (B, N*N) @ (N*N, N*N) → (B, N*N)
 
-        out = carry # (B, N*N) + (B, N*N) → (B, N*N) 
+        out = can_state # (B, N*N) + (B, N*N) → (B, N*N) 
         new_carry = out
       
         # I need to add more of these VelocityMatMul layers to the network
@@ -306,6 +324,8 @@ class ActorCriticRNN(nn.Module):
     def __call__(self, hidden, x):
         rnn_state, can_states = hidden          # can_states ≡ (s1, s2, s3)
         obs, dones = x
+        #print(can_states[0].shape)
+
         embedding = nn.Dense(
             self.config["LAYER_SIZE"],
             kernel_init=orthogonal(np.sqrt(2)),
@@ -313,16 +333,49 @@ class ActorCriticRNN(nn.Module):
         )(obs)
         embedding = nn.relu(embedding)
 
-        rnn_in = (embedding, dones)
+
+
+        # ──────────────────────────────────────────────────────────────
+        # 2) flatten & strip ANY old time‐axes from the CAN states
+        # ──────────────────────────────────────────────────────────────
+        #    each cs might be (B, F) *or* (1, B, F); we force (B, F):
+        flat_cs = []
+        for cs in can_states:
+            # collapse all leading dims except the last
+            new_shape = (cs.shape[-2], cs.shape[-1])
+            flat_cs.append(cs.reshape(new_shape))
+        can_batched = jnp.concatenate(flat_cs, axis=-1)  
+        # now can_batched is (B, 3*144)
+
+        # ──────────────────────────────────────────────────────────────
+        # 3) broadcast that *once* over your RNN time‐axis
+        # ──────────────────────────────────────────────────────────────
+        T, B, _ = embedding.shape
+        can_flat = jnp.broadcast_to(
+            can_batched[None, ...],            # (1, B, 3*144)
+            (T, B, can_batched.shape[-1])      # → (T, B, 3*144)
+        )
+        
+        #print(embedding.shape)
+        #print(can_flat.shape)
+        rnn_in = (embedding, dones, can_flat)
         new_rnn_state, embedding = ScannedRNN()(rnn_state, rnn_in)
+
+        
 
         #########################################################
         # 3. Velocity heads  
         #########################################################
         new_can_states = []
         vel_embeds = []
-        
+        can_states = list(can_states)
+
         for i in range(NUM_CAN):
+            #can_states[i] = jnp.where(
+            #    dones[:, np.newaxis],
+            #    VelocityMatMul.initialize_carry(can_states[i].shape[0], N),
+            #    can_states[i],
+            #)
             vel_raw = nn.Dense(
                 2,
                 kernel_init=orthogonal(1.0),     # keep gain moderate
@@ -331,10 +384,13 @@ class ActorCriticRNN(nn.Module):
             )(embedding)
             
             velocity = nn.tanh(vel_raw)
-            new_can_state, vel_embed = VelocityMatMul()(can_states[i], velocity)
+            vel_in = (velocity, dones)
+            new_can_state, vel_embed = VelocityMatMul()(can_states[i], vel_in)
             
             new_can_states.append(new_can_state)
             vel_embeds.append(vel_embed)
+        
+        self.sow("intermediates", "can_states", new_can_states[0])
         
         new_can_states = tuple(new_can_states)
 
