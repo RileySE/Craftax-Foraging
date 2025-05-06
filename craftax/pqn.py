@@ -373,7 +373,6 @@ def make_train(config):
         config["TOTAL_TIMESTEPS"]
         // config["NUM_STEPS"]
         // config["NUM_ENVS"]
-        // config["UPDATES_PER_VIZ"]
     )
 
     config["NUM_UPDATES_DECAY"] = (
@@ -383,6 +382,7 @@ def make_train(config):
     assert (config["NUM_STEPS"] * config["NUM_ENVS"]) % config[
         "NUM_MINIBATCHES"
     ] == 0, "NUM_MINIBATCHES must divide NUM_STEPS*NUM_ENVS"
+
 
     config["NUM_LOG_STEPS"] = config["NUM_UPDATES"] * config["UPDATES_PER_VIZ"]
 
