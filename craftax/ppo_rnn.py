@@ -368,14 +368,10 @@ class ActorCriticRNN(nn.Module):
         #########################################################
         new_can_states = []
         vel_embeds = []
+        vel_list = []
         can_states = list(can_states)
 
         for i in range(NUM_CAN):
-            #can_states[i] = jnp.where(
-            #    dones[:, np.newaxis],
-            #    VelocityMatMul.initialize_carry(can_states[i].shape[0], N),
-            #    can_states[i],
-            #)
             vel_raw = nn.Dense(
                 2,
                 kernel_init=orthogonal(1.0),     # keep gain moderate
@@ -384,6 +380,7 @@ class ActorCriticRNN(nn.Module):
             )(embedding)
             
             velocity = nn.tanh(vel_raw)
+            vel_list.append(velocity)
             vel_in = (velocity, dones)
             new_can_state, vel_embed = VelocityMatMul()(can_states[i], vel_in)
             
@@ -448,7 +445,7 @@ class ActorCriticRNN(nn.Module):
         )
         new_hidden = (new_rnn_state, new_can_states)
 
-        return new_hidden, pi, jnp.squeeze(critic, axis=-1), aux
+        return new_hidden, pi, jnp.squeeze(critic, axis=-1), aux, vel_list
 
 
 class Transition(NamedTuple):
@@ -655,7 +652,7 @@ def make_train(config):
 
                 # SELECT ACTION
                 ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-                hstate, pi, value, aux = network.apply(train_state.params, hstate, ac_in)
+                hstate, pi, value, aux, vel_list = network.apply(train_state.params, hstate, ac_in)
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
                 value, action, log_prob = (
@@ -707,7 +704,7 @@ def make_train(config):
                 update_step,
             ) = runner_state
             ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-            _, _, last_val, _ = network.apply(train_state.params, hstate, ac_in)
+            _, _, last_val, _, _ = network.apply(train_state.params, hstate, ac_in)
             last_val = last_val.squeeze(0)
 
             def _calculate_gae(traj_batch, last_val, last_done):
@@ -745,7 +742,7 @@ def make_train(config):
 
                     def _loss_fn(params, init_hstate, traj_batch, gae, targets):
                         # RERUN NETWORK
-                        _, pi, value, aux = network.apply(
+                        _, pi, value, aux, vel_list = network.apply(
                             params, init_hstate, (traj_batch.obs, traj_batch.done)
                         )
                         log_prob = pi.log_prob(traj_batch.action)
@@ -909,7 +906,7 @@ def make_train(config):
 
             # SELECT ACTION
             ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-            hstate, pi, value, aux = network.apply(train_state.params, hstate, ac_in)
+            hstate, pi, value, aux, vel_list = network.apply(train_state.params, hstate, ac_in)
             action = pi.sample(seed=_rng)
             log_prob = pi.log_prob(action)
             value, action, log_prob = (
@@ -936,7 +933,7 @@ def make_train(config):
             info['delta'] = deltas_to_start
             info['entropy'] = pi.entropy().squeeze(0)
             info['log_prob'] = log_prob
-
+            info['vel_list'] = jnp.concatenate(vel_list, axis=-1)
             transition = Transition(
                 last_done, action, value, reward, log_prob, last_obs, info, deltas_to_start,
             )
@@ -972,7 +969,7 @@ def make_train(config):
                                       'melee_on_screen','dist_to_passive_l1','passive_on_screen','dist_to_ranged_l1',
                                       'ranged_on_screen','num_melee_nearby','num_passives_nearby','num_ranged_nearby','delta',
                                       'pred_delta', 'num_monsters_killed', 'has_sword', 'has_pick', 'held_iron', 'value',
-                                      'entropy', 'log_prob', 'episode_id', 'can_states']
+                                      'entropy', 'log_prob', 'episode_id', 'can_states', 'vel_list']
 
             # Callback function for logging hidden states
             def write_rnn_hstate(hstate, scalars, increment=0):
@@ -986,8 +983,9 @@ def make_train(config):
                                       'has_pick', 'held_iron', 'value', 'entropy', 'log_prob', 'episode_id']
                 
                 header_field_names += [f'cs_{can_num}_{i}' for can_num in range(NUM_CAN) for i in range(N*N)]
-
-
+                header_field_names += [
+                        name for i in range(NUM_CAN) for name in (f'vx_{i}', f'vy_{i}')
+                    ]
                 run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
                 os.makedirs(run_out_path, exist_ok=True)
                 # Assemble header for the scalar file(s)
