@@ -931,7 +931,7 @@ def make_train(config):
             # Add hstate and other non-env metrics to info so they can be logged
             info['value'] = value
             info['hidden_state'] = hstate[0] # can also add the can state here if we want to log that
-            info['can_state'] = hstate[1]
+            info['can_states'] = jnp.concatenate(hstate[1], axis=-1)  # Shape: (B, 4 * N*N)
             info['pred_delta'] = aux
             info['delta'] = deltas_to_start
             info['entropy'] = pi.entropy().squeeze(0)
@@ -972,10 +972,11 @@ def make_train(config):
                                       'melee_on_screen','dist_to_passive_l1','passive_on_screen','dist_to_ranged_l1',
                                       'ranged_on_screen','num_melee_nearby','num_passives_nearby','num_ranged_nearby','delta',
                                       'pred_delta', 'num_monsters_killed', 'has_sword', 'has_pick', 'held_iron', 'value',
-                            'entropy', 'log_prob', 'episode_id']
+                                      'entropy', 'log_prob', 'episode_id', 'can_states']
 
             # Callback function for logging hidden states
             def write_rnn_hstate(hstate, scalars, increment=0):
+
 
                 header_field_names = ['health','food','drink','energy','done','is_sleeping','is_resting','player_position_x',
                                       'player_position_y','recover','hunger','thirst','fatigue','light_level','dist_to_melee_l1',
@@ -983,6 +984,9 @@ def make_train(config):
                                       'ranged_on_screen','num_melee_nearby','num_passives_nearby','num_ranged_nearby','delta_x',
                                       'delta_y', 'pred_delta_x', 'pred_delta_y', 'num_monsters_killed', 'has_sword',
                                       'has_pick', 'held_iron', 'value', 'entropy', 'log_prob', 'episode_id']
+                
+                header_field_names += [f'cs_{can_num}_{i}' for can_num in range(NUM_CAN) for i in range(N*N)]
+
 
                 run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
                 os.makedirs(run_out_path, exist_ok=True)
