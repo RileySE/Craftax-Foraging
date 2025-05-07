@@ -187,9 +187,9 @@ def parse_args():
         default=False,
         help="Turn on directional vision cones",
     )
-    parser.add_argument("--EPS_START", type=float, default=0.1, help="Initial epsilon")
+    parser.add_argument("--EPS_START", type=float, default=1, help="Initial epsilon")
     parser.add_argument("--EPS_FINISH", type=float, default=0.005, help="Final epsilon")
-    parser.add_argument("--EPS_DECAY", type=float, default=0.2, help="Epsilon decay")
+    parser.add_argument("--EPS_DECAY", type=float, default=0.1, help="Epsilon decay")
     parser.add_argument(
         "--TOTAL_TIMESTEPS_DECAY",
         type=int,
