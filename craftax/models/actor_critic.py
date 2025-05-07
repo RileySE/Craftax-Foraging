@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import flax.linen as nn
 import numpy as np
 from flax.linen.initializers import constant, orthogonal
-from typing import Sequence
+from typing import Sequence, Dict
 
 import distrax
 
@@ -13,7 +13,7 @@ class ActorCriticConvSymbolicCraftax(nn.Module):
     layer_width: int
 
     @nn.compact
-    def __call__(self, obs):
+    def __call__(self, null, obs):
         # Split into map and flat obs
         flat_map_obs_shape = (
             self.map_obs_shape[0] * self.map_obs_shape[1] * self.map_obs_shape[2]
@@ -77,16 +77,33 @@ class ActorCriticConvSymbolicCraftax(nn.Module):
             critic
         )
 
-        return pi, jnp.squeeze(critic, axis=-1)
+        aux = nn.Dense(
+        self.config["LAYER_SIZE"],
+        kernel_init=orthogonal(2),
+        bias_init=constant(0.0),
+        )(embedding)
+        aux = nn.relu(aux)
+        aux = nn.Dense(
+            self.config["LAYER_SIZE"],
+            kernel_init=orthogonal(2),
+            bias_init=constant(0.0),
+        )(aux)
+        aux = nn.relu(aux)
+        aux = nn.Dense(2, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
+            aux
+        )
+
+        return null, pi, jnp.squeeze(critic, axis=-1), aux
 
 
 class ActorCriticConv(nn.Module):
     action_dim: Sequence[int]
-    layer_width: int
+    config: Dict
     activation: str = "tanh"
 
     @nn.compact
-    def __call__(self, obs):
+    def __call__(self, null, obs):
+        obs, dones = obs
         x = nn.Conv(features=32, kernel_size=(5, 5))(obs)
         x = nn.relu(x)
         x = nn.max_pool(x, window_shape=(3, 3), strides=(3, 3))
@@ -100,7 +117,7 @@ class ActorCriticConv(nn.Module):
         embedding = x.reshape(x.shape[0], -1)
 
         actor_mean = nn.Dense(
-            self.layer_width, kernel_init=orthogonal(2), bias_init=constant(0.0)
+            self.config["LAYER_SIZE"], kernel_init=orthogonal(2), bias_init=constant(0.0)
         )(embedding)
         actor_mean = nn.relu(actor_mean)
 
@@ -116,44 +133,61 @@ class ActorCriticConv(nn.Module):
         pi = distrax.Categorical(logits=actor_mean)
 
         critic = nn.Dense(
-            self.layer_width, kernel_init=orthogonal(2), bias_init=constant(0.0)
+            self.config["LAYER_SIZE"], kernel_init=orthogonal(2), bias_init=constant(0.0)
         )(embedding)
         critic = nn.relu(critic)
         critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
             critic
         )
 
-        return pi, jnp.squeeze(critic, axis=-1)
+        aux = nn.Dense(
+        self.config["LAYER_SIZE"],
+        kernel_init=orthogonal(2),
+        bias_init=constant(0.0),
+        )(embedding)
+        aux = nn.relu(aux)
+        aux = nn.Dense(
+            self.config["LAYER_SIZE"],
+            kernel_init=orthogonal(2),
+            bias_init=constant(0.0),
+        )(aux)
+        aux = nn.relu(aux)
+        aux = nn.Dense(2, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
+            aux
+        )
+
+        return null, pi, jnp.squeeze(critic, axis=-1), aux
 
 
 class ActorCritic(nn.Module):
     action_dim: Sequence[int]
-    layer_width: int
+    config: Dict
     activation: str = "tanh"
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, null, x):
+        obs, dones = x
         if self.activation == "relu":
             activation = nn.relu
         else:
             activation = nn.tanh
 
         actor_mean = nn.Dense(
-            self.layer_width,
+            self.config["LAYER_SIZE"],
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
-        )(x)
+        )(obs)
         actor_mean = activation(actor_mean)
 
         actor_mean = nn.Dense(
-            self.layer_width,
+            self.config["LAYER_SIZE"],
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
         )(actor_mean)
         actor_mean = activation(actor_mean)
 
         actor_mean = nn.Dense(
-            self.layer_width,
+            self.config["LAYER_SIZE"],
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
         )(actor_mean)
@@ -165,21 +199,21 @@ class ActorCritic(nn.Module):
         pi = distrax.Categorical(logits=actor_mean)
 
         critic = nn.Dense(
-            self.layer_width,
+            self.config["LAYER_SIZE"],
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
-        )(x)
+        )(obs)
         critic = activation(critic)
 
         critic = nn.Dense(
-            self.layer_width,
+            self.config["LAYER_SIZE"],
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
         )(critic)
         critic = activation(critic)
 
         critic = nn.Dense(
-            self.layer_width,
+            self.config["LAYER_SIZE"],
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
         )(critic)
@@ -189,7 +223,23 @@ class ActorCritic(nn.Module):
             critic
         )
 
-        return pi, jnp.squeeze(critic, axis=-1)
+        aux = nn.Dense(
+        self.config["LAYER_SIZE"],
+        kernel_init=orthogonal(2),
+        bias_init=constant(0.0),
+        )(obs)
+        aux = nn.relu(aux)
+        aux = nn.Dense(
+            self.config["LAYER_SIZE"],
+            kernel_init=orthogonal(2),
+            bias_init=constant(0.0),
+        )(aux)
+        aux = nn.relu(aux)
+        aux = nn.Dense(2, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
+            aux
+        )
+
+        return null, pi, jnp.squeeze(critic, axis=-1), aux
 
 
 class ActorCriticWithEmbedding(nn.Module):
@@ -198,7 +248,7 @@ class ActorCriticWithEmbedding(nn.Module):
     activation: str = "tanh"
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, null, x):
         if self.activation == "relu":
             activation = nn.relu
         else:
@@ -253,4 +303,20 @@ class ActorCriticWithEmbedding(nn.Module):
             critic
         )
 
-        return pi, jnp.squeeze(critic, axis=-1), actor_emb
+        aux = nn.Dense(
+        self.config["LAYER_SIZE"],
+        kernel_init=orthogonal(2),
+        bias_init=constant(0.0),
+        )(x)
+        aux = nn.relu(aux)
+        aux = nn.Dense(
+            self.config["LAYER_SIZE"],
+            kernel_init=orthogonal(2),
+            bias_init=constant(0.0),
+        )(aux)
+        aux = nn.relu(aux)
+        aux = nn.Dense(2, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
+            aux
+        )
+        # NOTE: I may have broken this "embedding" model, but I'm also not sure we use it ever
+        return null, pi, jnp.squeeze(critic, axis=-1), aux
