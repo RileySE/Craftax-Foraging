@@ -38,7 +38,7 @@ from craftax.environment_base.wrappers import (
     CurriculumWrapper
 )
 from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
-from craftax.models.actor_critic import ActorCritic, ActorCriticConv
+from craftax.models.actor_critic import ActorCritic, ActorCriticConv, ActorCriticSharedRep
 
 
 def parse_args():
@@ -318,7 +318,7 @@ def make_train(config):
 
         if config['NO_MEMORY']:
             if is_symbolic:
-                network = ActorCritic(action_space_size, config=config)
+                network = ActorCriticSharedRep(action_space_size, config=config)
             else:
                 network = ActorCriticConv(action_space_size, config=config)
         else:

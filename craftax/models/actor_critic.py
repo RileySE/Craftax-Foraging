@@ -162,7 +162,7 @@ class ActorCriticConv(nn.Module):
 class ActorCritic(nn.Module):
     action_dim: Sequence[int]
     config: Dict
-    activation: str = "tanh"
+    activation: str = "relu"
 
     @nn.compact
     def __call__(self, null, x):
@@ -228,19 +228,106 @@ class ActorCritic(nn.Module):
         kernel_init=orthogonal(2),
         bias_init=constant(0.0),
         )(obs)
-        aux = nn.relu(aux)
+        aux = activation(aux)
         aux = nn.Dense(
             self.config["LAYER_SIZE"],
             kernel_init=orthogonal(2),
             bias_init=constant(0.0),
         )(aux)
-        aux = nn.relu(aux)
+        aux = activation(aux)
+        aux = nn.Dense(
+            self.config["LAYER_SIZE"],
+            kernel_init=orthogonal(2),
+            bias_init=constant(0.0),
+        )(aux)
+        aux = activation(aux)
         aux = nn.Dense(2, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
             aux
         )
 
         return null, pi, jnp.squeeze(critic, axis=-1), aux
 
+# Like above, but with a shared set of layers at the beginning to mirror the structure of the RNN model
+class ActorCriticSharedRep(nn.Module):
+    action_dim: Sequence[int]
+    config: Dict
+    activation: str = "relu"
+
+    @nn.compact
+    def __call__(self, null, x):
+        obs, dones = x
+        if self.activation == "relu":
+            activation = nn.relu
+        else:
+            activation = nn.tanh
+
+        # Shared backbone
+        shared = nn.Dense(
+            self.config["LAYER_SIZE"],
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0),
+        )(obs)
+        shared = activation(shared)
+        shared = nn.Dense(
+            self.config["LAYER_SIZE"],
+            kernel_init=orthogonal(2),
+            bias_init=constant(0.0),
+        )(shared)
+        shared = activation(shared)
+
+        # Policy
+        actor_mean = nn.Dense(
+            self.config["LAYER_SIZE"],
+            kernel_init=orthogonal(2),
+            bias_init=constant(0.0),
+        )(shared)
+        actor_mean = activation(actor_mean)
+        actor_mean = nn.Dense(
+            self.config["LAYER_SIZE"],
+            kernel_init=orthogonal(2),
+            bias_init=constant(0.0),
+        )(actor_mean)
+        actor_mean = activation(actor_mean)
+        actor_mean = nn.Dense(
+            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+        )(actor_mean)
+        pi = distrax.Categorical(logits=actor_mean)
+
+        # Value
+        critic = nn.Dense(
+            self.config["LAYER_SIZE"],
+            kernel_init=orthogonal(2),
+            bias_init=constant(0.0),
+        )(shared)
+        critic = activation(critic)
+        critic = nn.Dense(
+            self.config["LAYER_SIZE"],
+            kernel_init=orthogonal(2),
+            bias_init=constant(0.0),
+        )(critic)
+        critic = activation(critic)
+        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
+            critic
+        )
+
+        # Aux
+        aux = nn.Dense(
+        self.config["LAYER_SIZE"],
+        kernel_init=orthogonal(2),
+        bias_init=constant(0.0),
+        )(shared)
+        aux = activation(aux)
+        aux = nn.Dense(
+            self.config["LAYER_SIZE"],
+            kernel_init=orthogonal(2),
+            bias_init=constant(0.0),
+        )(aux)
+        aux = activation(aux)
+        aux = nn.Dense(2, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
+            aux
+        )
+
+        return null, pi, jnp.squeeze(critic, axis=-1), aux
 
 class ActorCriticWithEmbedding(nn.Module):
     action_dim: Sequence[int]
