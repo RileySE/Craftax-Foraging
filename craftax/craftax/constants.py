@@ -312,6 +312,22 @@ MOB_TYPE_HEALTH_MAPPING = jnp.array(
     dtype=jnp.float32,
 )
 
+MOB_TYPE_HEALTH_MAPPING_INVINCIBLE = jnp.array(
+    [
+        # (passive, melee, ranged, -)
+        jnp.array([3, 999999999, 999999999, 0]),  # Floor 0 (overworld)
+        jnp.array([4, 7, 5, 0]),  # Floor 1 (gnomish mines)
+        jnp.array([6, 9, 6, 0]),  # Floor 2 (dungeon)
+        jnp.array([8, 11, 8, 0]),  # Floor 3 (sewers)
+        jnp.array([0, 12, 12, 0]),  # Floor 4 (vaults)
+        jnp.array([0, 20, 4, 0]),  # Floor 5 (troll mines)
+        jnp.array([0, 20, 14, 0]),  # Floor 6 (fire)
+        jnp.array([0, 24, 16, 0]),  # Floor 7 (ice)
+        jnp.array([0, 0, 0, 0]),  # Floor 8 (boss)
+    ],
+    dtype=jnp.float32,
+)
+
 NO_DEFENSE = [0, 0, 0]
 MOB_TYPE_DEFENSE_MAPPING = jnp.array(
     [

@@ -2154,7 +2154,7 @@ def spawn_mobs(state, rng, params, static_params):
 
     new_passive_mob_health = jax.lax.select(
         can_spawn_passive_mob,
-        MOB_TYPE_HEALTH_MAPPING[new_passive_mob_type, MobType.PASSIVE.value],
+        MOB_TYPE_HEALTH_MAPPING_INVINCIBLE[new_passive_mob_type, MobType.PASSIVE.value],
         state.passive_mobs.health[state.player_level, new_passive_mob_index],
     )
 
@@ -2282,7 +2282,7 @@ def spawn_mobs(state, rng, params, static_params):
 
     new_melee_mob_health = jax.lax.select(
         can_spawn_melee_mob,
-        MOB_TYPE_HEALTH_MAPPING[new_melee_mob_type, MobType.MELEE.value],
+        MOB_TYPE_HEALTH_MAPPING_INVINCIBLE[new_melee_mob_type, MobType.MELEE.value],
         state.melee_mobs.health[state.player_level, new_melee_mob_index],
     )
 
@@ -2403,7 +2403,7 @@ def spawn_mobs(state, rng, params, static_params):
 
     new_ranged_mob_health = jax.lax.select(
         can_spawn_ranged_mob,
-        MOB_TYPE_HEALTH_MAPPING[new_ranged_mob_type, MobType.RANGED.value],
+        MOB_TYPE_HEALTH_MAPPING_INVINCIBLE[new_ranged_mob_type, MobType.RANGED.value],
         state.ranged_mobs.health[state.player_level, new_ranged_mob_index],
     )
 
