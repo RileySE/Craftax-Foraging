@@ -1119,6 +1119,8 @@ def make_train(config):
 
                 cell_state, hidden_state = hstate[0]
 
+                print("scalars shape: ", scalars.shape)
+
                 header_field_names = [
                     "health",
                     "food",
