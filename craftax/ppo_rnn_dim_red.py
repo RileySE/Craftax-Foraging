@@ -98,7 +98,7 @@ def parse_args():
     parser.add_argument("--directional_vision", action=argparse.BooleanOptionalAction, default=False, help="Turn on directional vision cones")
     return parser.parse_args()
 
-NUM_CAN = 2
+NUM_CAN = 3
 N = 12
 
 class ScannedRNN(nn.Module):
@@ -347,16 +347,25 @@ class ActorCriticRNN(nn.Module):
             # collapse all leading dims except the last
             new_shape = (cs.shape[-2], cs.shape[-1])
             flat_cs.append(cs.reshape(new_shape))
-        can_batched = jnp.concatenate(flat_cs, axis=-1)  
         # now can_batched is (B, 3*144)
+
+        def pool4(x, N=12, block=6):
+            B = x.shape[0]
+            grid   = x.reshape(B, N, N)                            # (B,12,12)
+            blocks = grid.reshape(B, N//block, block, N//block, block)  # (B,2,6,2,6)
+            small  = blocks.mean(axis=(2,4))                       # (B,2,2)
+            return small.reshape(B, -1)                            # (B,4)
+
+        pooled_cs = [ pool4(cs) for cs in flat_cs ]              # three (B,4)
+        can_pooled = jnp.concatenate(pooled_cs, axis=-1)         # (B, 12)
 
         # ──────────────────────────────────────────────────────────────
         # 3) broadcast that *once* over your RNN time‐axis
         # ──────────────────────────────────────────────────────────────
         T, B, _ = embedding.shape
         can_flat = jnp.broadcast_to(
-            can_batched[None, ...],            # (1, B, 3*144)
-            (T, B, can_batched.shape[-1])      # → (T, B, 3*144)
+            can_pooled[None, ...],            # (1, B, 12)
+            (T, B, can_pooled.shape[-1])      # → (T, B, 12)
         )
         
         #print(embedding.shape)

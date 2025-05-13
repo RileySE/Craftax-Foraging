@@ -98,7 +98,7 @@ def parse_args():
     parser.add_argument("--directional_vision", action=argparse.BooleanOptionalAction, default=False, help="Turn on directional vision cones")
     return parser.parse_args()
 
-NUM_CAN = 2
+NUM_CAN = 3
 N = 12
 
 class ScannedRNN(nn.Module):
@@ -324,10 +324,14 @@ class ActorCriticRNN(nn.Module):
     config: Dict
 
     @nn.compact
-    def __call__(self, hidden, x):
+    def __call__(self, hidden, x, prev_actions: jnp.ndarray):
         rnn_state, can_states = hidden          # can_states ≡ (s1, s2, s3)
         obs, dones = x
         #print(can_states[0].shape)
+        print("obs.shape", obs.shape)
+        print("dones.shape", dones.shape)
+        print("rnn_state.shape", rnn_state.shape)
+        print("can_states[0].shape", can_states[0].shape)
 
         embedding = nn.Dense(
             self.config["LAYER_SIZE"],
@@ -350,13 +354,23 @@ class ActorCriticRNN(nn.Module):
         can_batched = jnp.concatenate(flat_cs, axis=-1)  
         # now can_batched is (B, 3*144)
 
+        def pool4(x, N=12, block=6):
+            B = x.shape[0]
+            grid   = x.reshape(B, N, N)                            # (B,12,12)
+            blocks = grid.reshape(B, N//block, block, N//block, block)  # (B,2,6,2,6)
+            small  = blocks.mean(axis=(2,4))                       # (B,2,2)
+            return small.reshape(B, -1)                            # (B,4)
+
+        pooled_cs = [ pool4(cs) for cs in flat_cs ]              # three (B,4)
+        can_pooled = jnp.concatenate(pooled_cs, axis=-1)         # (B, 12)
+
         # ──────────────────────────────────────────────────────────────
         # 3) broadcast that *once* over your RNN time‐axis
         # ──────────────────────────────────────────────────────────────
         T, B, _ = embedding.shape
         can_flat = jnp.broadcast_to(
-            can_batched[None, ...],            # (1, B, 3*144)
-            (T, B, can_batched.shape[-1])      # → (T, B, 3*144)
+            can_pooled[None, ...],            # (1, B, 3*144)
+            (T, B, can_pooled.shape[-1])      # → (T, B, 3*144)
         )
         
         #print(embedding.shape)
@@ -370,27 +384,60 @@ class ActorCriticRNN(nn.Module):
         # 3. Velocity heads  
         #########################################################
         new_can_states = []
-        vel_embeds = []
         vel_list = []
         can_states = list(can_states)
+        # Create three different act2vel mappings with different magnitudes
+        act2vel_1 = self.variable(
+            "constants", "act2vel_1",
+            lambda: jnp.vstack([
+                jnp.array([0.0, 0.0]),
+                jnp.array([0.0, -1.0]),
+                jnp.array([0.0,  1.0]),
+                jnp.array([-1.0, 0.0]),
+                jnp.array([1.0,  0.0]),
+                jnp.zeros((self.action_dim - 5, 2))
+            ])
+        ).value  # shape (action_dim, 2), magnitude 1.0
+        
+        act2vel_2 = self.variable(
+            "constants", "act2vel_2",
+            lambda: jnp.vstack([
+                jnp.array([0.0, 0.0]),
+                jnp.array([0.0, -0.6]),
+                jnp.array([0.0,  0.6]),
+                jnp.array([-0.6, 0.0]),
+                jnp.array([0.6,  0.0]),
+                jnp.zeros((self.action_dim - 5, 2))
+            ])
+        ).value  # shape (action_dim, 2), magnitude 0.6
+        
+        act2vel_3 = self.variable(
+            "constants", "act2vel_3",
+            lambda: jnp.vstack([
+                jnp.array([0.0, 0.0]),
+                jnp.array([0.0, -0.4]),
+                jnp.array([0.0,  0.4]),
+                jnp.array([-0.4, 0.0]),
+                jnp.array([0.4,  0.0]),
+                jnp.zeros((self.action_dim - 5, 2))
+            ])
+        ).value  # shape (action_dim, 2), magnitude 0.4
+        
+        # List of act2vel mappings
+        act2vel_list = [act2vel_1, act2vel_2, act2vel_3]
 
         for i in range(NUM_CAN):
-            vel_raw = nn.Dense(
-                2,
-                kernel_init=orthogonal(1.0),     # keep gain moderate
-                bias_init=constant(0.0),
-                name=f"velocity_head{i+1}",
-            )(embedding)
-            
-            velocity = nn.tanh(vel_raw)
+            # Use the appropriate act2vel mapping for each CAN
+            velocity = jnp.take(act2vel_list[i], prev_actions, axis=0)
             vel_list.append(velocity)
             vel_in = (velocity, dones)
             new_can_state, vel_embed = VelocityMatMul()(can_states[i], vel_in)
             
             new_can_states.append(new_can_state)
-            vel_embeds.append(vel_embed)
         
         self.sow("intermediates", "can_states", new_can_states[0])
+
+        
         
         new_can_states = tuple(new_can_states)
 
@@ -453,6 +500,7 @@ class ActorCriticRNN(nn.Module):
 
 class Transition(NamedTuple):
     done: jnp.ndarray
+    last_action: jnp.ndarray
     action: jnp.ndarray
     value: jnp.ndarray
     reward: jnp.ndarray
@@ -592,8 +640,9 @@ def make_train(config):
             )
             for _ in range(NUM_CAN)
         )
+        init_prev_actions = jnp.zeros((1, config["NUM_ENVS"]), dtype=jnp.int32)
         init_hstate = (init_rnn_state, init_can_states)
-        network_params = network.init(_rng, init_hstate, init_x)
+        network_params = network.init(_rng, init_hstate, init_x, init_prev_actions)
         if config["ANNEAL_LR"]:
             tx = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
@@ -647,13 +696,15 @@ def make_train(config):
                     last_done,
                     hstate,
                     rng,
+                    last_action,
                     update_step,
                 ) = runner_state
                 rng, _rng = jax.random.split(rng)
 
                 # SELECT ACTION
                 ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-                hstate, pi, value, aux, vel_list = network.apply(train_state.params, hstate, ac_in)
+                pa = last_action[np.newaxis, :]
+                hstate, pi, value, aux, vel_list = network.apply(train_state.params, hstate, ac_in, pa)
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
                 value, action, log_prob = (
@@ -674,7 +725,7 @@ def make_train(config):
                 deltas_to_start = env_state.env_state.player_position - starting_pos
 
                 transition = Transition(
-                    last_done, action, value, reward, log_prob, last_obs, info, deltas_to_start
+                    last_done, last_action, action, value, reward, log_prob, last_obs, info, deltas_to_start
                 )
                 runner_state = (
                     train_state,
@@ -683,13 +734,14 @@ def make_train(config):
                     done,
                     hstate,
                     rng,
+                    action,
                     update_step,
                 )
                 return runner_state, transition
 
             train_state = runner_state[0]
 
-            initial_hstate = runner_state[-3]
+            initial_hstate = runner_state[-4]
             runner_state, traj_batch = jax.lax.scan(
                 _env_step, runner_state, None, config["NUM_ENV_STEPS"]
             )
@@ -702,10 +754,12 @@ def make_train(config):
                 last_done,
                 hstate,
                 rng,
+                last_action,
                 update_step,
             ) = runner_state
             ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-            _, _, last_val, _, _ = network.apply(train_state.params, hstate, ac_in)
+            pa = last_action[np.newaxis, :]
+            _, _, last_val, _, _ = network.apply(train_state.params, hstate, ac_in, pa)
             last_val = last_val.squeeze(0)
 
             def _calculate_gae(traj_batch, last_val, last_done):
@@ -742,11 +796,18 @@ def make_train(config):
                     init_hstate, traj_batch, advantages, targets = batch_info
                     rnn_state, can_states = init_hstate
                     init_hstate = (rnn_state[0], tuple(cs[0] for cs in can_states))
-
+                    #can_states = list(can_states)
+                    #for i in range(len(can_states)):
+                    #    can_states[i] = can_states[i][0]
+                    #can_states = tuple(can_states)
+                    #init_hstate = (rnn_state[0], can_states)
+                    print("can_states.shape", can_states[0].shape)
                     def _loss_fn(params, init_hstate, traj_batch, gae, targets):
+
+                        pa = traj_batch.last_action
                         # RERUN NETWORK
                         _, pi, value, aux, vel_list = network.apply(
-                            params, init_hstate, (traj_batch.obs, traj_batch.done)
+                            params, init_hstate, (traj_batch.obs, traj_batch.done), pa
                         )
                         log_prob = pi.log_prob(traj_batch.action)
 
@@ -888,6 +949,7 @@ def make_train(config):
                 last_done,
                 hstate,
                 rng,
+                last_action,
                 update_step + 1,
             )
 
@@ -903,13 +965,15 @@ def make_train(config):
                 last_done,
                 hstate,
                 rng,
+                last_action,
                 update_step,
             ) = runner_state
             rng, _rng = jax.random.split(rng)
 
             # SELECT ACTION
             ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-            hstate, pi, value, aux, vel_list = network.apply(train_state.params, hstate, ac_in)
+            pa = last_action[np.newaxis, :]
+            hstate, pi, value, aux, vel_list = network.apply(train_state.params, hstate, ac_in, pa)
             action = pi.sample(seed=_rng)
             log_prob = pi.log_prob(action)
             value, action, log_prob = (
@@ -938,7 +1002,7 @@ def make_train(config):
             info['log_prob'] = log_prob
             info['vel_list'] = jnp.concatenate(vel_list, axis=-1)
             transition = Transition(
-                last_done, action, value, reward, log_prob, last_obs, info, deltas_to_start,
+                last_done, last_action, action, value, reward, log_prob, last_obs, info, deltas_to_start,
             )
             runner_state = (
                 train_state,
@@ -947,6 +1011,7 @@ def make_train(config):
                 done,
                 hstate,
                 rng,
+                action,
                 update_step,
             )
             return runner_state, transition
@@ -1087,6 +1152,7 @@ def make_train(config):
             return runner_state, metric
 
         rng, _rng = jax.random.split(rng)
+        init_last_action = jnp.zeros((config["NUM_ENVS"],), dtype=jnp.int32)
         runner_state = (
             train_state,
             log_state,
@@ -1094,6 +1160,7 @@ def make_train(config):
             jnp.zeros((config["NUM_ENVS"]), dtype=bool),
             init_hstate,
             _rng,
+            init_last_action,
             0,
         )
 
@@ -1124,6 +1191,7 @@ def make_train(config):
             jnp.ones((config["NUM_ENVS"]), dtype=bool),
             runner_state[4],
             rng,
+            runner_state[-2],
             config['VALIDATION_STEP_OFFSET'] + runner_state[-1],
         )
 

@@ -10,8 +10,6 @@ import jaxpruner
 import numpy as np
 import optax
 import time
-from jax import lax
-import jax.nn as jnn
 
 from flax.training import orbax_utils
 from matplotlib import pyplot as plt, animation
@@ -98,18 +96,7 @@ def parse_args():
     parser.add_argument("--directional_vision", action=argparse.BooleanOptionalAction, default=False, help="Turn on directional vision cones")
     return parser.parse_args()
 
-NUM_CAN = 2
-N = 12
-
 class ScannedRNN(nn.Module):
-    """
-    GRU layer that now consumes                        ┌─────────────┐
-      • the previous RNN hidden state  hₜ₋₁            │ carry        │
-      • the standard network input      xₜ   = ins     │ rnn_state    │
-      • a reset flag                    dₜ   = resets  ├─────────────┤
-      • the three CAN states,           cₜ             │              │
-                                                       └─────────────┘
-    """
     @functools.partial(
         nn.scan,
         variable_broadcast="params",
@@ -121,14 +108,13 @@ class ScannedRNN(nn.Module):
     def __call__(self, carry, x):
         """Applies the module."""
         rnn_state = carry
-        ins, resets, can_states = x
+        ins, resets = x
         rnn_state = jnp.where(
             resets[:, np.newaxis],
             self.initialize_carry(ins.shape[0], ins.shape[1]),
             rnn_state,
         )
-        gru_input = jnp.concatenate([ins, can_states], axis=-1)  # (B, 512+3·144)
-        new_rnn_state, y = nn.GRUCell(features=ins.shape[1])(rnn_state, gru_input)
+        new_rnn_state, y = nn.GRUCell(features=ins.shape[1])(rnn_state, ins)
         return new_rnn_state, y
 
     @staticmethod
@@ -137,198 +123,13 @@ class ScannedRNN(nn.Module):
         cell = nn.GRUCell(features=hidden_size)
         return cell.initialize_carry(jax.random.PRNGKey(0), (batch_size, hidden_size))
 
-def direction_preference_grid(N: int) -> jnp.ndarray:
-    """
-    Build the (N², 2) table of unit vectors
-    (0,1), (1,0), (0,‑1), (‑1,0) in a 2 × 2 tiling pattern.
-    """
-    # Pattern for a 2×2 tile, shape (2,2,2)
-    tile = jnp.array([
-        [[0.,  1.],  # North
-         [1.,  0.]], # East
-        [[0., -1.],  # South
-         [-1., 0.]]  # West
-    ])
-    # Repeat it until we get an (N,N,2) array, then flatten to (N²,2)
-    reps = (N // 2, N // 2, 1)
-    return jnp.tile(tile, reps).reshape(-1, 2)      # (N*N, 2)
-
-def rhombus_coords(N: int) -> jnp.ndarray:                   # (N², 2)
-    i = jnp.arange(N)
-    j = jnp.arange(N)
-    ii, jj = jnp.meshgrid(i, j, indexing="ij")               # shape (N,N)
-
-    # eqn (28) from the paper …  (cells are in [0, 1)  ×  [0, √3/2) )
-    x = (ii + 0.5 * jj + 0.75) / N
-    y = (jnp.sqrt(3) / 2) * (jj + 0.5) / N
-    return jnp.stack([x, y], axis=-1).reshape(-1, 2)
-
-"""def make_dist_matrix(n_rows: int, n_cols: int):
-    i = jnp.arange(n_rows, dtype=jnp.float32).reshape(n_rows, 1)  # shape (n_rows, 1)
-    j = jnp.arange(n_cols, dtype=jnp.float32).reshape(1, n_cols)  # shape (1, n_cols)
-    M = jnp.abs(i - j) / 512.0                                    # element‑wise formula
-    return M
-"""
-
-def make_dist_matrix(
-    N: int,
-    *,
-    a: float   = 1.0,      # centre‑surround gain
-    sigma: float = 4.5,    # width of the excitatory bump   (in “r” units below)
-    l: float   = 1.5,      # shift strength (cf. equation (18))
-    dtype=jnp.float32
-) -> jnp.ndarray:          # (N², N²)
-    P = N * N                                      # total number of neurons
-
-    pos   = rhombus_coords(N)                      # (P, 2)
-    e     = direction_preference_grid(N)           # (P, 2)
-
-    # ------------------------------------------------------------------
-    # base (unshifted) displacement  …  (P, P, 2)
-    # Δ = r_i  –  r_j  –  (l/N) · e_j     ––– eqn (18)
-    # ------------------------------------------------------------------
-    diff = (pos[:, None, :]                       # (P,1,2)
-            - pos[None, :, :]                     # (1,P,2)
-            - (l / N) * e[None, :, :])            # (1,P,2)
-
-    # nine slip‑vectors that realise the triangular torus tiling
-    shifts = jnp.asarray([
-        [ 0.0,  0.0],
-        [-0.5,  jnp.sqrt(3)/2],  [-0.5, -jnp.sqrt(3)/2],
-        [ 0.5,  jnp.sqrt(3)/2],  [ 0.5, -jnp.sqrt(3)/2],
-        [-1.0,  0.0],            [ 1.0,  0.0],
-        [-1.5, -jnp.sqrt(3)/2],  [ 1.5,  jnp.sqrt(3)/2],
-    ], dtype=dtype)                                # (9, 2)
-
-    # ------------------------------------------------------------------
-    # for every pair (i,j) take the *minimum* distance over the 9 shifts
-    # ------------------------------------------------------------------
-    d2   = jnp.sum(                                # (9,P,P)
-        (diff[None, :, :, :] + shifts[:, None, None, :]) ** 2,
-        axis=-1
-    )
-    d2_min    = d2.min(axis=0)               # (P,P)   – actual distance
-    r2    = d2_min * (N*N)                                  # scale exactly as in the
-                                                  # reference implementation
-
-    # ------------------------------------------------------------------
-    # centre‑surround profile  W₀(r)  (eqn (15))
-    # ------------------------------------------------------------------
-    W = a * jnp.exp(-r2 / (2.0 * sigma**2)) - a    # (P,P)
-
-    return W.astype(dtype)
-
-class VelocityMatMul(nn.Module):
-    """Batched mat‑mul:  v  ↦  M·v  with a fixed N*N×N*N matrix.
-
-    * Input  shape:  (T, B, 2)   – because we keep the same scan
-      convention as `ScannedRNN` (time axis 0, batch axis 1, features 2).
-    * Output shape:  (T, B, N*N)
-    * No parameters are created; `M` lives in the non‑trainable
-      `constants` collection so it is saved/restored with checkpoints
-      but never updated by the optimiser.
-
-      Recurrent layer
-        hₜ   ∈ ℝ^{N²}   (stored in `carry`)
-        vₜ   ∈ ℝ²        (fed in every step)
-
-        outₜ = hₜ·Mᵀ + (1 + α vₜ·dir_prefᵀ)
-        hₜ₊₁ = outₜ
-    """
-    N: int = N
-    alpha: float = 0.1
-
-    dt: float = 0.05
-    tau: float = 1.0
-    steps: int = 50
-
-    @functools.partial(
-        nn.scan,
-        variable_broadcast=("constants",),       # nothing in "params", but keeps the signature identical
-        variable_axes={"intermediates": 0}, # stack W along the time axis
-        in_axes=0,
-        out_axes=0,
-        split_rngs={"params": False},
-    )
-    @nn.compact
-    def __call__(self, carry, velocity):
-
-        vel, dones = velocity
-        # --------------------------------------------------
-        # carry is unused – we just echo it back
-        # --------------------------------------------------
-
-        # Create / retrieve the fixed matrix once.
-        # Shape (512, 2); dtype=float32  (match your other layers).
-        M = self.variable(
-            "constants", # Ensures that the matrix is only created once.
-            "fixed_M",
-            lambda: make_dist_matrix(self.N)   # (N*N, 2)
-        )
-
-        dir_pref = self.variable(
-            "constants",
-            "dir_pref",
-            lambda: direction_preference_grid(self.N) # (N*N, 2)
-        )
-
-        can_state = carry
-        can_state = jnp.where(
-            dones[:, np.newaxis],
-            self.initialize_carry(vel.shape[0], N),
-            can_state,
-        )
-        # --------------------------------------------------------
-        # 2.  Core computation each time step
-        # --------------------------------------------------------
-        
-
-        dot = jnp.matmul(vel, dir_pref.value.T) # (B, 2) @ (2, N*N) → (B, N*N)
-        W = 1.0 + self.alpha * dot
-
-        self.sow("intermediates", "W", W)
-
-        def step(_, s):
-            rec_input = jnp.matmul(s, M.value.T)
-            ds = (-s + jnn.relu(rec_input + W)) / self.tau
-            return s + self.dt * ds
-        
-        can_state = lax.fori_loop(0, self.steps, step, can_state)
-
-        #mv_term = jnp.matmul(carry, M.value.T)  # (B, N*N) @ (N*N, N*N) → (B, N*N)
-
-        out = can_state # (B, N*N) + (B, N*N) → (B, N*N) 
-        new_carry = out
-      
-        # I need to add more of these VelocityMatMul layers to the network
-        # I need to make the recurrency so that the GRU has the carries and input as well.
-
-        return new_carry, out
-    
-    @staticmethod
-    def initialize_carry(batch_size: int,
-                         N: int,
-                         dtype = jnp.float32) -> jnp.ndarray:
-        
-        state = jax.random.uniform(
-            jax.random.PRNGKey(0),
-            shape=(batch_size, N * N),
-            minval=0.0,
-            maxval=0.01,
-            dtype=dtype
-        )
-        return state.at[:, 0].set(1.0)
-
 class ActorCriticRNN(nn.Module):
     action_dim: Sequence[int]
     config: Dict
 
     @nn.compact
     def __call__(self, hidden, x):
-        rnn_state, can_states = hidden          # can_states ≡ (s1, s2, s3)
         obs, dones = x
-        #print(can_states[0].shape)
-
         embedding = nn.Dense(
             self.config["LAYER_SIZE"],
             kernel_init=orthogonal(np.sqrt(2)),
@@ -336,65 +137,12 @@ class ActorCriticRNN(nn.Module):
         )(obs)
         embedding = nn.relu(embedding)
 
-
-
-        # ──────────────────────────────────────────────────────────────
-        # 2) flatten & strip ANY old time‐axes from the CAN states
-        # ──────────────────────────────────────────────────────────────
-        #    each cs might be (B, F) *or* (1, B, F); we force (B, F):
-        flat_cs = []
-        for cs in can_states:
-            # collapse all leading dims except the last
-            new_shape = (cs.shape[-2], cs.shape[-1])
-            flat_cs.append(cs.reshape(new_shape))
-        can_batched = jnp.concatenate(flat_cs, axis=-1)  
-        # now can_batched is (B, 3*144)
-
-        # ──────────────────────────────────────────────────────────────
-        # 3) broadcast that *once* over your RNN time‐axis
-        # ──────────────────────────────────────────────────────────────
-        T, B, _ = embedding.shape
-        can_flat = jnp.broadcast_to(
-            can_batched[None, ...],            # (1, B, 3*144)
-            (T, B, can_batched.shape[-1])      # → (T, B, 3*144)
-        )
-        
-        #print(embedding.shape)
-        #print(can_flat.shape)
-        rnn_in = (embedding, dones, can_flat)
-        new_rnn_state, embedding = ScannedRNN()(rnn_state, rnn_in)
-
-        
-
-        #########################################################
-        # 3. Velocity heads  
-        #########################################################
-        new_can_states = []
-        vel_embeds = []
-        vel_list = []
-        can_states = list(can_states)
-
-        for i in range(NUM_CAN):
-            vel_raw = nn.Dense(
-                2,
-                kernel_init=orthogonal(1.0),     # keep gain moderate
-                bias_init=constant(0.0),
-                name=f"velocity_head{i+1}",
-            )(embedding)
-            
-            velocity = nn.tanh(vel_raw)
-            vel_list.append(velocity)
-            vel_in = (velocity, dones)
-            new_can_state, vel_embed = VelocityMatMul()(can_states[i], vel_in)
-            
-            new_can_states.append(new_can_state)
-            vel_embeds.append(vel_embed)
-        
-        self.sow("intermediates", "can_states", new_can_states[0])
-        
-        new_can_states = tuple(new_can_states)
-
-        #print(f"Velocity embed - shape: {vel_embed.shape}. Type: {type(vel_embed)}")
+        rnn_in = (embedding, dones)
+        print("obs.shape", obs.shape)
+        print("dones.shape", dones.shape)
+        print("hidden.shape", hidden.shape)
+        print("embedding.shape", embedding.shape)
+        hidden, embedding = ScannedRNN()(hidden, rnn_in)
 
         actor_mean = nn.Dense(
             self.config["LAYER_SIZE"],
@@ -402,7 +150,6 @@ class ActorCriticRNN(nn.Module):
             bias_init=constant(0.0),
         )(embedding)
         actor_mean = nn.relu(actor_mean)
-        #print(f"Actor mean - shape: {actor_mean.shape}. Type: {type(actor_mean)}")
         actor_mean = nn.Dense(
             self.config["LAYER_SIZE"],
             kernel_init=orthogonal(2),
@@ -446,9 +193,8 @@ class ActorCriticRNN(nn.Module):
         aux = nn.Dense(2, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
             aux
         )
-        new_hidden = (new_rnn_state, new_can_states)
 
-        return new_hidden, pi, jnp.squeeze(critic, axis=-1), aux, vel_list
+        return hidden, pi, jnp.squeeze(critic, axis=-1), aux
 
 
 class Transition(NamedTuple):
@@ -583,16 +329,9 @@ def make_train(config):
             ),
             jnp.zeros((1, config["NUM_ENVS"])),
         )
-        init_rnn_state = ScannedRNN.initialize_carry(
+        init_hstate = ScannedRNN.initialize_carry(
             config["NUM_ENVS"], config["LAYER_SIZE"]
         )
-        init_can_states = tuple(
-            VelocityMatMul.initialize_carry(
-                config["NUM_ENVS"], N
-            )
-            for _ in range(NUM_CAN)
-        )
-        init_hstate = (init_rnn_state, init_can_states)
         network_params = network.init(_rng, init_hstate, init_x)
         if config["ANNEAL_LR"]:
             tx = optax.chain(
@@ -624,16 +363,9 @@ def make_train(config):
         # INIT ENV
         rng, _rng = jax.random.split(rng)
         obsv, log_state = env.reset(_rng, env_params)
-        init_rnn_state = ScannedRNN.initialize_carry(
+        init_hstate = ScannedRNN.initialize_carry(
             config["NUM_ENVS"], config["LAYER_SIZE"]
         )
-        init_can_states = tuple(
-            VelocityMatMul.initialize_carry(
-                config["NUM_ENVS"], N
-            )
-            for _ in range(NUM_CAN)
-        )
-        init_hstate = (init_rnn_state, init_can_states)
 
         # TRAIN LOOP
         def _update_step(runner_state, unused):
@@ -653,7 +385,7 @@ def make_train(config):
 
                 # SELECT ACTION
                 ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-                hstate, pi, value, aux, vel_list = network.apply(train_state.params, hstate, ac_in)
+                hstate, pi, value, aux = network.apply(train_state.params, hstate, ac_in)
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
                 value, action, log_prob = (
@@ -705,7 +437,7 @@ def make_train(config):
                 update_step,
             ) = runner_state
             ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-            _, _, last_val, _, _ = network.apply(train_state.params, hstate, ac_in)
+            _, _, last_val, _ = network.apply(train_state.params, hstate, ac_in)
             last_val = last_val.squeeze(0)
 
             def _calculate_gae(traj_batch, last_val, last_done):
@@ -740,13 +472,13 @@ def make_train(config):
             def _update_epoch(update_state, unused):
                 def _update_minbatch(train_state, batch_info):
                     init_hstate, traj_batch, advantages, targets = batch_info
-                    rnn_state, can_states = init_hstate
-                    init_hstate = (rnn_state[0], tuple(cs[0] for cs in can_states))
+                    print("init_hstate.shape", init_hstate.shape)
+                    print("init_hstate[0].shape", init_hstate[0].shape)
 
                     def _loss_fn(params, init_hstate, traj_batch, gae, targets):
                         # RERUN NETWORK
-                        _, pi, value, aux, vel_list = network.apply(
-                            params, init_hstate, (traj_batch.obs, traj_batch.done)
+                        _, pi, value, aux = network.apply(
+                            params, init_hstate[0], (traj_batch.obs, traj_batch.done)
                         )
                         log_prob = pi.log_prob(traj_batch.action)
 
@@ -844,9 +576,7 @@ def make_train(config):
                 )
                 return update_state, total_loss
 
-            #init_hstate = initial_hstate[None, :]  # TBH
-            init_hstate = jax.tree_util.tree_map(lambda x: x[None, ...], initial_hstate)
-
+            init_hstate = initial_hstate[None, :]  # TBH
             update_state = (
                 train_state,
                 init_hstate,
@@ -909,7 +639,7 @@ def make_train(config):
 
             # SELECT ACTION
             ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
-            hstate, pi, value, aux, vel_list = network.apply(train_state.params, hstate, ac_in)
+            hstate, pi, value, aux = network.apply(train_state.params, hstate, ac_in)
             action = pi.sample(seed=_rng)
             log_prob = pi.log_prob(action)
             value, action, log_prob = (
@@ -930,13 +660,12 @@ def make_train(config):
 
             # Add hstate and other non-env metrics to info so they can be logged
             info['value'] = value
-            info['hidden_state'] = hstate[0] # can also add the can state here if we want to log that
-            info['can_states'] = jnp.concatenate(hstate[1], axis=-1)  # Shape: (B, 4 * N*N)
+            info['hidden_state'] = hstate
             info['pred_delta'] = aux
             info['delta'] = deltas_to_start
             info['entropy'] = pi.entropy().squeeze(0)
             info['log_prob'] = log_prob
-            info['vel_list'] = jnp.concatenate(vel_list, axis=-1)
+
             transition = Transition(
                 last_done, action, value, reward, log_prob, last_obs, info, deltas_to_start,
             )
@@ -972,11 +701,10 @@ def make_train(config):
                                       'melee_on_screen','dist_to_passive_l1','passive_on_screen','dist_to_ranged_l1',
                                       'ranged_on_screen','num_melee_nearby','num_passives_nearby','num_ranged_nearby','delta',
                                       'pred_delta', 'num_monsters_killed', 'has_sword', 'has_pick', 'held_iron', 'value',
-                                      'entropy', 'log_prob', 'episode_id', 'can_states', 'vel_list']
+                            'entropy', 'log_prob', 'episode_id']
 
             # Callback function for logging hidden states
             def write_rnn_hstate(hstate, scalars, increment=0):
-
 
                 header_field_names = ['health','food','drink','energy','done','is_sleeping','is_resting','player_position_x',
                                       'player_position_y','recover','hunger','thirst','fatigue','light_level','dist_to_melee_l1',
@@ -984,11 +712,7 @@ def make_train(config):
                                       'ranged_on_screen','num_melee_nearby','num_passives_nearby','num_ranged_nearby','delta_x',
                                       'delta_y', 'pred_delta_x', 'pred_delta_y', 'num_monsters_killed', 'has_sword',
                                       'has_pick', 'held_iron', 'value', 'entropy', 'log_prob', 'episode_id']
-                
-                header_field_names += [f'cs_{can_num}_{i}' for can_num in range(NUM_CAN) for i in range(N*N)]
-                header_field_names += [
-                        name for i in range(NUM_CAN) for name in (f'vx_{i}', f'vy_{i}')
-                    ]
+
                 run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
                 os.makedirs(run_out_path, exist_ok=True)
                 # Assemble header for the scalar file(s)
@@ -1175,78 +899,9 @@ def run_ppo(config):
     if config["SAVE_POLICY"]:
         _save_network(0, "policies")
 
-import matplotlib.pyplot as plt
-import numpy as np
-
-def test_velocity_matmul():
-    vm          = VelocityMatMul()                    
-    batch_size  = 1
-    carry0      = vm.initialize_carry(batch_size, vm.N)
-    vel_seq     = jnp.asarray(
-        [[ 1.0,  0.0],
-         [ 1.0,  0.0],
-         [ 1.0,  0.0],
-         [ 1.0,  0.0],
-         [ 1.0,  0.0],
-         [ 1.0,  0.0],
-         [ 1.0,  0.0],
-         [ 1.0,  0.0],
-         [ 1.0,  0.0],
-         [ 1.0,  0.0],
-         [ 1.0,  0.0],
-         [ 1.0,  0.0],
-         [ 1.0,  0.0],
-         [ 1.0,  0.0],
-         ],
-        dtype=jnp.float32
-    ).reshape(14, batch_size, 2)                       # (T, B, 2)
-    dones_seq = jnp.zeros((vel_seq.shape[0], batch_size),dtype=jnp.bool_)
-    rng       = jax.random.PRNGKey(0)
-    variables = vm.init(rng, carry0, (vel_seq, dones_seq))
-
-    carryT, outs = vm.apply(variables, carry0, (vel_seq, dones_seq))   # outs → (3, 1, N²)
-
-    np.set_printoptions(precision=4, suppress=True)       # nicer console output
-    for t in range(14):
-        grid = np.asarray(outs[t, 0]).reshape(vm.N, vm.N) # (12, 12)
-        print(f"\n=== carry after input #{t+1}  velocity={vel_seq[t,0]} ===")
-        print(grid)
-
-        # Plot heatmap
-        plt.figure()
-        plt.imshow(grid, origin='lower')
-        plt.title(f"Carry after input #{t+1}  velocity={np.asarray(vel_seq[t,0])}")
-        plt.colorbar()
-        plt.tight_layout()
-        plt.show()
 
 if __name__ == "__main__":
-    """
-    model   = VelocityMatMul(N=12, alpha=0.1)
 
-    #  (T=1, batch=1, 2)   – one time‑step, one example, velocity = (1, 0)
-    v_seq   = jnp.array([[[1.0, -0.5]]], dtype=jnp.float32)
-    carry0  = ()                       # unused but must be passed in
-
-    # 1️⃣ initialise parameters & constants
-    variables = model.init(jax.random.PRNGKey(0), carry0, v_seq)
-
-    # 2️⃣ forward pass while asking for the “intermediates” collection
-    (_, _), inter = model.apply(
-            variables, carry0, v_seq,
-            mutable=["intermediates"])
-    
- 
-    # 3️⃣ pull out the feed‑forward term
-    W_val = inter["intermediates"]["W"][0]   # (1, N²)
-
-    print("W shape:", W_val.shape)       # (1, 144)  for N=12
-    print(W_val.reshape(model.N, model.N))  # nicer 12×12 view
-    """
-
-    #test_velocity_matmul()
-    
-    
     args = parse_args()
 
     wandb.init(
@@ -1257,7 +912,3 @@ if __name__ == "__main__":
     )
 
     run_ppo(wandb.config)
-    
-
-    
-    
