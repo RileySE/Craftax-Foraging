@@ -381,6 +381,7 @@ def make_train(config):
         config["TOTAL_TIMESTEPS"]
         // config["NUM_STEPS"]
         // config["NUM_ENVS"]
+        // config['UPDATES_PER_VIZ']
     )
 
     config["NUM_UPDATES_DECAY"] = (
@@ -574,6 +575,8 @@ def make_train(config):
                 test_metrics,
                 rng,
             ) = runner_state
+
+
 
             # SAMPLE PHASE
             def _step_env(carry, _):
@@ -788,6 +791,10 @@ def make_train(config):
                 )  # num_minibatches, num_steps+memory_window, batch_size/num_minbatches, ...
 
                 rng, _rng = jax.random.split(rng)
+
+
+
+
                 (train_state, rng), (
                     total_loss,
                     qvals,
@@ -1065,6 +1072,8 @@ def make_train(config):
                 deltas_to_start=deltas_to_start,
                 next_obs=new_obs,
             )
+
+            runner_state = (new_hs, new_obs, new_done, new_action, new_env_state, rng)
 
             return runner_state, transition
 
