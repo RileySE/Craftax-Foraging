@@ -1072,10 +1072,9 @@ def make_train(config):
                 deltas_to_start=deltas_to_start,
                 next_obs=new_obs,
             )
+            new_expl_state = (new_hs, new_obs, new_done, new_action, new_env_state)
 
-            runner_state = (new_hs, new_obs, new_done, new_action, new_env_state, rng)
-
-            return runner_state, transition
+            return (train_state, memory_transitions, new_expl_state, test_metrics, rng), transition
 
         def _logging_step(runner_state, unused, logging_threads):
 
