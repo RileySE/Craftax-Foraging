@@ -820,6 +820,8 @@ def make_train(config):
 
                 jax.debug.callback(callback, metrics, original_rng)
 
+            print("tuple expl len: ", len(tuple(expl_state)))
+
             runner_state = (train_state, tuple(expl_state), test_metrics, rng)
 
             return runner_state, test_metrics
