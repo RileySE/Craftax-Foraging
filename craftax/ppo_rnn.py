@@ -705,6 +705,7 @@ def make_train(config):
             def write_rnn_hstate(hstate, scalars, increment=0):
 
                 print("scalars: ", scalars)
+                print("scalars shape: ", scalars.shape)
 
                 header_field_names = ['health','food','drink','energy','done','is_sleeping','is_resting','player_position_x',
                                       'player_position_y','recover','hunger','thirst','fatigue','light_level','dist_to_melee_l1',
