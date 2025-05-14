@@ -820,8 +820,6 @@ def make_train(config):
 
                 jax.debug.callback(callback, metrics, original_rng)
 
-            print("tuple expl len: ", len(tuple(expl_state)))
-
             runner_state = (train_state, tuple(expl_state), test_metrics, rng)
 
             return runner_state, test_metrics
@@ -919,7 +917,9 @@ def make_train(config):
                 deltas_to_start=deltas_to_start,
             )
 
-            return runner_state, transition
+            new_expl_state = (new_obs, new_env_state)
+
+            return (train_state, new_expl_state, test_metrics, rng), transition
 
         def _logging_step(runner_state, unused, logging_threads):
             runner_state, minibatch = jax.lax.scan(
