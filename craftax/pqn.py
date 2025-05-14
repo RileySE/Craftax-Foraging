@@ -964,6 +964,8 @@ def make_train(config):
             # Callback function for logging the scalars
             def write_scalars(scalars, increment=0):
 
+                print("scalars: ", scalars)
+
                 header_field_names = [
                     "health",
                     "food",
