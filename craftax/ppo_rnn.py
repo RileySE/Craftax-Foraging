@@ -704,6 +704,8 @@ def make_train(config):
             # Callback function for logging hidden states
             def write_rnn_hstate(hstate, scalars, increment=0):
 
+                print("scalars: ", scalars)
+
                 header_field_names = ['health','food','drink','energy','done','is_sleeping','is_resting','player_position_x',
                                       'player_position_y','recover','hunger','thirst','fatigue','light_level','dist_to_melee_l1',
                                       'melee_on_screen','dist_to_passive_l1','passive_on_screen','dist_to_ranged_l1',
