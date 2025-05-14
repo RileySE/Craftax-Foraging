@@ -1104,8 +1104,6 @@ def make_train(config):
         rng, _rng = jax.random.split(rng)
         expl_state = env.reset(_rng, env_params)
 
-        print("reset expl_state len: ", len(tuple(expl_state)))
-
         # train
         rng, _rng = jax.random.split(rng)
         runner_state = (train_state, expl_state, test_metrics, _rng)
