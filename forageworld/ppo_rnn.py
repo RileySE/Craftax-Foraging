@@ -27,8 +27,8 @@ import distrax
 import functools
 from ml_collections import ConfigDict
 
-from craftax.craftax import craftax_state
-from craftax.environment_base.wrappers import (
+from forageworld.craftax import craftax_state
+from forageworld.environment_base.wrappers import (
     LogWrapper,
     OptimisticResetVecEnvWrapper,
     AutoResetEnvWrapper,
@@ -37,7 +37,7 @@ from craftax.environment_base.wrappers import (
     ReduceActionSpaceWrapper, AppendActionToObsWrapper, AppendActionToObsWrapper,
     CurriculumWrapper
 )
-from craftax.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
+from forageworld.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
 
 
 def parse_args():
@@ -237,26 +237,26 @@ def make_train(config):
     static_params.max_passive_mobs = config['MAX_COWS']
 
     if config["ENV_NAME"] == "Craftax-Classic-Symbolic-v1":
-        from craftax.craftax_classic.envs.craftax_symbolic_env import (
+        from forageworld.craftax_classic.envs.craftax_symbolic_env import (
             CraftaxClassicSymbolicEnv,
         )
 
         env = CraftaxClassicSymbolicEnv()
         is_symbolic = True
     elif config["ENV_NAME"] == "Craftax-Classic-Pixels-v1":
-        from craftax.craftax_classic.envs.craftax_pixels_env import (
+        from forageworld.craftax_classic.envs.craftax_pixels_env import (
             CraftaxClassicPixelsEnv,
         )
 
         env = CraftaxClassicPixelsEnv()
         is_symbolic = False
     elif config["ENV_NAME"] == "Craftax-Symbolic-v1":
-        from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
+        from forageworld.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
 
         env = CraftaxSymbolicEnv(static_params)
         is_symbolic = True
     elif config["ENV_NAME"] == "Craftax-Pixels-v1":
-        from craftax.craftax.envs.craftax_pixels_env import CraftaxPixelsEnv
+        from forageworld.craftax.envs.craftax_pixels_env import CraftaxPixelsEnv
 
         env = CraftaxPixelsEnv(static_params)
         is_symbolic = False

@@ -3,17 +3,17 @@ from gymnax.environments import spaces
 from typing import Tuple, Optional
 import chex
 
-from craftax.environment_base.environment_no_auto_reset import EnvironmentNoAutoReset
-from craftax.craftax_classic.envs.common import compute_score
-from craftax.craftax_classic.constants import *
-from craftax.craftax_classic.game_logic import craftax_step
-from craftax.craftax_classic.envs.craftax_state import (
+from forageworld.environment_base.environment_no_auto_reset import EnvironmentNoAutoReset
+from forageworld.craftax_classic.envs.common import compute_score
+from forageworld.craftax_classic.constants import *
+from forageworld.craftax_classic.game_logic import craftax_step
+from forageworld.craftax_classic.envs.craftax_state import (
     EnvState,
     EnvParams,
     StaticEnvParams,
 )
-from craftax.craftax_classic.renderer import render_craftax_symbolic
-from craftax.craftax_classic.world_gen import generate_world
+from forageworld.craftax_classic.renderer import render_craftax_symbolic
+from forageworld.craftax_classic.world_gen import generate_world
 
 
 class CraftaxClassicSymbolicEnv(EnvironmentNoAutoReset):

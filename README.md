@@ -1,157 +1,57 @@
-<p align="center">
- <img width="80%" src="https://raw.githubusercontent.com/MichaelTMatthews/Craftax/main/images/logo.png" />
-</p>
 
-<p align="center">
-        <a href= "https://pypi.org/project/craftax/">
-        <img src="https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue" /></a>
-        <a href= "https://pypi.org/project/craftax/">
-        <img src="https://img.shields.io/badge/pypi-1.2.0-green" /></a>
-       <a href= "https://github.com/MichaelTMatthews/Craftax/blob/main/LICENSE">
-        <img src="https://img.shields.io/badge/License-MIT-yellow" /></a>
-       <a href= "https://craftaxenv.github.io/">
-        <img src="https://img.shields.io/badge/blog-link-purple" /></a>
-       <a href= "https://arxiv.org/pdf/2402.16801.pdf">
-        <img src="https://img.shields.io/badge/arxiv-2402.16801-b31b1b" /></a>
-       <a href= "https://github.com/psf/black">
-        <img src="https://img.shields.io/badge/code%20style-black-000000.svg" /></a>
-</p>
-
-
-
-# ⛏️ Craftax
-Craftax is an RL environment written entirely in <a href="https://github.com/google/jax">JAX</a>.  Craftax reimplements and significantly extends the game mechanics of <a href="https://danijar.com/project/crafter/">Crafter</a>, taking inspiration from roguelike games such as <a href="https://github.com/facebookresearch/nle">NetHack</a>.
-Craftax conforms to the <a href="https://github.com/RobertTLange/gymnax">gymnax</a> interface, allowing easy integration with existing JAX-based frameworks like <a href="https://chrislu.page/blog/meta-disco/">PureJaxRL</a> and [JaxUED](https://github.com/DramaCow/jaxued).
+# ForageWorld
+Forageworld is an simulated foraging arena RL task built on top of <a href="https://github.com/MichaelTMatthews/Craftax/">Craftax</a>. It limits the scope of the environment to the first "level" from Craftax and modifies this extensively to enable and encourage open-ended naturalistic foraging behavior. 
 
 <p align="middle">
-  <img src="https://raw.githubusercontent.com/MichaelTMatthews/Craftax/main/images/archery.gif" width="200" />
-  <img src="https://raw.githubusercontent.com/MichaelTMatthews/Craftax/main/images/building.gif" width="200" /> 
-  <img src="https://raw.githubusercontent.com/MichaelTMatthews/Craftax/main/images/dungeon_crawling.gif" width="200" />
-</p>
-<p align="middle">
-  <img src="https://raw.githubusercontent.com/MichaelTMatthews/Craftax/main/images/farming.gif" width="200" />
-  <img src="https://raw.githubusercontent.com/MichaelTMatthews/Craftax/main/images/magic.gif" width="200" /> 
-  <img src="https://raw.githubusercontent.com/MichaelTMatthews/Craftax/main/images/mining.gif" width="200" />
+ 
 </p>
 
-# 📜 Basic Usage
-Craftax conforms to the gymnax interface:
-```python
-rng = jax.random.PRNGKey(0)
-rng, _rng = jax.random.split(rng)
-rngs = jax.random.split(_rng, 3)
-
-# Create environment
-env = AutoResetEnvWrapper(CraftaxSymbolicEnv())
-env_params = env.default_params
-
-# Get an initial state and observation
-obs, state = env.reset(rngs[0], env_params)
-
-# Pick random action
-action = env.action_space(env_params).sample(rngs[1])
-
-# Step environment
-obs, state, reward, done, info = env.step(rngs[2], state, action, env_params)
+## Needed Python Packages (may work with other versions but we have not tested)
+Note: `pip>=23.0` is required
+```
+black                    24.4.2
+chex                     0.1.86
+distrax                  0.1.5
+flax                     0.8.5
+gymnax                   0.0.8
+imageio                  2.34.2
+jax                      0.4.30
+jax-cuda12-pjrt          0.4.30
+jax-cuda12-plugin        0.4.30
+jaxlib                   0.4.30
+jaxpruner                0.1
+matplotlib               3.9.1
+ml-collections           0.1.1
+numpy                    2.0.1
+optax                    0.2.3
+orbax-checkpoint         0.5.23
+pre-commit               3.8.0
+pygame                   2.6.0
+wandb                    0.17.5
 ```
 
-# ⬇️ Installation
-The latest Craftax release can be installed from PyPi:
-```
-pip install craftax
-```
-If you want the most recent commit instead use:
-```
-pip install git+https://github.com/MichaelTMatthews/Craftax.git@main
-```
-
-## Extending Craftax
-If you want to extend Craftax, run (make sure you have `pip>=23.0`):
-```
-git clone https://github.com/MichaelTMatthews/Craftax.git
-cd Craftax
-pip install --editable .
-```
+## Setup
+Setup is broadly similar to Craftax. Install the above packages using your package manager of choice, then, while in the top level `Craftax-Foraging` directory, run
+`pip install --editable .`
 
 ## GPU-Enabled JAX
-By default, both of the above methods will install JAX on the CPU.  If you want to run JAX on a GPU/TPU, you'll need to install the correct wheel for your system from <a href="https://github.com/google/jax?tab=readme-ov-file#installation">JAX</a>.
+By default, JAX will install on the CPU.  If you want to run JAX on a GPU, you'll need to install the correct wheel for your system from <a href="https://github.com/google/jax?tab=readme-ov-file#installation">JAX</a>.
 For NVIDIA GPU the command is:
 ```
 pip install -U "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 ```
+Note that a GPU with at least 24 GB of memory is required to run the experiments in the paper.
 
-# 🎮 Play
-To play Craftax run:
+# 📈 Experiments
+The following command line runs our baseline configuration (which takes about 36 hours on an H100-equivalent GPU):
 ```
-play_craftax
+python forageworld/ppo_rnn.py --no_videos --output_path <path> --wandb_project foraging_baseline --logging_steps_per_viz 32 --aux_coef 0.025 --updates_per_viz 2048 --sparsity 0.9 --max_cows 108
 ```
-or to play Craftax-Classic run:
+To run other configurations, additional command line options may be added, such as:
 ```
-play_craftax_classic
+--directional_vision
+--map_size 48
+--no_memory
+--sparse_alg no_prune
 ```
-Since Craftax runs entirely in JAX, it will take some time to compile the rendering and step functions - it might take around 30s to render the first frame and then another 20s to take the first action.  After this it should be very quick.  A tutorial for how to beat the game is present in `tutorial.md`.  The controls are printed out at the beginning of play.
-
-# 📈 Experiment
-To run PPO with default hyperparameters run:
-```
-python -m craftax.ppo
-```
-or to run PPO with memory call:
-```
-python -m craftax.ppo_rnn
-```
-To use ICM or E3B with the default parameters use the `--train_icm` and `--use_e3b` flags.
-Use the `env_name` parameter to control which environment is used.  It can be set to  `"Craftax-Symbolic-v1"`, `"Craftax-Pixels-v1"`, `"Craftax-Classic-Symbolic-v1"` or `"Craftax-Classic-Pixels-v1"`
-
-# 🔪 Gotchas
-### Optimistic Resets
-Craftax provides the option to use optimistic resets to improve performance, which means that (unlike regular gymnax environments) it **does not auto-reset** by default.
-This means that the environment should always be wrapped either in `OptimisticResetVecEnvWrapper` (for efficient resets) or `AutoResetEnvWrapper` (to recover the default gymnax auto-reset behaviour).  See `ppo.py` for correct usage of both wrappers.
-
-### Texture Caching
-We use a texture cache to avoid recreating the texture atlas every time Craftax is imported. If you are just running Craftax as a benchmark this will not affect you.  However, if you are editing the game (e.g. adding new blocks, entities etc.) then a stale cache could cause errors. You can export the following environment variable to force textures to be created from scratch.
-```
-export CRAFTAX_RELOAD_TEXTURES=true
-```
-
-# 📋 Scoreboard
-If you would like to add an algorithm please open a PR and provide a reference to the source of the results.
-We report reward as a % of the maximum (226).
-
-## Craftax-1B
-| Algorithm | Reward (% max) |                                  Source                                   |
-|:----------|---------------:|:-------------------------------------------------------------------------:|
-| PPO-RNN   |           15.3 | <a href="https://github.com/luchris429/purejaxrl/tree/main">PureJaxRL</a> |
-| PPO       |           11.9 | <a href="https://github.com/luchris429/purejaxrl/tree/main">PureJaxRL</a> |
-| ICM       |           11.9 |           <a href="https://arxiv.org/abs/1705.05363">ICM</a>              |
-| E3B       |           11.0 |            <a href="https://arxiv.org/abs/2210.05805">E3B</a>             |
-
-
-## Craftax-1M
-| Algorithm | Reward (% max) |                                  Source                                   |
-|:----------|---------------:|:-------------------------------------------------------------------------:|
-| PPO-RNN   |            2.3 | <a href="https://github.com/luchris429/purejaxrl/tree/main">PureJaxRL</a> |
-| PPO       |            2.2 | <a href="https://github.com/luchris429/purejaxrl/tree/main">PureJaxRL</a> |
-| ICM       |            2.2 |           <a href="https://arxiv.org/abs/1705.05363">ICM</a>              |
-| E3B       |            2.2 |            <a href="https://arxiv.org/abs/2210.05805">E3B</a>             |
-
-
-# 🔎 See Also
-- ⛏️ [Crafter](https://github.com/danijar/crafter) The original Crafter benchmark.
-- ⚔️ [NLE](https://github.com/facebookresearch/nle) NetHack as an RL environment.
-- ⚡ [PureJaxRL](https://github.com/luchris429/purejaxrl) End-to-end RL implementations in Jax.
-- 🌎 [JaxUED](https://github.com/DramaCow/jaxued): CleanRL style UED implementations in Jax.
-- 🌍 [Minimax](https://github.com/facebookresearch/minimax): Modular UED implementations in Jax.
-- 🏋️ [Gymnax](https://github.com/RobertTLange/gymnax): Standard Jax RL interface with classic environments.
-- 🧑‍🤝‍🧑 [JaxMARL](https://github.com/FLAIROx/JaxMARL): Multi-agent RL in Jax.
-
-# 📚 Citation
-If you use Craftax in your work please cite it as follows:
-```
-@article{matthews2024craftax,
-  title={Craftax: A Lightning-Fast Benchmark for Open-Ended Reinforcement Learning},
-  author={Michael Matthews and Michael Beukman and Benjamin Ellis and Mikayel Samvelyan and Matthew Jackson and Samuel Coward and Jakob Foerster},
-  journal={arXiv preprint},
-  year={2024},
-}
-```
+and so on. Other than the environment features noted to be varied in a given experiment, all other command line options should remain the same.

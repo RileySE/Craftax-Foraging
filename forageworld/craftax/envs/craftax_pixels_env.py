@@ -3,14 +3,14 @@ from gymnax.environments import spaces
 from typing import Tuple, Optional
 import chex
 
-from craftax.craftax.envs.common import compute_score
-from craftax.craftax.constants import *
-from craftax.craftax.game_logic import craftax_step
-from craftax.craftax.craftax_state import EnvState, EnvParams, StaticEnvParams
-from craftax.craftax.renderer import render_craftax_pixels
-from craftax.craftax.util.game_logic_utils import has_beaten_boss
-from craftax.craftax.world_gen.world_gen import generate_world
-from craftax.environment_base.environment_no_auto_reset import EnvironmentNoAutoReset
+from forageworld.craftax.envs.common import compute_score
+from forageworld.craftax.constants import *
+from forageworld.craftax.game_logic import craftax_step
+from forageworld.craftax.craftax_state import EnvState, EnvParams, StaticEnvParams
+from forageworld.craftax.renderer import render_craftax_pixels
+from forageworld.craftax.util.game_logic_utils import has_beaten_boss
+from forageworld.craftax.world_gen.world_gen import generate_world
+from forageworld.environment_base.environment_no_auto_reset import EnvironmentNoAutoReset
 
 
 class CraftaxPixelsEnv(EnvironmentNoAutoReset):

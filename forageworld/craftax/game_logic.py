@@ -1,4 +1,4 @@
-from craftax.craftax.util.game_logic_utils import *
+from forageworld.craftax.util.game_logic_utils import *
 
 
 def update_plants_with_eat(state, plant_position, static_params):

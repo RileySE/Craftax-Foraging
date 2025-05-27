@@ -1,7 +1,7 @@
 import chex
 
-from craftax.craftax_classic.constants import *
-from craftax.craftax_classic.envs.craftax_state import *
+from forageworld.craftax_classic.constants import *
+from forageworld.craftax_classic.envs.craftax_state import *
 
 
 def in_bounds(state, position):

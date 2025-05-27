@@ -1,6 +1,6 @@
 from functools import partial
 
-from craftax.craftax_classic.constants import *
+from forageworld.craftax_classic.constants import *
 
 
 def render_craftax_symbolic(state):

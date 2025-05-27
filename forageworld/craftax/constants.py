@@ -8,8 +8,8 @@ import numpy as np
 from PIL import Image
 from sympy import ceiling
 
-from craftax.craftax.util.maths_utils import get_distance_map
-from craftax.environment_base.util import load_compressed_pickle, save_compressed_pickle
+from forageworld.craftax.util.maths_utils import get_distance_map
+from forageworld.environment_base.util import load_compressed_pickle, save_compressed_pickle
 
 # GAME CONSTANTS
 OBS_DIM = (9, 11)

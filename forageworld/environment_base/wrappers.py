@@ -10,7 +10,7 @@ from typing import Optional, Tuple, Union, Any
 from gymnax.environments import environment, spaces
 from matplotlib import pyplot as plt, animation
 
-from craftax.craftax.renderer import render_craftax_pixels
+from forageworld.craftax.renderer import render_craftax_pixels
 
 
 class GymnaxWrapper(object):

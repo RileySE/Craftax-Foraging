@@ -1,9 +1,9 @@
 import jax
 from functools import partial
 
-from craftax.craftax.constants import *
-from craftax.craftax.craftax_state import EnvState
-from craftax.craftax.util.game_logic_utils import is_boss_vulnerable
+from forageworld.craftax.constants import *
+from forageworld.craftax.craftax_state import EnvState
+from forageworld.craftax.util.game_logic_utils import is_boss_vulnerable
 
 
 def render_craftax_symbolic(state: EnvState, directional_vision: bool = True):
