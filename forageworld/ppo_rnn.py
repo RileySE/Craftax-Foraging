@@ -38,6 +38,7 @@ from forageworld.environment_base.wrappers import (
     CurriculumWrapper
 )
 from forageworld.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
+from forageworld.models.actor_critic import ActorCritic, ActorCriticConv, ActorCriticSharedRep
 
 
 def parse_args():
@@ -94,6 +95,7 @@ def parse_args():
     parser.add_argument("--curriculum", type=bool, default=False, help="Use curriculum learning")
     parser.add_argument("--map_size", type=int, default=96, help="The side length for the map")
     parser.add_argument("--directional_vision", action=argparse.BooleanOptionalAction, default=False, help="Turn on directional vision cones")
+    parser.add_argument('--no_memory', action=argparse.BooleanOptionalAction, default=False)
     return parser.parse_args()
 
 class ScannedRNN(nn.Module):
@@ -312,7 +314,16 @@ def make_train(config):
             action_space_size = env.action_space(env_params).n
         else:
             action_space_size = 17
-        network = ActorCriticRNN(action_space_size, config=config)
+
+
+        if config['NO_MEMORY']:
+            if is_symbolic:
+                network = ActorCriticSharedRep(action_space_size, config=config)
+            else:
+                network = ActorCriticConv(action_space_size, config=config)
+        else:
+            network = ActorCriticRNN(action_space_size, config=config)
+
         rng, _rng = jax.random.split(rng)
         # We have to do this here because I can't figure out how to wrap the observation_space function (it's not defined in Gymnax, seemingly)
         if config['ACTION_IN_OBS']:
@@ -329,6 +340,7 @@ def make_train(config):
             config["NUM_ENVS"], config["LAYER_SIZE"]
         )
         network_params = network.init(_rng, init_hstate, init_x)
+
         if config["ANNEAL_LR"]:
             tx = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
