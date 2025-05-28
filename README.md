@@ -54,4 +54,6 @@ To run other configurations, additional command line options may be added, such 
 --no_memory
 --sparse_alg no_prune
 ```
-and so on. Other than the environment features noted to be varied in a given experiment, all other command line options should remain the same.
+and so on.
+See the command line options in `forageworld/ppo_rnn.py` for more options, and the paper appendix for a description of each option.
+Other than the environment features noted to be varied in a given experiment, all other command line options should remain the same.
