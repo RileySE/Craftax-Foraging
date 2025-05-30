@@ -29,6 +29,9 @@ dependencies = [
     "chex",
     "matplotlib",
     "imageio",
+    "matplotlib",
+    "ml-collections",
+    "jaxpruner",
 ]
 
 [tool.setuptools.packages.find]
