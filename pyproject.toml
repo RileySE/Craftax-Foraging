@@ -31,7 +31,7 @@ dependencies = [
     "imageio",
     "matplotlib",
     "ml-collections",
-    "jaxpruner",
+    "sympy",
 ]
 
 [tool.setuptools.packages.find]
