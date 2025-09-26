@@ -96,6 +96,7 @@ def parse_args():
     parser.add_argument("--map_size", type=int, default=96, help="The side length for the map")
     parser.add_argument("--directional_vision", action=argparse.BooleanOptionalAction, default=False, help="Turn on directional vision cones")
     parser.add_argument('--no_memory', action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument('--random_start', action=argparse.BooleanOptionalAction, default=False)
     return parser.parse_args()
 
 class ScannedRNN(nn.Module):
@@ -233,6 +234,8 @@ def make_train(config):
         static_params.featureless_world = True
     if config['PREDATORS']:
         static_params.predators = True
+    if config['RANDOM_START']:
+        static_params.random_start = True
     static_params.map_size = (config['MAP_SIZE'],config['MAP_SIZE'])
     static_params.directional_vision = config['DIRECTIONAL_VISION']
 

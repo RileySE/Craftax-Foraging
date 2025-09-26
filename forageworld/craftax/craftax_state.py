@@ -139,6 +139,7 @@ class StaticEnvParams:
     featureless_world: bool = False
     predators: bool = False
     directional_vision: bool = False
+    random_start : bool = False
 
     # Mobs
     # HACK: Doubled to 18 for patch depletion stuff

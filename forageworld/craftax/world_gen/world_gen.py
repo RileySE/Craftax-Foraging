@@ -1,3 +1,5 @@
+from random import randint
+
 import jax
 import jax.scipy as jsp
 
@@ -552,6 +554,12 @@ def generate_world(rng, params, static_params):
     player_position = jnp.array(
         [static_params.map_size[0] // 2, static_params.map_size[1] // 2]
     )
+    # Random start position option, any position not on the edge of the arena is valid
+    if static_params.random_start:
+        player_position = jnp.array(
+        [randint(1, static_params.map_size[0] - 2), randint(1, static_params.map_size[1] - 2)]
+    )
+
     # Toggle for featureless arena
     world_configs = ALL_SMOOTHGEN_CONFIGS
     if static_params.featureless_world:
