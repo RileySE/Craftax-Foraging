@@ -554,11 +554,10 @@ def generate_world(rng, params, static_params):
     player_position = jnp.array(
         [static_params.map_size[0] // 2, static_params.map_size[1] // 2]
     )
+    rng, _rng = jax.random.split(rng)
     # Random start position option, any position not on the edge of the arena is valid
     if static_params.random_start:
-        player_position = jnp.array(
-        [randint(1, static_params.map_size[0] - 2), randint(1, static_params.map_size[1] - 2)]
-    )
+        player_position = jax.random.randint(_rng, (2,), 1, static_params.map_size[0] - 2)
 
     # Toggle for featureless arena
     world_configs = ALL_SMOOTHGEN_CONFIGS
@@ -568,6 +567,7 @@ def generate_world(rng, params, static_params):
     # Generate smoothgens (overworld, caves, elemental levels, boss level)
     rngs = jax.random.split(rng, 7)
     rng, _rng = rngs[0], rngs[1:]
+
 
     overworld = generate_smoothworld(
         _rng[0],
