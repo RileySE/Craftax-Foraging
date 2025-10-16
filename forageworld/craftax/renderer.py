@@ -199,7 +199,7 @@ def render_craftax_symbolic(state: EnvState, directional_vision: bool = True):
         2,
     ),
 )
-def render_craftax_pixels(state, block_pixel_size, do_night_noise=True):
+def render_craftax_pixels(state, block_pixel_size, do_night_noise=True, directional_vision: bool = False):
     textures = TEXTURES[block_pixel_size]
     obs_dim_array = jnp.array([OBS_DIM[0], OBS_DIM[1]], dtype=jnp.int32)
 
@@ -505,7 +505,18 @@ def render_craftax_pixels(state, block_pixel_size, do_night_noise=True):
         constant_values=False,
     )
 
+    # Select which hemisphere to use to restrict vision
+    vision_hemi_directional = VISION_HEMI_LEFT
+    vision_hemi_directional = jax.lax.select(state.player_direction == 2, VISION_HEMI_RIGHT, vision_hemi_directional)
+    vision_hemi_directional = jax.lax.select(state.player_direction == 3, VISION_HEMI_UP, vision_hemi_directional)
+    vision_hemi_directional = jax.lax.select(state.player_direction == 4, VISION_HEMI_DOWN, vision_hemi_directional)
+
+    vision_hemi = jax.lax.select(directional_vision, vision_hemi_directional, VISION_HEMI_FULL)
+
     light_map_view = jax.lax.dynamic_slice(padded_light_map, tl_corner, OBS_DIM)
+    light_map_view = light_map_view * vision_hemi
+
+
     light_map_pixels = light_map_view.repeat(block_pixel_size, axis=0).repeat(
         block_pixel_size, axis=1
     )

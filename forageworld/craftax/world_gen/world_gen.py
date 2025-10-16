@@ -556,8 +556,9 @@ def generate_world(rng, params, static_params):
     )
     rng, _rng = jax.random.split(rng)
     # Random start position option, any position not on the edge of the arena is valid
+    #HACK: Limit to middle 50%
     if static_params.random_start:
-        player_position = jax.random.randint(_rng, (2,), 1, static_params.map_size[0] - 2)
+        player_position = jax.random.randint(_rng, (2,), 40, static_params.map_size[0] - 40)
 
     # Toggle for featureless arena
     world_configs = ALL_SMOOTHGEN_CONFIGS
