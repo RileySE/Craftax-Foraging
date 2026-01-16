@@ -117,13 +117,13 @@ class ScannedRNN(nn.Module):
             self.initialize_carry(ins.shape[0], ins.shape[1]),
             rnn_state,
         )
-        new_rnn_state, y = nn.GRUCell(features=ins.shape[1])(rnn_state, ins)
+        new_rnn_state, y = nn.SimpleCell(features=ins.shape[1])(rnn_state, ins)
         return new_rnn_state, y
 
     @staticmethod
     def initialize_carry(batch_size, hidden_size):
         # Use a dummy key since the default state init fn is just zeros.
-        cell = nn.GRUCell(features=hidden_size)
+        cell = nn.SimpleCell(features=hidden_size)
         return cell.initialize_carry(jax.random.PRNGKey(0), (batch_size, hidden_size))
 
 class ActorCriticRNN(nn.Module):
@@ -484,7 +484,7 @@ def make_train(config):
                 def _update_minbatch(train_state, batch_info):
                     init_hstate, traj_batch, advantages, targets = batch_info
 
-                    def _loss_fn(params, init_hstate, traj_batch, gae, targets):
+                    def _loss_fn(params, init_hstate, traj_batch, gae, targets, weight_targets):
                         # RERUN NETWORK
                         _, pi, value, aux = network.apply(
                             params, init_hstate[0], (traj_batch.obs, traj_batch.done)
@@ -521,6 +521,10 @@ def make_train(config):
                         # Simple L2
                         aux_loss = jnp.square(aux - traj_batch.deltas_to_start).mean()
 
+                        # Compute connectome constraint loss
+                        hh_weights = params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
+                        breakpoint()
+
                         total_loss = (
                             loss_actor
                             + config["VF_COEF"] * value_loss
@@ -533,7 +537,7 @@ def make_train(config):
                     grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
 
                     total_loss, grads = grad_fn(
-                        train_state.params, init_hstate, traj_batch, advantages, targets
+                        train_state.params, init_hstate, traj_batch, advantages, targets, None,
                     )
 
                     train_state = train_state.apply_gradients(grads=grads)
