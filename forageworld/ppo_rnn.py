@@ -1,5 +1,6 @@
 import argparse
 import os
+import random
 import sys
 from math import ceil, sqrt
 from functools import partial
@@ -10,6 +11,7 @@ import jaxpruner
 import numpy as np
 import optax
 import time
+import pandas as pd
 
 from flax.training import orbax_utils
 from matplotlib import pyplot as plt, animation
@@ -64,6 +66,7 @@ def parse_args():
     parser.add_argument("--ent_coef", type=float, default=0.01, help="Entropy coefficient")
     parser.add_argument("--vf_coef", type=float, default=0.5, help="Value function coefficient")
     parser.add_argument("--aux_coef", type=float, default=0.1, help="Auxiliary coefficient")
+    parser.add_argument("--connect_coef", type=float, default=0.1, help="Connectome constraint coefficient")
     parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Max gradient norm")
     parser.add_argument("--activation", type=str, default="tanh", help="Activation function")
     parser.add_argument("--anneal_lr", action=argparse.BooleanOptionalAction, default=True)
@@ -95,6 +98,7 @@ def parse_args():
     parser.add_argument("--curriculum", type=bool, default=False, help="Use curriculum learning")
     parser.add_argument("--map_size", type=int, default=96, help="The side length for the map")
     parser.add_argument("--directional_vision", action=argparse.BooleanOptionalAction, default=False, help="Turn on directional vision cones")
+    parser.add_argument('--connectome_filepath', type=str, default='./', help="path to the preprocessed connectome cell/type file")
     parser.add_argument('--no_memory', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument('--random_start', action=argparse.BooleanOptionalAction, default=False)
     return parser.parse_args()
@@ -205,6 +209,34 @@ class Transition(NamedTuple):
     obs: jnp.ndarray
     info: jnp.ndarray
     deltas_to_start: jnp.ndarray
+
+
+# Connectome constraint load and preprocess to make targets
+def load_connectome_constraints(pkl_filepath, n_neurons):
+    matrix = pd.read_pickle(pkl_filepath)
+    #zero_matrix = pd.read_pickle(zeros_path)
+
+    targets = np.zeros((n_neurons, n_neurons),np.float32)
+    for neuron_n in range(n_neurons):
+        # Sample from the matrix
+        rand_ind = random.randint(0, matrix.shape[0]-1)
+        curr_syns = np.asarray(matrix.iloc[rand_ind].syn_count_list)
+        # TODO normalize per-cell or globally?
+        curr_syns = curr_syns / curr_syns.max()
+        curr_syns.sort()
+        curr_syns = np.flip(curr_syns)
+        # Handle case where we have too many non-0 values
+        if curr_syns.size > n_neurons:
+            curr_syns = curr_syns[0:n_neurons]
+        if curr_syns.size < n_neurons:
+            # TODO make sure this is the right way to 0-pad
+            pad_zeros = np.zeros((n_neurons - curr_syns.size), np.float32)
+            padded_weights = np.concatenate([curr_syns, pad_zeros], axis=-1)
+        else:
+            padded_weights = curr_syns
+        targets[neuron_n] = padded_weights
+
+    return targets
 
 
 def make_train(config):
@@ -371,6 +403,10 @@ def make_train(config):
             tx=tx,
         )
 
+        # Load connectome constraint targets
+        weight_targets = load_connectome_constraints(config['CONNECTOME_FILEPATH'], config['LAYER_SIZE'])
+        weight_targets = jnp.asarray(weight_targets)
+
         # INIT ENV
         rng, _rng = jax.random.split(rng)
         obsv, log_state = env.reset(_rng, env_params)
@@ -522,22 +558,30 @@ def make_train(config):
                         aux_loss = jnp.square(aux - traj_batch.deltas_to_start).mean()
 
                         # Compute connectome constraint loss
+                        # TODO make the weights sort descending
                         hh_weights = params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
-                        breakpoint()
+                        diag_mask = 1. - jnp.diag(jnp.ones(config['LAYER_SIZE']))
+                        hh_weights_masked = hh_weights * diag_mask
+                        hh_weights_abs = jnp.abs(hh_weights_masked)
+                        hh_weights_sorted = jax.lax.sort(hh_weights_abs)
+                        constraint_loss = jnp.mean(jnp.abs(hh_weights_sorted - weight_targets))
+                        jax.debug.print('{x}', x=hh_weights_sorted)
+                        #jax.debug.print('{x}', x=constraint_loss)
 
                         total_loss = (
                             loss_actor
                             + config["VF_COEF"] * value_loss
                             - config["ENT_COEF"] * entropy
                             + config["AUX_COEF"] * aux_loss
+                            + config["CONNECT_COEF"] * constraint_loss
                         )
 
-                        return total_loss, (value_loss, loss_actor, entropy, aux_loss)
+                        return total_loss, (value_loss, loss_actor, entropy, aux_loss, constraint_loss)
 
                     grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
 
                     total_loss, grads = grad_fn(
-                        train_state.params, init_hstate, traj_batch, advantages, targets, None,
+                        train_state.params, init_hstate, traj_batch, advantages, targets, weight_targets,
                     )
 
                     train_state = train_state.apply_gradients(grads=grads)
