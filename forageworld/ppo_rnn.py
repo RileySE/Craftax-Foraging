@@ -558,14 +558,14 @@ def make_train(config):
                         aux_loss = jnp.square(aux - traj_batch.deltas_to_start).mean()
 
                         # Compute connectome constraint loss
-                        # TODO make the weights sort descending
                         hh_weights = params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
                         diag_mask = 1. - jnp.diag(jnp.ones(config['LAYER_SIZE']))
                         hh_weights_masked = hh_weights * diag_mask
                         hh_weights_abs = jnp.abs(hh_weights_masked)
                         hh_weights_sorted = jax.lax.sort(hh_weights_abs)
-                        constraint_loss = jnp.mean(jnp.abs(hh_weights_sorted - weight_targets))
-                        jax.debug.print('{x}', x=hh_weights_sorted)
+                        hh_weights_flipped = jnp.flip(hh_weights_sorted, axis=-1)
+                        constraint_loss = jnp.mean(jnp.abs(hh_weights_flipped - weight_targets))
+                        #jax.debug.print('{x}', x=hh_weights_flipped)
                         #jax.debug.print('{x}', x=constraint_loss)
 
                         total_loss = (
