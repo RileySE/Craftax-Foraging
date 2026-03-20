@@ -19,9 +19,12 @@ for cell_type in unique_cell_types:
 
 for cell_id in unique_cell_ids:
     entries = data.loc[data['pre_root_id'] == cell_id]
+    this_cell_type = ''
     seen_cell_types = []
     for connection in entries.iterrows():
         pre_type = connection[1]['pre_cell_type']
+        # This should not change once set, right?
+        this_cell_type = pre_type
         post_type = connection[1]['post_cell_type']
         syn_count = connection[1]['syn_count']
         syn_counts_per_type_pair[pre_type][post_type].append(syn_count)
@@ -30,5 +33,11 @@ for cell_id in unique_cell_ids:
             seen_cell_types.append(post_type)
             connection_counts_per_cell_per_type_pair[pre_type][post_type].append(0)
         connection_counts_per_cell_per_type_pair[pre_type][post_type][-1] += 1
+    # Add 0's for cell types this cell did NOT connect to
+    # TODO refactor to do this for all post types before the above (low priority, just for cleanliness)
+    for post_type in unique_post_cell_types:
+        if not post_type in seen_cell_types:
+            connection_counts_per_cell_per_type_pair[this_cell_type][post_type].append(0)
 
+# TODO sample from distributions to define constraints
 breakpoint()
