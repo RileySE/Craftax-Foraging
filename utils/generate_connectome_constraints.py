@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 
+# TODO this whole thing is kinda slow, can it be parallelized more?
+
 data = pd.read_csv('../Downloads/fafb_pre_post_cell_types.csv')
 data = data[data['syn_count'] > 5]
 unique_cell_ids = data['pre_root_id'].unique()
@@ -34,10 +36,30 @@ for cell_id in unique_cell_ids:
             connection_counts_per_cell_per_type_pair[pre_type][post_type].append(0)
         connection_counts_per_cell_per_type_pair[pre_type][post_type][-1] += 1
     # Add 0's for cell types this cell did NOT connect to
-    # TODO refactor to do this for all post types before the above (low priority, just for cleanliness)
+    # TODO refactor to do this for all post types before the above (low priority, just for cleanliness/efficiency)
     for post_type in unique_post_cell_types:
         if not post_type in seen_cell_types:
             connection_counts_per_cell_per_type_pair[this_cell_type][post_type].append(0)
 
-# TODO sample from distributions to define constraints
+# Sample from distributions to define constraints
+# TODO debug this
+rnn_units_per_type = 8
+constraints = np.zeros((len(connection_counts_per_cell_per_type_pair.keys()), len(unique_post_cell_types), rnn_units_per_type, rnn_units_per_type),dtype=np.float32)
+for pre_cell_type in connection_counts_per_cell_per_type_pair.keys():
+    for post_cell_type in connection_counts_per_cell_per_type_pair[pre_cell_type].keys():
+        curr_counts = np.asarray(connection_counts_per_cell_per_type_pair[pre_cell_type][post_cell_type], dtype=np.float32)
+        curr_syn_counts = np.asarray(syn_counts_per_type_pair[pre_cell_type][post_cell_type], dtype=np.float32)
+        # Normalize and scale counts relative to the number of neurons in the rnn
+        curr_counts /= curr_counts.max()
+        curr_counts *= rnn_units_per_type
+        curr_counts = np.ceil(curr_counts).int32()
+        curr_syn_counts /= curr_syn_counts.max()
+        curr_count_dist = np.random.choice(curr_counts, (rnn_units_per_type,))
+        curr_constraints = np.zeros((rnn_units_per_type, rnn_units_per_type))
+        for curr_unit in range(rnn_units_per_type):
+            curr_nonzero_weights = np.random.choice(curr_syn_counts, (curr_count_dist[curr_unit],))
+            curr_constraints[curr_unit, :curr_count_dist[curr_unit]] = curr_nonzero_weights
+        curr_constraints = np.flip(curr_constraints.sort(1),1)
+        constraints[pre_cell_type][post_cell_type] = curr_constraints
+
 breakpoint()
