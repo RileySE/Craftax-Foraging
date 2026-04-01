@@ -45,21 +45,28 @@ for cell_id in unique_cell_ids:
 # TODO debug this
 rnn_units_per_type = 8
 constraints = np.zeros((len(connection_counts_per_cell_per_type_pair.keys()), len(unique_post_cell_types), rnn_units_per_type, rnn_units_per_type),dtype=np.float32)
+pre_n = 0
 for pre_cell_type in connection_counts_per_cell_per_type_pair.keys():
+    post_n = 0
     for post_cell_type in connection_counts_per_cell_per_type_pair[pre_cell_type].keys():
         curr_counts = np.asarray(connection_counts_per_cell_per_type_pair[pre_cell_type][post_cell_type], dtype=np.float32)
         curr_syn_counts = np.asarray(syn_counts_per_type_pair[pre_cell_type][post_cell_type], dtype=np.float32)
+        # TODO why is this sometimes an empty array?
+        if curr_syn_counts.size == 0:
+            curr_syn_counts = np.zeros(1)
         # Normalize and scale counts relative to the number of neurons in the rnn
-        curr_counts /= curr_counts.max()
+        curr_counts /= curr_counts.max() + 0.000001
         curr_counts *= rnn_units_per_type
-        curr_counts = np.ceil(curr_counts).int32()
-        curr_syn_counts /= curr_syn_counts.max()
+        curr_counts = np.ceil(curr_counts)
+        curr_syn_counts /= curr_syn_counts.max() + 0.000001
         curr_count_dist = np.random.choice(curr_counts, (rnn_units_per_type,))
         curr_constraints = np.zeros((rnn_units_per_type, rnn_units_per_type))
         for curr_unit in range(rnn_units_per_type):
-            curr_nonzero_weights = np.random.choice(curr_syn_counts, (curr_count_dist[curr_unit],))
-            curr_constraints[curr_unit, :curr_count_dist[curr_unit]] = curr_nonzero_weights
-        curr_constraints = np.flip(curr_constraints.sort(1),1)
-        constraints[pre_cell_type][post_cell_type] = curr_constraints
+            curr_nonzero_weights = np.random.choice(curr_syn_counts, (int(curr_count_dist[curr_unit]),))
+            curr_constraints[curr_unit, :int(curr_count_dist[curr_unit])] = curr_nonzero_weights
+        curr_constraints = np.flip(np.sort(curr_constraints, 1),1)
+        constraints[pre_n][post_n] = curr_constraints
+        post_n += 1
+    pre_n += 1
 
 breakpoint()
