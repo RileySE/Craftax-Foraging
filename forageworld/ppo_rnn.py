@@ -238,6 +238,11 @@ def load_connectome_constraints(pkl_filepath, n_neurons):
 
     return targets
 
+def load_connectome_constraints_cellstats(pkl_filepath):
+    matrix = np.load(pkl_filepath)
+    targets = matrix.reshape(matrix.shape[0] * matrix.shape[2], matrix.shape[1] * matrix.shape[3])
+    return targets
+
 
 def make_train(config):
     config["NUM_UPDATES"] = (
@@ -404,7 +409,8 @@ def make_train(config):
         )
 
         # Load connectome constraint targets
-        weight_targets = load_connectome_constraints(config['CONNECTOME_FILEPATH'], config['LAYER_SIZE'])
+        #weight_targets = load_connectome_constraints(config['CONNECTOME_FILEPATH'], config['LAYER_SIZE'])
+        weight_targets = load_connectome_constraints_cellstats(config['CONNECTOME_FILEPATH'])
         weight_targets = jnp.asarray(weight_targets)
 
         # INIT ENV
