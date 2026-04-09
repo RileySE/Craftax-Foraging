@@ -101,6 +101,7 @@ def parse_args():
     parser.add_argument('--connectome_filepath', type=str, default='./', help="path to the preprocessed connectome cell/type file")
     parser.add_argument('--no_memory', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument('--random_start', action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument('--connectome_init', action=argparse.BooleanOptionalAction, default=False)
     return parser.parse_args()
 
 class ScannedRNN(nn.Module):
@@ -402,16 +403,19 @@ def make_train(config):
         sparse_updater = jaxpruner.create_updater_from_config(sparsity_config)
         tx = sparse_updater.wrap_optax(tx)
 
+        # Load connectome constraint targets
+        #weight_targets = load_connectome_constraints(config['CONNECTOME_FILEPATH'], config['LAYER_SIZE'])
+        weight_targets = load_connectome_constraints_cellstats(config['CONNECTOME_FILEPATH'])
+        weight_targets = jnp.asarray(weight_targets)
+
+        if config['CONNECTOME_INIT']:
+            network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = weight_targets
+
         train_state = TrainState.create(
             apply_fn=network.apply,
             params=network_params,
             tx=tx,
         )
-
-        # Load connectome constraint targets
-        #weight_targets = load_connectome_constraints(config['CONNECTOME_FILEPATH'], config['LAYER_SIZE'])
-        weight_targets = load_connectome_constraints_cellstats(config['CONNECTOME_FILEPATH'])
-        weight_targets = jnp.asarray(weight_targets)
 
         # INIT ENV
         rng, _rng = jax.random.split(rng)
