@@ -409,7 +409,8 @@ def make_train(config):
         weight_targets = jnp.asarray(weight_targets)
 
         if config['CONNECTOME_INIT']:
-            network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = weight_targets
+            random_sign_mask = jax.random.randint(rng, weight_targets.shape, 0,2) - 1.
+            network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = weight_targets * random_sign_mask
 
         train_state = TrainState.create(
             apply_fn=network.apply,
@@ -568,15 +569,19 @@ def make_train(config):
                         aux_loss = jnp.square(aux - traj_batch.deltas_to_start).mean()
 
                         # Compute connectome constraint loss
+                        # TODO rewrite this to respect downstream cell type divisions
+                        # HACK currently set up to work for 1 unit per cell type only!
                         hh_weights = params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
                         diag_mask = 1. - jnp.diag(jnp.ones(config['LAYER_SIZE']))
-                        hh_weights_masked = hh_weights * diag_mask
+                        #hh_weights_masked = hh_weights * diag_mask
+                        hh_weights_masked = hh_weights
                         hh_weights_abs = jnp.abs(hh_weights_masked)
-                        hh_weights_sorted = jax.lax.sort(hh_weights_abs)
-                        hh_weights_flipped = jnp.flip(hh_weights_sorted, axis=-1)
-                        constraint_loss = jnp.mean(jnp.abs(hh_weights_flipped - weight_targets))
-                        #jax.debug.print('{x}', x=hh_weights_flipped)
-                        #jax.debug.print('{x}', x=constraint_loss)
+                        #hh_weights_sorted = jax.lax.sort(hh_weights_abs)
+                        #hh_weights_flipped = jnp.flip(hh_weights_sorted, axis=-1)
+                        constraint_loss = jnp.mean(jnp.abs(hh_weights_abs - weight_targets))
+                        #jax.debug.print('Weights: {x}', x=hh_weights_abs)
+                        #jax.debug.print('Targets: {x}', x=weight_targets)
+                        #jax.debug.print('Loss: {x}', x=constraint_loss)
 
                         total_loss = (
                             loss_actor
