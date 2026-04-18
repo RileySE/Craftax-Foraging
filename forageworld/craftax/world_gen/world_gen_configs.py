@@ -295,7 +295,7 @@ BOSS_LEVEL_CONFIG = SmoothGenConfig(
     tree_threshold_perlin=-1.0,
 )
 
-ALL_SMOOTHGEN_CONFIGS = jax.tree_map(
+ALL_SMOOTHGEN_CONFIGS = jax.tree.map(
     lambda l1, l2, l3, l4, l5, l6: jnp.stack((l1, l2, l3, l4, l5, l6), axis=0),
     OVERWORLD_CONFIG,
     GNOMISH_MINES_CONFIG,
@@ -306,7 +306,7 @@ ALL_SMOOTHGEN_CONFIGS = jax.tree_map(
 )
 
 # As above, but with "featureless" overworld
-FEATURELESS_SMOOTHGEN_CONFIGS = jax.tree_map(
+FEATURELESS_SMOOTHGEN_CONFIGS = jax.tree.map(
     lambda l1, l2, l3, l4, l5, l6: jnp.stack((l1, l2, l3, l4, l5, l6), axis=0),
     OVERWORLD_FEATURELESS_CONFIG,
     GNOMISH_MINES_CONFIG,
@@ -342,7 +342,7 @@ VAULTS_CONFIG = DungeonConfig(
     rare_path_replacement_block=BlockType.PATH.value,
 )
 
-ALL_DUNGEON_CONFIGS = jax.tree_map(
+ALL_DUNGEON_CONFIGS = jax.tree.map(
     lambda x, y, z: jnp.stack((x, y, z), axis=0),
     DUNGEON_CONFIG,
     SEWER_CONFIG,

@@ -41,6 +41,7 @@ from forageworld.environment_base.wrappers import (
 )
 from forageworld.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
 from forageworld.models.actor_critic import ActorCritic, ActorCriticConv, ActorCriticSharedRep
+from forageworld.connectome_utils import connectome_constraint_loss
 
 
 def parse_args():
@@ -406,10 +407,12 @@ def make_train(config):
         # Load connectome constraint targets
         #weight_targets = load_connectome_constraints(config['CONNECTOME_FILEPATH'], config['LAYER_SIZE'])
         weight_targets = load_connectome_constraints_cellstats(config['CONNECTOME_FILEPATH'])
+        # Downstream block size = number of units per post-synaptic cell type in the cellstats matrix
+        connectome_block_size = int(np.load(config['CONNECTOME_FILEPATH']).shape[3])
         weight_targets = jnp.asarray(weight_targets)
 
         if config['CONNECTOME_INIT']:
-            random_sign_mask = jax.random.randint(rng, weight_targets.shape, 0,2) - 1.
+            random_sign_mask = jax.random.randint(rng, weight_targets.shape, 0, 2) * 2 - 1.
             network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = weight_targets * random_sign_mask
 
         train_state = TrainState.create(
@@ -569,19 +572,22 @@ def make_train(config):
                         aux_loss = jnp.square(aux - traj_batch.deltas_to_start).mean()
 
                         # Compute connectome constraint loss
-                        # TODO rewrite this to respect downstream cell type divisions
-                        # HACK currently set up to work for 1 unit per cell type only!
+                        # Old inline loss (1-unit-per-celltype only) kept for reference:
+                        # hh_weights = params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
+                        # diag_mask = 1. - jnp.diag(jnp.ones(config['LAYER_SIZE']))
+                        # #hh_weights_masked = hh_weights * diag_mask
+                        # hh_weights_masked = hh_weights
+                        # hh_weights_abs = jnp.abs(hh_weights_masked)
+                        # #hh_weights_sorted = jax.lax.sort(hh_weights_abs)
+                        # #hh_weights_flipped = jnp.flip(hh_weights_sorted, axis=-1)
+                        # constraint_loss = jnp.mean(jnp.abs(hh_weights_abs - weight_targets))
+                        # #jax.debug.print('Weights: {x}', x=hh_weights_abs)
+                        # #jax.debug.print('Targets: {x}', x=weight_targets)
+                        # #jax.debug.print('Loss: {x}', x=constraint_loss)
                         hh_weights = params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
-                        diag_mask = 1. - jnp.diag(jnp.ones(config['LAYER_SIZE']))
-                        #hh_weights_masked = hh_weights * diag_mask
-                        hh_weights_masked = hh_weights
-                        hh_weights_abs = jnp.abs(hh_weights_masked)
-                        #hh_weights_sorted = jax.lax.sort(hh_weights_abs)
-                        #hh_weights_flipped = jnp.flip(hh_weights_sorted, axis=-1)
-                        constraint_loss = jnp.mean(jnp.abs(hh_weights_abs - weight_targets))
-                        #jax.debug.print('Weights: {x}', x=hh_weights_abs)
-                        #jax.debug.print('Targets: {x}', x=weight_targets)
-                        #jax.debug.print('Loss: {x}', x=constraint_loss)
+                        constraint_loss = connectome_constraint_loss(
+                            hh_weights, weight_targets, connectome_block_size
+                        )
 
                         total_loss = (
                             loss_actor
@@ -666,7 +672,7 @@ def make_train(config):
             #traj_batch.info['total_loss'] = loss_info[0].mean()
             #traj_batch.info['aux_loss'] = loss_info[1][-1].mean()
 
-            metric = jax.tree_map(
+            metric = jax.tree_util.tree_map(
                 lambda x: (x * traj_batch.info["returned_episode"]).sum()
                 / traj_batch.info["returned_episode"].sum(),
                 traj_batch.info,
@@ -955,7 +961,7 @@ def run_ppo(config):
 
     def _save_network(rs_index, dir_name):
         train_states = out["runner_state"][rs_index]
-        train_state = jax.tree_map(lambda x: x[0], train_states)
+        train_state = jax.tree_util.tree_map(lambda x: x[0], train_states)
         orbax_checkpointer = PyTreeCheckpointer()
         options = CheckpointManagerOptions(max_to_keep=1, create=True)
         path = os.path.join(wandb.run.dir, dir_name)
