@@ -35,7 +35,8 @@ from forageworld.environment_base.wrappers import (
     OptimisticResetVecEnvWrapper,
     AutoResetEnvWrapper,
     BatchEnvWrapper,
-    VideoPlotWrapper,
+    EpisodeInfoWrapper,
+    FastVideoWrapper,
     ReduceActionSpaceWrapper, AppendActionToObsWrapper, AppendActionToObsWrapper,
     CurriculumWrapper
 )
@@ -315,10 +316,12 @@ def make_train(config):
     if config['ACTION_IN_OBS']:
         env = AppendActionToObsWrapper(env)
 
-    # Env version to log videos, use only for occasional visualization as plotting is expensive/slow
-    # TODO why do I need to put this wrapper early in the stack? It can't just layer on top
-    env_viz = VideoPlotWrapper(env, config['OUTPUT_PATH'], config['FRAMES_PER_FILE'], not config['NO_VIDEOS'])
-
+    # env_viz shares the batching stack with env but uses EpisodeInfoWrapper in
+    # place of LogWrapper to add per-step telemetry fields needed by
+    # _logging_step, and wraps FastVideoWrapper OUTSIDE of the batching so
+    # rendering happens once per step (for a single env thread) instead of
+    # once per parallel env.
+    env_viz = EpisodeInfoWrapper(env)
     env = LogWrapper(env)
 
     if not os.path.isdir(config['OUTPUT_PATH']):
@@ -340,6 +343,13 @@ def make_train(config):
         env = BatchEnvWrapper(env, num_envs=config["NUM_ENVS"])
         env_viz = AutoResetEnvWrapper(env_viz)
         env_viz = BatchEnvWrapper(env_viz, num_envs=config["NUM_ENVS"])
+
+    env_viz = FastVideoWrapper(
+        env_viz,
+        output_path=config['OUTPUT_PATH'],
+        frames_per_file=config['FRAMES_PER_FILE'],
+        do_videos=not config['NO_VIDEOS'],
+    )
 
     def linear_schedule(count):
         frac = (

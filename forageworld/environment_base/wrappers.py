@@ -1,4 +1,5 @@
-from math import ceil, sqrt, floor
+import os
+import subprocess
 
 import jax
 import jax.numpy as jnp
@@ -8,7 +9,6 @@ from flax import struct
 from functools import partial
 from typing import Optional, Tuple, Union, Any
 from gymnax.environments import environment, spaces
-from matplotlib import pyplot as plt, animation
 
 from forageworld.craftax.renderer import render_craftax_pixels
 
@@ -249,32 +249,13 @@ class LogWrapper(GymnaxWrapper):
         return obs, state, reward, done, info
 
 
-# Wrapper for plotting videos (every expensive op due to CPU latency, only run with this wrapper rarely!
-class VideoPlotWrapper(LogWrapper):
-    def __init__(self, env: environment.Environment, output_path='./', frames_per_file=500, do_videos=True):
+# Wrapper that mirrors LogWrapper but also populates per-episode info fields
+# (health, food, distance-to-mob, etc.) used downstream for telemetry logging.
+# Expected to sit INSIDE the batching wrappers (same position as LogWrapper),
+# because the info-field indexing assumes a single, unbatched env state.
+class EpisodeInfoWrapper(LogWrapper):
+    def __init__(self, env: environment.Environment):
         super().__init__(env)
-        self.vis_renderer = None
-        self.curr_env_id = -9999
-        self.n_frames_seen = 0
-        self.output_path = output_path
-        self.frames_per_file = frames_per_file
-        self.do_videos = do_videos
-
-    @partial(jax.jit, static_argnums=(0, 2))
-    def reset(
-        self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
-    ) -> Tuple[chex.Array, environment.EnvState]:
-        obs, state = super().reset(key, params)
-        # Either flush the video or do setup (if this is the first reset)
-        if self.do_videos:
-            if self.vis_renderer:
-                self.vis_renderer.flush_video()
-            else:
-                example_frame = render_craftax_pixels(state.env_state, 16)
-                self.vis_renderer = VisualizationRenderer(example_frame.shape, self.output_path, 0, True,
-                                                          frames_per_file=self.frames_per_file)
-
-        return obs, state
 
     @partial(jax.jit, static_argnums=(0, 4))
     def step(
@@ -287,24 +268,6 @@ class VideoPlotWrapper(LogWrapper):
         obs, state, reward, done, info = super().step(key, state, action, params)
 
         env_state = state.env_state
-
-        # Video plotting stuff
-        # This needs to leave the jax ecosystem so we use callback
-        def callback_func(new_obs, t, done):
-            #if self.do_videos:
-            self.vis_renderer.add_frame(new_obs, t, done)
-
-        # Alternative to satisfy jax's cond function
-        # TODO is there a builtin no-op function I could use instead?
-        def null_func(env_state):
-            return 0
-
-        def do_callback(env_state):
-            new_obs = render_craftax_pixels(env_state, 16)
-            jax.debug.callback(callback_func, new_obs, state.env_state.env_id, done)
-            return 1
-
-        callback_result = jax.lax.cond(self.do_videos, do_callback, null_func, env_state)
 
         # Add fields to be logged
         info['action'] = action
@@ -385,93 +348,161 @@ class VideoPlotWrapper(LogWrapper):
         return obs, state, reward, done, info
 
 
-# Class to progressively render visualization frames during test rollouts.
-# TODO remove residual cruft
-class VisualizationRenderer(object):
-    # Set up plotting
-    def __init__(self, frame_shape, save_path, enumerator, is_rgb=False, draw_only_first=False, frames_per_file=500):
-        self.frame_shape = frame_shape
+# Lightweight video recorder that pipes raw RGB frames straight into an ffmpeg
+# subprocess. Waits for the first episode boundary before starting a file so
+# that each recorded video begins at a fresh episode. Replaces the prior
+# matplotlib ArtistAnimation path, which was dominated by imshow/agg overhead.
+class FastVideoRenderer(object):
+    def __init__(self, frame_shape, save_path, frames_per_file=500, fps=10,
+                 codec='libx264', file_prefix='example_episode'):
+        self.height = int(frame_shape[0])
+        self.width = int(frame_shape[1])
         self.save_path = save_path
-        self.enumerator = enumerator
-        self.is_rgb = is_rgb
-        self.draw_only_first = draw_only_first
         self.frames_per_file = frames_per_file
+        self.fps = fps
+        self.codec = codec
+        self.file_prefix = file_prefix
 
-        # frame_shape should be shaped like <x, y, n_channels>
+        os.makedirs(save_path, exist_ok=True)
 
-        # Simple grid layout: n-by-n grid, possibly underfull
-        self.side_length = 1
+        self._proc = None
+        self._recording = False
+        self._frames_in_file = 0
+        self._videos_written = 0
 
-        # Determine figure aspect ratio
-        self.obs_x = frame_shape[0]
-        self.obs_y = frame_shape[1]
+    def _open_writer(self):
+        out_path = os.path.join(
+            self.save_path, f'{self.file_prefix}_{self._videos_written}.mp4'
+        )
+        cmd = [
+            'ffmpeg', '-y', '-loglevel', 'error',
+            '-f', 'rawvideo', '-vcodec', 'rawvideo',
+            '-s', f'{self.width}x{self.height}',
+            '-pix_fmt', 'rgb24',
+            '-r', str(self.fps),
+            '-i', '-',
+            '-an',
+            '-vcodec', self.codec,
+            '-pix_fmt', 'yuv420p',
+            out_path,
+        ]
+        self._proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+        print('Recording video to', out_path)
 
-        self.fig = plt.figure(figsize=(ceil(self.obs_y / 100), ceil(self.obs_x / 100)))
-        self.axs = self.fig.subplots(self.side_length, self.side_length, squeeze=(not draw_only_first))
-
-        # ims is a list of lists, each row is a list of artists to draw in the
-        # current frame; here we are just animating one artist, the image, in each frame
-        self.ims = []
-
-        self.n_frames_logged = 0
-        self.last_timestep = 0
-        self.n_videos_logged = 0
-        self.key = None
-        self.add_frame_callcount = 0
-
-    # Render a new frame
-    # Frames should have the shape described in frame_shape, with the first dimension being (usually) 1
-    def add_frame(self, frame, timestep, done):
-
-        self.add_frame_callcount += 1
-
-        # If we finished, grab a different episode to log
-        if self.add_frame_callcount % 1000000 == 0:
-            self.key = None
-
-        if not self.key:
-            self.key = timestep
-        # Attempt to log only one parallel env
-        if timestep != self.key:
+    def _close_writer(self):
+        if self._proc is None:
             return
+        try:
+            self._proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+        try:
+            self._proc.wait(timeout=30)
+        except Exception:
+            self._proc.kill()
+        self._proc = None
+        self._videos_written += 1
 
-        if self.n_frames_logged % 50 == 0:
-            print('Logged', self.n_frames_logged, 'frames')
-        #self.last_timestep = timestep
-        curr_artist = []
-        frame = frame / 255.
-        # Draw the frame!
-        im = self.axs.imshow(frame, animated=True, vmin=0, vmax=1)
-        self.axs.set_xticks([])
-        self.axs.set_yticks([])
-        curr_artist.append(im)
-        self.ims.append(curr_artist)
-        self.n_frames_logged += 1
+    def add_frame(self, frame, done):
+        # Wait for the first episode boundary before recording, so every video
+        # file starts at a fresh episode. Under the auto-reset wrappers, the
+        # state observed on a done=True step is already the new episode's
+        # reset state, so it's a valid frame zero.
+        if not self._recording:
+            if bool(done):
+                self._open_writer()
+                self._recording = True
+                self._frames_in_file = 0
+            else:
+                return
 
-        if self.n_frames_logged >= self.frames_per_file:
-            self.flush_video()
+        self._write_frame(frame)
+        self._frames_in_file += 1
 
-    # Write out the rendered frames as an mp4 using ffmpeg
-    def flush_video(self):
+        if self._frames_in_file >= self.frames_per_file:
+            self._close_writer()
+            self._recording = False
 
-        print('Flushing', len(self.ims), 'frames')
-        # Animate/render the set of frames
-        ani = animation.ArtistAnimation(self.fig, self.ims, interval=200, blit=True,
-                                        repeat_delay=1000, repeat=False)
+    def _write_frame(self, frame):
+        if frame.dtype != np.uint8:
+            frame = np.clip(frame, 0, 255).astype(np.uint8)
+        if frame.shape[-1] > 3:
+            frame = frame[..., :3]
+        frame = np.ascontiguousarray(frame)
+        try:
+            self._proc.stdin.write(frame.tobytes())
+        except (BrokenPipeError, OSError):
+            # ffmpeg died; drop remaining frames in this file
+            self._proc = None
+            self._recording = False
 
-        # Pipe to ffmpeg for encoding and writing to disk
-        writer = animation.FFMpegWriter(
-            fps=10, bitrate=-1, codec='hevc_nvenc')
-        ani.save(self.save_path + "/example_episode_" + str(self.n_videos_logged) + ".mp4", writer=writer)
+    def close(self):
+        if self._recording:
+            self._close_writer()
+            self._recording = False
 
-        plt.close()
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
-        self.last_timestep = 0
-        self.ims = []
-        self.n_frames_logged = 0
-        self.fig = plt.figure(figsize=(ceil(self.obs_y / 100), ceil(self.obs_x / 100)))
-        self.axs = self.fig.subplots(self.side_length, self.side_length, squeeze=(not self.draw_only_first))
-        self.n_videos_logged += 1
+
+# Fast video-logging wrapper. Renders only a single environment thread per
+# step (env_idx, default 0) rather than every parallel thread, emits one
+# host callback per step, and writes videos directly via ffmpeg rather than
+# through matplotlib. Apply OUTSIDE of OptimisticResetVecEnvWrapper /
+# BatchEnvWrapper so state is already batched and env_idx can be sliced out.
+class FastVideoWrapper(GymnaxWrapper):
+    def __init__(self, env: environment.Environment, output_path='./',
+                 frames_per_file=500, do_videos=True,
+                 env_idx=0, block_pixel_size=16, fps=10):
+        super().__init__(env)
+        self.output_path = output_path
+        self.frames_per_file = frames_per_file
+        self.do_videos = do_videos
+        self.env_idx = env_idx
+        self.block_pixel_size = block_pixel_size
+        self.fps = fps
+        self._renderer = None  # lazily created on first host callback
+
+    def _emit_frame(self, frame, done):
+        frame = np.asarray(frame)
+        if self._renderer is None:
+            self._renderer = FastVideoRenderer(
+                frame.shape, self.output_path,
+                frames_per_file=self.frames_per_file, fps=self.fps,
+            )
+        self._renderer.add_frame(frame, done)
+
+    @partial(jax.jit, static_argnums=(0, 2))
+    def reset(
+        self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
+    ) -> Tuple[chex.Array, environment.EnvState]:
+        return self._env.reset(key, params)
+
+    @partial(jax.jit, static_argnums=(0, 4))
+    def step(
+        self,
+        key: chex.PRNGKey,
+        state,
+        action: Union[int, float],
+        params: Optional[environment.EnvParams] = None,
+    ):
+        obs, state, reward, done, info = self._env.step(key, state, action, params)
+
+        if self.do_videos:
+            # The wrapped env may be LogWrapped; drill through to the raw env
+            # state before rendering. Slice out a single parallel env so we
+            # render one frame per step instead of num_envs frames per step.
+            raw = state.env_state if hasattr(state, 'env_state') else state
+            single_state = jax.tree.map(lambda x: x[self.env_idx], raw)
+            single_done = done[self.env_idx]
+            frame = render_craftax_pixels(single_state, self.block_pixel_size)
+            frame_u8 = jnp.clip(frame, 0, 255).astype(jnp.uint8)
+            jax.debug.callback(self._emit_frame, frame_u8, single_done, ordered=True)
+
+        return obs, state, reward, done, info
 
 
 class CurriculumWrapper(GymnaxWrapper):
