@@ -678,10 +678,6 @@ def make_train(config):
             )
             train_state = update_state[0]
 
-            # TODO figure out how to log loss data, it's not syncronized with env steps so this is annoying
-            #traj_batch.info['total_loss'] = loss_info[0].mean()
-            #traj_batch.info['aux_loss'] = loss_info[1][-1].mean()
-
             metric = jax.tree_util.tree_map(
                 lambda x: (x * traj_batch.info["returned_episode"]).sum()
                 / traj_batch.info["returned_episode"].sum(),
@@ -690,14 +686,24 @@ def make_train(config):
 
             to_log = metric
 
+            value_loss, loss_actor, entropy, aux_loss, constraint_loss = loss_info[1]
+            loss_log = {
+                "loss_actor": loss_actor.mean(),
+                "entropy": entropy.mean(),
+                "aux_loss": aux_loss.mean(),
+                "value_loss": value_loss.mean(),
+                "constraint_loss": constraint_loss.mean(),
+            }
+
             rng = update_state[-1]
             if config["DEBUG"] and config["USE_WANDB"]:
 
-                def callback(metric, update_step):
+                def callback(metric, loss_log, update_step):
                     to_log = create_log_dict(metric, config)
+                    to_log.update(loss_log)
                     batch_log(update_step, to_log, config)
 
-                jax.debug.callback(callback, to_log, update_step)
+                jax.debug.callback(callback, to_log, loss_log, update_step)
 
             runner_state = (
                 train_state,

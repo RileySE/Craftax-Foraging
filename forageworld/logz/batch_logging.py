@@ -79,6 +79,11 @@ def batch_log(update_step, log, config):
                     "goal_x",
                     "goal_y",
                     "rnd_loss",
+                    "loss_actor",
+                    "entropy",
+                    "aux_loss",
+                    "value_loss",
+                    "constraint_loss",
                 ]:
                     agg_logs[key] = np.mean(agg)
                 elif key in ["goal_heatmap"]:
