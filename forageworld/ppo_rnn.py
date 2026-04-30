@@ -874,25 +874,27 @@ def make_train(config):
                 weights_flat = jax.tree.flatten(weights)
                 run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
                 os.makedirs(run_out_path, exist_ok=True)
-                weight_filename = os.path.join(run_out_path, 'weights_{}.csv'.format(iter))
-                weight_file = open(weight_filename, 'w')
+                weight_filename = os.path.join(run_out_path, 'weights_fromto_{}.csv'.format(iter))
                 weights_params = weights['params']
 
-                def save_weight_dict(curr_value, key_string=''):
-                    if type(curr_value) != dict:
-                        np.savetxt(weight_file, np.transpose(curr_value), delimiter=',', fmt='%f', header=key_string)
+                with open(weight_filename, 'w') as weight_file:
+                    def save_weight_dict(curr_value, key_string=''):
+                        if type(curr_value) != dict:
+                            #why was this getting transposed? We want from-to ordering, not to-from
+                            #np.savetxt(weight_file, np.transpose(curr_value), delimiter=',', fmt='%f', header=key_string)
+                            np.savetxt(weight_file, curr_value, delimiter=',', fmt='%f', header=key_string)
+                            return True
+                        else:
+                            for key in curr_value.keys():
+                                save_weight_dict(curr_value[key], key_string + '/' + key)
                         return True
-                    else:
-                        for key in curr_value.keys():
-                            save_weight_dict(curr_value[key], key_string + '/' + key)
-                    return True
 
-                save_weight_dict(weights_params)
+                    save_weight_dict(weights_params)
 
                 print('Saving weights in file', weight_filename)
 
 
-            jax.debug.callback(save_weights_callback, runner_state[0].params, runner_state[-1])
+            jax.debug.callback(save_weights_callback, runner_state[0].params, runner_state[-1], ordered=True)
 
             # Can we save the environment state and resume training later?
             #runner_state_copy = runner_state
