@@ -1,6 +1,47 @@
 import jax
 import jax.nn as jnn
 import jax.numpy as jnp
+import numpy as np
+
+
+def randomize_target_matrix(targets, block_size, seed=0):
+    """Return a randomized target matrix preserving the zero fraction and the
+    multiset of non-zero values from `targets`.
+
+    The non-zero values are randomly redistributed across the matrix (shuffled
+    without replacement), so the global fraction of zeros and the empirical
+    distribution of non-zero entries are preserved exactly. Each (row,
+    downstream-block) tile is then sorted in descending order to match the
+    pre-sorted convention used by ``connectome_constraint_loss``, making the
+    result a drop-in replacement for the original targets.
+
+    Args:
+        targets: ``(n_rows, n_cols)`` array of non-negative target weights.
+        block_size: number of columns per downstream block; must divide
+            ``n_cols``.
+        seed: integer seed for the NumPy RNG used to shuffle the values.
+
+    Returns:
+        ``np.ndarray`` with the same shape and dtype as ``targets``.
+    """
+    arr = np.asarray(targets)
+    if arr.ndim != 2:
+        raise ValueError(f"targets must be 2D, got shape {arr.shape}")
+    n_rows, n_cols = arr.shape
+    if n_cols % block_size != 0:
+        raise ValueError(
+            f"block_size={block_size} does not divide n_cols={n_cols}"
+        )
+
+    rng = np.random.default_rng(seed)
+    shuffled = rng.permutation(arr.flatten()).reshape(arr.shape)
+
+    # Sort each downstream block descending so the result respects the same
+    # block-sorted invariant assumed by connectome_constraint_loss.
+    n_blocks = n_cols // block_size
+    blocked = shuffled.reshape(n_rows, n_blocks, block_size)
+    sorted_blocks = -np.sort(-blocked, axis=-1)
+    return sorted_blocks.reshape(arr.shape).astype(arr.dtype, copy=False)
 
 
 def connectome_constraint_loss(hh_weights, weight_targets, block_size):

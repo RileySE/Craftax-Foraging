@@ -42,7 +42,11 @@ from forageworld.environment_base.wrappers import (
 )
 from forageworld.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
 from forageworld.models.actor_critic import ActorCritic, ActorCriticConv, ActorCriticSharedRep
-from forageworld.connectome_utils import connectome_constraint_loss, connectome_loss_nonzero
+from forageworld.connectome_utils import (
+    connectome_constraint_loss,
+    connectome_loss_nonzero,
+    randomize_target_matrix,
+)
 
 
 def parse_args():
@@ -108,6 +112,8 @@ def parse_args():
                         help="Initialize the constrained weights to the connectome targets and freeze them during training")
     parser.add_argument('--connectome_freeze_zeros', action=argparse.BooleanOptionalAction, default=False,
                         help="Initialize the constrained weights to the connectome targets and freeze only the entries whose target is zero; non-zero entries train normally")
+    parser.add_argument('--connectome_randomize_targets', action=argparse.BooleanOptionalAction, default=False,
+                        help="Replace the loaded connectome targets with a randomized matrix that preserves the global zero fraction and the distribution of non-zero values; the seed for the shuffle is taken from --seed")
     return parser.parse_args()
 
 class ScannedRNN(nn.Module):
@@ -402,6 +408,10 @@ def make_train(config):
         weight_targets = load_connectome_constraints_cellstats(config['CONNECTOME_FILEPATH'])
         # Downstream block size = number of units per post-synaptic cell type in the cellstats matrix
         connectome_block_size = int(np.load(config['CONNECTOME_FILEPATH']).shape[3])
+        if config['CONNECTOME_RANDOMIZE_TARGETS']:
+            weight_targets = randomize_target_matrix(
+                weight_targets, connectome_block_size, seed=config['SEED']
+            )
         weight_targets = jnp.asarray(weight_targets)
 
         if config['CONNECTOME_INIT'] or config['CONNECTOME_FREEZE'] or config['CONNECTOME_FREEZE_ZEROS']:
