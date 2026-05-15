@@ -42,7 +42,7 @@ from forageworld.environment_base.wrappers import (
 )
 from forageworld.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
 from forageworld.models.actor_critic import ActorCritic, ActorCriticConv, ActorCriticSharedRep
-from forageworld.connectome_utils import connectome_constraint_loss
+from forageworld.connectome_utils import connectome_constraint_loss, connectome_loss_nonzero
 
 
 def parse_args():
@@ -104,6 +104,8 @@ def parse_args():
     parser.add_argument('--no_memory', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument('--random_start', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument('--connectome_init', action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument('--connectome_freeze', action=argparse.BooleanOptionalAction, default=False,
+                        help="Initialize the constrained weights to the connectome targets and freeze them during training")
     return parser.parse_args()
 
 class ScannedRNN(nn.Module):
@@ -393,6 +395,17 @@ def make_train(config):
         )
         network_params = network.init(_rng, init_hstate, init_x)
 
+        # Load connectome constraint targets
+        #weight_targets = load_connectome_constraints(config['CONNECTOME_FILEPATH'], config['LAYER_SIZE'])
+        weight_targets = load_connectome_constraints_cellstats(config['CONNECTOME_FILEPATH'])
+        # Downstream block size = number of units per post-synaptic cell type in the cellstats matrix
+        connectome_block_size = int(np.load(config['CONNECTOME_FILEPATH']).shape[3])
+        weight_targets = jnp.asarray(weight_targets)
+
+        if config['CONNECTOME_INIT'] or config['CONNECTOME_FREEZE']:
+            random_sign_mask = jax.random.randint(rng, weight_targets.shape, 0, 2) * 2 - 1.
+            network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = weight_targets * random_sign_mask
+
         if config["ANNEAL_LR"]:
             tx = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
@@ -404,6 +417,17 @@ def make_train(config):
                 optax.adam(config["LR"], eps=1e-5),
             )
 
+        if config['CONNECTOME_FREEZE']:
+            frozen_path = ('params', 'ScannedRNN_0', 'SimpleCell_1', 'h', 'kernel')
+            param_labels = jax.tree_util.tree_map_with_path(
+                lambda path, _: 'frozen' if tuple(p.key for p in path) == frozen_path else 'trainable',
+                network_params,
+            )
+            tx = optax.multi_transform(
+                {'trainable': tx, 'frozen': optax.set_to_zero()},
+                param_labels,
+            )
+
         sparsity_config = ConfigDict()
         sparsity_config.sparsity = config["SPARSITY"]
         sparsity_config.algorithm = config["SPARSE_ALG"]
@@ -413,17 +437,6 @@ def make_train(config):
         sparsity_config = sparsity_config.unlock()
         sparse_updater = jaxpruner.create_updater_from_config(sparsity_config)
         tx = sparse_updater.wrap_optax(tx)
-
-        # Load connectome constraint targets
-        #weight_targets = load_connectome_constraints(config['CONNECTOME_FILEPATH'], config['LAYER_SIZE'])
-        weight_targets = load_connectome_constraints_cellstats(config['CONNECTOME_FILEPATH'])
-        # Downstream block size = number of units per post-synaptic cell type in the cellstats matrix
-        connectome_block_size = int(np.load(config['CONNECTOME_FILEPATH']).shape[3])
-        weight_targets = jnp.asarray(weight_targets)
-
-        if config['CONNECTOME_INIT']:
-            random_sign_mask = jax.random.randint(rng, weight_targets.shape, 0, 2) * 2 - 1.
-            network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = weight_targets * random_sign_mask
 
         train_state = TrainState.create(
             apply_fn=network.apply,
