@@ -106,6 +106,8 @@ def parse_args():
     parser.add_argument('--connectome_init', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument('--connectome_freeze', action=argparse.BooleanOptionalAction, default=False,
                         help="Initialize the constrained weights to the connectome targets and freeze them during training")
+    parser.add_argument('--connectome_freeze_zeros', action=argparse.BooleanOptionalAction, default=False,
+                        help="Initialize the constrained weights to the connectome targets and freeze only the entries whose target is zero; non-zero entries train normally")
     return parser.parse_args()
 
 class ScannedRNN(nn.Module):
@@ -402,7 +404,7 @@ def make_train(config):
         connectome_block_size = int(np.load(config['CONNECTOME_FILEPATH']).shape[3])
         weight_targets = jnp.asarray(weight_targets)
 
-        if config['CONNECTOME_INIT'] or config['CONNECTOME_FREEZE']:
+        if config['CONNECTOME_INIT'] or config['CONNECTOME_FREEZE'] or config['CONNECTOME_FREEZE_ZEROS']:
             random_sign_mask = jax.random.randint(rng, weight_targets.shape, 0, 2) * 2 - 1.
             network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = weight_targets * random_sign_mask
 
@@ -417,8 +419,8 @@ def make_train(config):
                 optax.adam(config["LR"], eps=1e-5),
             )
 
+        frozen_path = ('params', 'ScannedRNN_0', 'SimpleCell_1', 'h', 'kernel')
         if config['CONNECTOME_FREEZE']:
-            frozen_path = ('params', 'ScannedRNN_0', 'SimpleCell_1', 'h', 'kernel')
             param_labels = jax.tree_util.tree_map_with_path(
                 lambda path, _: 'frozen' if tuple(p.key for p in path) == frozen_path else 'trainable',
                 network_params,
@@ -426,6 +428,26 @@ def make_train(config):
             tx = optax.multi_transform(
                 {'trainable': tx, 'frozen': optax.set_to_zero()},
                 param_labels,
+            )
+        elif config['CONNECTOME_FREEZE_ZEROS']:
+            # 1.0 where the connectome target is non-zero (trainable), 0.0 where it
+            # is zero (frozen). Multiplying the kernel's update by this mask leaves
+            # zero-target entries untouched while allowing the rest to train.
+            trainable_elem_mask = (weight_targets != 0).astype(weight_targets.dtype)
+
+            def _mask_init(params):
+                return optax.EmptyState()
+
+            def _mask_update(updates, state, params=None):
+                def _apply(path, leaf):
+                    if tuple(p.key for p in path) == frozen_path:
+                        return leaf * trainable_elem_mask
+                    return leaf
+                return jax.tree_util.tree_map_with_path(_apply, updates), state
+
+            tx = optax.chain(
+                tx,
+                optax.GradientTransformation(_mask_init, _mask_update),
             )
 
         sparsity_config = ConfigDict()
