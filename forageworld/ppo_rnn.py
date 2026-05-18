@@ -114,6 +114,8 @@ def parse_args():
                         help="Initialize the constrained weights to the connectome targets and freeze only the entries whose target is zero; non-zero entries train normally")
     parser.add_argument('--connectome_randomize_targets', action=argparse.BooleanOptionalAction, default=False,
                         help="Replace the loaded connectome targets with a randomized matrix that preserves the global zero fraction and the distribution of non-zero values; the seed for the shuffle is taken from --seed")
+    parser.add_argument('--connectome_zero_init', action=argparse.BooleanOptionalAction, default=False,
+                        help="Sanity-check init: set the constrained kernel to all zeros instead of using the connectome targets. Composes with --connectome_freeze / --connectome_freeze_zeros (overrides the target-based init when both are set).")
     return parser.parse_args()
 
 class ScannedRNN(nn.Module):
@@ -414,7 +416,10 @@ def make_train(config):
             )
         weight_targets = jnp.asarray(weight_targets)
 
-        if config['CONNECTOME_INIT'] or config['CONNECTOME_FREEZE'] or config['CONNECTOME_FREEZE_ZEROS']:
+        if config['CONNECTOME_ZERO_INIT']:
+            kernel = network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
+            network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = jnp.zeros_like(kernel)
+        elif config['CONNECTOME_INIT'] or config['CONNECTOME_FREEZE'] or config['CONNECTOME_FREEZE_ZEROS']:
             random_sign_mask = jax.random.randint(rng, weight_targets.shape, 0, 2) * 2 - 1.
             network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = weight_targets * random_sign_mask
 
