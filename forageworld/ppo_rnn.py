@@ -110,15 +110,15 @@ def parse_args():
     parser.add_argument('--random_start', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument('--connectome_init', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument('--connectome_freeze', action=argparse.BooleanOptionalAction, default=False,
-                        help="Initialize the constrained weights to the connectome targets and freeze them during training")
+                        help="Freeze the constrained weights at their initial values throughout training. Does not change the initialization on its own — combine with --connectome_init (or --connectome_zero_init) to control what values are frozen.")
     parser.add_argument('--connectome_freeze_zeros', action=argparse.BooleanOptionalAction, default=False,
-                        help="Initialize the constrained weights to the connectome targets and freeze only the entries whose target is zero; non-zero entries train normally")
+                        help="Freeze only the entries whose connectome target is zero at their initial values; non-zero-target entries train normally. Does not change the initialization on its own — combine with --connectome_init (or --connectome_zero_init) to control what values are frozen.")
     parser.add_argument('--connectome_randomize_targets', action=argparse.BooleanOptionalAction, default=False,
                         help="Replace the loaded connectome targets with a randomized matrix that preserves the global zero fraction and the distribution of non-zero values; the seed for the shuffle is taken from --seed")
     parser.add_argument('--connectome_uniform_targets', action=argparse.BooleanOptionalAction, default=False,
                         help="Replace the loaded connectome targets with a matrix whose non-zero entries are drawn i.i.d. from Uniform(0, 1) at uniformly random positions, preserving only the count of non-zero entries. Composes with --connectome_init / --connectome_freeze / --connectome_freeze_zeros / --connectome_zero_init; if --connectome_randomize_targets is also set, the uniform replacement is applied after and effectively wins. Seed for the draw is taken from --seed.")
     parser.add_argument('--connectome_zero_init', action=argparse.BooleanOptionalAction, default=False,
-                        help="Sanity-check init: set the constrained kernel to all zeros instead of using the connectome targets. Composes with --connectome_freeze / --connectome_freeze_zeros (overrides the target-based init when both are set).")
+                        help="Sanity-check init: set the constrained kernel to all zeros instead of the default initializer. Takes precedence over --connectome_init when both are set. Composes with --connectome_freeze / --connectome_freeze_zeros (which then freeze the zero-initialized kernel).")
     return parser.parse_args()
 
 class ScannedRNN(nn.Module):
@@ -426,7 +426,7 @@ def make_train(config):
         if config['CONNECTOME_ZERO_INIT']:
             kernel = network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
             network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = jnp.zeros_like(kernel)
-        elif config['CONNECTOME_INIT'] or config['CONNECTOME_FREEZE'] or config['CONNECTOME_FREEZE_ZEROS']:
+        elif config['CONNECTOME_INIT']:
             random_sign_mask = jax.random.randint(rng, weight_targets.shape, 0, 2) * 2 - 1.
             network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = weight_targets * random_sign_mask
 
