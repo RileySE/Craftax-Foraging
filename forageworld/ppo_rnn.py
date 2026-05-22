@@ -46,6 +46,7 @@ from forageworld.connectome_utils import (
     connectome_constraint_loss,
     connectome_loss_nonzero,
     randomize_target_matrix,
+    uniform_random_target_matrix,
 )
 
 
@@ -114,6 +115,8 @@ def parse_args():
                         help="Initialize the constrained weights to the connectome targets and freeze only the entries whose target is zero; non-zero entries train normally")
     parser.add_argument('--connectome_randomize_targets', action=argparse.BooleanOptionalAction, default=False,
                         help="Replace the loaded connectome targets with a randomized matrix that preserves the global zero fraction and the distribution of non-zero values; the seed for the shuffle is taken from --seed")
+    parser.add_argument('--connectome_uniform_targets', action=argparse.BooleanOptionalAction, default=False,
+                        help="Replace the loaded connectome targets with a matrix whose non-zero entries are drawn i.i.d. from Uniform(0, 1) at uniformly random positions, preserving only the count of non-zero entries. Composes with --connectome_init / --connectome_freeze / --connectome_freeze_zeros / --connectome_zero_init; if --connectome_randomize_targets is also set, the uniform replacement is applied after and effectively wins. Seed for the draw is taken from --seed.")
     parser.add_argument('--connectome_zero_init', action=argparse.BooleanOptionalAction, default=False,
                         help="Sanity-check init: set the constrained kernel to all zeros instead of using the connectome targets. Composes with --connectome_freeze / --connectome_freeze_zeros (overrides the target-based init when both are set).")
     return parser.parse_args()
@@ -412,6 +415,10 @@ def make_train(config):
         connectome_block_size = int(np.load(config['CONNECTOME_FILEPATH']).shape[3])
         if config['CONNECTOME_RANDOMIZE_TARGETS']:
             weight_targets = randomize_target_matrix(
+                weight_targets, connectome_block_size, seed=config['SEED']
+            )
+        if config['CONNECTOME_UNIFORM_TARGETS']:
+            weight_targets = uniform_random_target_matrix(
                 weight_targets, connectome_block_size, seed=config['SEED']
             )
         weight_targets = jnp.asarray(weight_targets)

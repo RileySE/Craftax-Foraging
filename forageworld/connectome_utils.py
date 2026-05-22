@@ -44,6 +44,60 @@ def randomize_target_matrix(targets, block_size, seed=0):
     return sorted_blocks.reshape(arr.shape).astype(arr.dtype, copy=False)
 
 
+def uniform_random_target_matrix(targets, block_size, seed=0):
+    """Return a target matrix whose non-zero entries are i.i.d. samples from
+    Uniform(0, 1), placed at uniformly random positions, with the same total
+    number of non-zero entries as ``targets``.
+
+    The global zero fraction is preserved exactly; unlike
+    :func:`randomize_target_matrix`, the multiset of non-zero values is *not*
+    preserved — values are freshly drawn from U(0, 1) rather than shuffled
+    from the original. Each (row, downstream-block) tile is then sorted in
+    descending order to match the convention used by
+    :func:`connectome_constraint_loss`, making the result a drop-in
+    replacement for the original targets.
+
+    Args:
+        targets: ``(n_rows, n_cols)`` array of non-negative target weights.
+            Used only for shape, dtype, and the count of non-zero entries.
+        block_size: number of columns per downstream block; must divide
+            ``n_cols``.
+        seed: integer seed for the NumPy RNG.
+
+    Returns:
+        ``np.ndarray`` with the same shape and dtype as ``targets``.
+    """
+    arr = np.asarray(targets)
+    if arr.ndim != 2:
+        raise ValueError(f"targets must be 2D, got shape {arr.shape}")
+    n_rows, n_cols = arr.shape
+    if n_cols % block_size != 0:
+        raise ValueError(
+            f"block_size={block_size} does not divide n_cols={n_cols}"
+        )
+
+    rng = np.random.default_rng(seed)
+    n_nonzero = int((arr != 0).sum())
+    n_total = arr.size
+
+    flat = np.zeros(n_total, dtype=arr.dtype)
+    positions = rng.choice(n_total, size=n_nonzero, replace=False)
+    # rng.random() samples [0, 1); re-draw any exact-zero samples so the
+    # resulting positions remain genuinely non-zero (probability of a hit is
+    # ~2**-23 per float32 draw, but we still want a hard guarantee).
+    values = rng.random(n_nonzero).astype(arr.dtype)
+    while np.any(values == 0):
+        zero_idx = np.where(values == 0)[0]
+        values[zero_idx] = rng.random(zero_idx.size).astype(arr.dtype)
+    flat[positions] = values
+    new_mat = flat.reshape(arr.shape)
+
+    n_blocks = n_cols // block_size
+    blocked = new_mat.reshape(n_rows, n_blocks, block_size)
+    sorted_blocks = -np.sort(-blocked, axis=-1)
+    return sorted_blocks.reshape(arr.shape).astype(arr.dtype, copy=False)
+
+
 def connectome_constraint_loss(hh_weights, weight_targets, block_size):
     """L1 loss between magnitude-sorted hh weights and block-sorted targets.
 
