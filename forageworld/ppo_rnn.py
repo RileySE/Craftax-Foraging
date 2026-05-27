@@ -119,6 +119,7 @@ def parse_args():
                         help="Replace the loaded connectome targets with a matrix whose non-zero entries are drawn i.i.d. from Uniform(0, 1) at uniformly random positions, preserving only the count of non-zero entries. Composes with --connectome_init / --connectome_freeze / --connectome_freeze_zeros / --connectome_zero_init; if --connectome_randomize_targets is also set, the uniform replacement is applied after and effectively wins. Seed for the draw is taken from --seed.")
     parser.add_argument('--connectome_zero_init', action=argparse.BooleanOptionalAction, default=False,
                         help="Sanity-check init: set the constrained kernel to all zeros instead of the default initializer. Takes precedence over --connectome_init when both are set. Composes with --connectome_freeze / --connectome_freeze_zeros (which then freeze the zero-initialized kernel).")
+    parser.add_argument('--simple_network', action=argparse.BooleanOptionalAction, default=False, help='Use the simplified network architecture with no nonlinearity downstream of the RNN.')
     return parser.parse_args()
 
 class ScannedRNN(nn.Module):
@@ -217,6 +218,34 @@ class ActorCriticRNN(nn.Module):
 
         return hidden, pi, jnp.squeeze(critic, axis=-1), aux
 
+class SimpleActorCriticRNN(nn.Module):
+    action_dim: Sequence[int]
+    config: Dict
+
+    @nn.compact
+    def __call__(self, hidden, x):
+        obs, dones = x
+        embedding = nn.Dense(
+            self.config["LAYER_SIZE"],
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0),
+        )(obs)
+        embedding = nn.relu(embedding)
+
+        rnn_in = (embedding, dones)
+        hidden, embedding = ScannedRNN()(hidden, rnn_in)
+
+        actor_mean = nn.Dense(
+            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+        )(embedding)
+
+        pi = distrax.Categorical(logits=actor_mean)
+
+        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(embedding)
+
+        aux = nn.Dense(2, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(embedding)
+
+        return hidden, pi, jnp.squeeze(critic, axis=-1), aux
 
 class Transition(NamedTuple):
     done: jnp.ndarray
@@ -389,7 +418,10 @@ def make_train(config):
             else:
                 network = ActorCriticConv(action_space_size, config=config)
         else:
-            network = ActorCriticRNN(action_space_size, config=config)
+            if config['SIMPLE_NETWORK']:
+                network = SimpleActorCriticRNN(action_space_size, config=config)
+            else:
+                network = ActorCriticRNN(action_space_size, config=config)
 
         rng, _rng = jax.random.split(rng)
         # We have to do this here because I can't figure out how to wrap the observation_space function (it's not defined in Gymnax, seemingly)
