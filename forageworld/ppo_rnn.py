@@ -120,7 +120,23 @@ def parse_args():
     parser.add_argument('--connectome_zero_init', action=argparse.BooleanOptionalAction, default=False,
                         help="Sanity-check init: set the constrained kernel to all zeros instead of the default initializer. Takes precedence over --connectome_init when both are set. Composes with --connectome_freeze / --connectome_freeze_zeros (which then freeze the zero-initialized kernel).")
     parser.add_argument('--simple_network', action=argparse.BooleanOptionalAction, default=False, help='Use the simplified network architecture with no nonlinearity downstream of the RNN.')
-    return parser.parse_args()
+    parser.add_argument('--no_connectome', action=argparse.BooleanOptionalAction, default=False,
+                        help="Skip loading the connectome targets from --connectome_filepath and skip the connectome constraint term in the loss. Incompatible with --connectome_init / --connectome_zero_init / --connectome_freeze / --connectome_freeze_zeros / --connectome_randomize_targets / --connectome_uniform_targets, since those all require the loaded targets.")
+    args = parser.parse_args()
+    if args.no_connectome:
+        incompatible = [
+            name for name in (
+                'connectome_init', 'connectome_zero_init',
+                'connectome_freeze', 'connectome_freeze_zeros',
+                'connectome_randomize_targets', 'connectome_uniform_targets',
+            ) if getattr(args, name)
+        ]
+        if incompatible:
+            parser.error(
+                "--no_connectome is incompatible with: "
+                + ", ".join(f"--{n}" for n in incompatible)
+            )
+    return args
 
 class ScannedRNN(nn.Module):
     @functools.partial(
@@ -442,25 +458,31 @@ def make_train(config):
 
         # Load connectome constraint targets
         #weight_targets = load_connectome_constraints(config['CONNECTOME_FILEPATH'], config['LAYER_SIZE'])
-        weight_targets = load_connectome_constraints_cellstats(config['CONNECTOME_FILEPATH'])
-        # Downstream block size = number of units per post-synaptic cell type in the cellstats matrix
-        connectome_block_size = int(np.load(config['CONNECTOME_FILEPATH']).shape[3])
-        if config['CONNECTOME_RANDOMIZE_TARGETS']:
-            weight_targets = randomize_target_matrix(
-                weight_targets, connectome_block_size, seed=config['SEED']
-            )
-        if config['CONNECTOME_UNIFORM_TARGETS']:
-            weight_targets = uniform_random_target_matrix(
-                weight_targets, connectome_block_size, seed=config['SEED']
-            )
-        weight_targets = jnp.asarray(weight_targets)
+        if config['NO_CONNECTOME']:
+            # Placeholders — never read by the loss when NO_CONNECTOME is set
+            # (the Python branch in _loss_fn elides the constraint term at trace time).
+            weight_targets = jnp.zeros((1,))
+            connectome_block_size = 1
+        else:
+            weight_targets = load_connectome_constraints_cellstats(config['CONNECTOME_FILEPATH'])
+            # Downstream block size = number of units per post-synaptic cell type in the cellstats matrix
+            connectome_block_size = int(np.load(config['CONNECTOME_FILEPATH']).shape[3])
+            if config['CONNECTOME_RANDOMIZE_TARGETS']:
+                weight_targets = randomize_target_matrix(
+                    weight_targets, connectome_block_size, seed=config['SEED']
+                )
+            if config['CONNECTOME_UNIFORM_TARGETS']:
+                weight_targets = uniform_random_target_matrix(
+                    weight_targets, connectome_block_size, seed=config['SEED']
+                )
+            weight_targets = jnp.asarray(weight_targets)
 
-        if config['CONNECTOME_ZERO_INIT']:
-            kernel = network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
-            network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = jnp.zeros_like(kernel)
-        elif config['CONNECTOME_INIT']:
-            random_sign_mask = jax.random.randint(rng, weight_targets.shape, 0, 2) * 2 - 1.
-            network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = weight_targets * random_sign_mask
+            if config['CONNECTOME_ZERO_INIT']:
+                kernel = network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
+                network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = jnp.zeros_like(kernel)
+            elif config['CONNECTOME_INIT']:
+                random_sign_mask = jax.random.randint(rng, weight_targets.shape, 0, 2) * 2 - 1.
+                network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = weight_targets * random_sign_mask
 
         if config["ANNEAL_LR"]:
             tx = optax.chain(
@@ -670,31 +692,26 @@ def make_train(config):
                         # Simple L2
                         aux_loss = jnp.square(aux - traj_batch.deltas_to_start).mean()
 
-                        # Compute connectome constraint loss
-                        # Old inline loss (1-unit-per-celltype only) kept for reference:
-                        # hh_weights = params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
-                        # diag_mask = 1. - jnp.diag(jnp.ones(config['LAYER_SIZE']))
-                        # #hh_weights_masked = hh_weights * diag_mask
-                        # hh_weights_masked = hh_weights
-                        # hh_weights_abs = jnp.abs(hh_weights_masked)
-                        # #hh_weights_sorted = jax.lax.sort(hh_weights_abs)
-                        # #hh_weights_flipped = jnp.flip(hh_weights_sorted, axis=-1)
-                        # constraint_loss = jnp.mean(jnp.abs(hh_weights_abs - weight_targets))
-                        # #jax.debug.print('Weights: {x}', x=hh_weights_abs)
-                        # #jax.debug.print('Targets: {x}', x=weight_targets)
-                        # #jax.debug.print('Loss: {x}', x=constraint_loss)
-                        hh_weights = params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
-                        constraint_loss = connectome_constraint_loss(
-                            hh_weights, weight_targets, connectome_block_size
-                        )
+                        # Compute connectome constraint loss.
+                        # config['NO_CONNECTOME'] is a Python bool, so this branch
+                        # resolves at JIT trace time — the unused side is never
+                        # emitted into the compiled graph (no inner-loop cost).
+                        if config['NO_CONNECTOME']:
+                            constraint_loss = jnp.zeros(())
+                        else:
+                            hh_weights = params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
+                            constraint_loss = connectome_constraint_loss(
+                                hh_weights, weight_targets, connectome_block_size
+                            )
 
                         total_loss = (
                             loss_actor
                             + config["VF_COEF"] * value_loss
                             - config["ENT_COEF"] * entropy
                             + config["AUX_COEF"] * aux_loss
-                            + config["CONNECT_COEF"] * constraint_loss
                         )
+                        if not config['NO_CONNECTOME']:
+                            total_loss = total_loss + config["CONNECT_COEF"] * constraint_loss
 
                         return total_loss, (value_loss, loss_actor, entropy, aux_loss, constraint_loss)
 
