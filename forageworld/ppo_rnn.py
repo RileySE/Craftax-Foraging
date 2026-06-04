@@ -120,6 +120,8 @@ def parse_args():
     parser.add_argument('--connectome_zero_init', action=argparse.BooleanOptionalAction, default=False,
                         help="Sanity-check init: set the constrained kernel to all zeros instead of the default initializer. Takes precedence over --connectome_init when both are set. Composes with --connectome_freeze / --connectome_freeze_zeros (which then freeze the zero-initialized kernel).")
     parser.add_argument('--simple_network', action=argparse.BooleanOptionalAction, default=False, help='Use the simplified network architecture with no nonlinearity downstream of the RNN.')
+    parser.add_argument('--simpler_network', action=argparse.BooleanOptionalAction, default=False,
+                        help='Use an even simpler network architecture which also removes the FC layer upstream of the RNN.')
     parser.add_argument('--no_connectome', action=argparse.BooleanOptionalAction, default=False,
                         help="Skip loading the connectome targets from --connectome_filepath and skip the connectome constraint term in the loss. Incompatible with --connectome_init / --connectome_zero_init / --connectome_freeze / --connectome_freeze_zeros / --connectome_randomize_targets / --connectome_uniform_targets, since those all require the loaded targets.")
     args = parser.parse_args()
@@ -139,6 +141,13 @@ def parse_args():
     return args
 
 class ScannedRNN(nn.Module):
+    # Hidden size of the recurrent cell. When None it falls back to the input
+    # dimensionality (valid only when the RNN is fed a preceding FC layer whose
+    # width equals the hidden size). For --simpler_network the RNN takes the raw
+    # observation directly, so the hidden size must be set explicitly rather than
+    # inheriting the (much larger) input dimensionality.
+    hidden_size: int = None
+
     @functools.partial(
         nn.scan,
         variable_broadcast="params",
@@ -151,12 +160,13 @@ class ScannedRNN(nn.Module):
         """Applies the module."""
         rnn_state = carry
         ins, resets = x
+        hidden_size = self.hidden_size if self.hidden_size is not None else ins.shape[1]
         rnn_state = jnp.where(
             resets[:, np.newaxis],
-            self.initialize_carry(ins.shape[0], ins.shape[1]),
+            self.initialize_carry(ins.shape[0], hidden_size),
             rnn_state,
         )
-        new_rnn_state, y = nn.SimpleCell(features=ins.shape[1])(rnn_state, ins)
+        new_rnn_state, y = nn.SimpleCell(features=hidden_size)(rnn_state, ins)
         return new_rnn_state, y
 
     @staticmethod
@@ -180,7 +190,7 @@ class ActorCriticRNN(nn.Module):
         embedding = nn.relu(embedding)
 
         rnn_in = (embedding, dones)
-        hidden, embedding = ScannedRNN()(hidden, rnn_in)
+        hidden, embedding = ScannedRNN(hidden_size=self.config["LAYER_SIZE"])(hidden, rnn_in)
 
         actor_mean = nn.Dense(
             self.config["LAYER_SIZE"],
@@ -249,7 +259,30 @@ class SimpleActorCriticRNN(nn.Module):
         embedding = nn.relu(embedding)
 
         rnn_in = (embedding, dones)
-        hidden, embedding = ScannedRNN()(hidden, rnn_in)
+        hidden, embedding = ScannedRNN(hidden_size=self.config["LAYER_SIZE"])(hidden, rnn_in)
+
+        actor_mean = nn.Dense(
+            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+        )(embedding)
+
+        pi = distrax.Categorical(logits=actor_mean)
+
+        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(embedding)
+
+        aux = nn.Dense(2, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(embedding)
+
+        return hidden, pi, jnp.squeeze(critic, axis=-1), aux
+
+class SimplerActorCriticRNN(nn.Module):
+    action_dim: Sequence[int]
+    config: Dict
+
+    @nn.compact
+    def __call__(self, hidden, x):
+        obs, dones = x
+
+        rnn_in = (obs, dones)
+        hidden, embedding = ScannedRNN(hidden_size=self.config["LAYER_SIZE"])(hidden, rnn_in)
 
         actor_mean = nn.Dense(
             self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
@@ -436,6 +469,8 @@ def make_train(config):
         else:
             if config['SIMPLE_NETWORK']:
                 network = SimpleActorCriticRNN(action_space_size, config=config)
+            elif config['SIMPLER_NETWORK']:
+                network = SimplerActorCriticRNN(action_space_size, config=config)
             else:
                 network = ActorCriticRNN(action_space_size, config=config)
 
