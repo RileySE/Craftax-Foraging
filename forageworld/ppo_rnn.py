@@ -1,7 +1,29 @@
 import argparse
 import os
-import random
 import sys
+
+# --gpu_id must take effect before JAX initializes its backend: JAX
+# preallocates memory on EVERY visible GPU at backend init (not just the
+# device passed to jax.jit), and forageworld.craftax.constants unpickles the
+# texture cache onto the default device (GPU 0) at import time. Masking
+# CUDA_VISIBLE_DEVICES here, before the jax/forageworld imports below, is the
+# only way to keep the process off the other GPUs entirely. If the caller
+# already set CUDA_VISIBLE_DEVICES it is respected and --gpu_id indexes
+# within the visible devices, as before. The sentinel env var keeps the
+# device index stable when this module is re-imported in the same process
+# (the GPU mask cannot change once the JAX backend exists).
+_gpu_id_parser = argparse.ArgumentParser(add_help=False)
+_gpu_id_parser.add_argument("--gpu_id", type=int, default=0)
+_gpu_id = _gpu_id_parser.parse_known_args()[0].gpu_id
+if "CUDA_VISIBLE_DEVICES" not in os.environ:
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(_gpu_id)
+    os.environ["_PPO_RNN_MASKED_CUDA_DEVICES"] = os.environ["CUDA_VISIBLE_DEVICES"]
+if os.environ.get("_PPO_RNN_MASKED_CUDA_DEVICES") == os.environ["CUDA_VISIBLE_DEVICES"]:
+    JAX_DEVICE_INDEX = 0  # the masked GPU is the only visible device
+else:
+    JAX_DEVICE_INDEX = _gpu_id
+
+import random
 from math import ceil, sqrt
 from functools import partial
 import jax
@@ -122,9 +144,31 @@ def parse_args():
     parser.add_argument('--simple_network', action=argparse.BooleanOptionalAction, default=False, help='Use the simplified network architecture with no nonlinearity downstream of the RNN.')
     parser.add_argument('--simpler_network', action=argparse.BooleanOptionalAction, default=False,
                         help='Use an even simpler network architecture which also removes the FC layer upstream of the RNN.')
+    parser.add_argument('--truncate_backprop', type=int, default=0,
+                        help="Truncate backprop through time in the RNN to at most this many timesteps, by stopping "
+                             "the hidden-state gradient at every K-step boundary within the rollout window (chunked "
+                             "truncated BPTT: a step's gradient reaches back to the most recent boundary, i.e. "
+                             "between 1 and K steps). Forward pass and rollouts are unaffected. 0 (default) means "
+                             "full BPTT, with no added cost when disabled.")
+    parser.add_argument('--grad_viz_steps', type=int, default=1000,
+                        help="Horizon (timesteps) of the periodic RNN gradient-propagation probe. On the same "
+                             "interval as the other visualization logging (every --updates_per_viz updates), the "
+                             "policy is rolled forward this many steps and the final step's value estimate is "
+                             "backpropagated through the RNN; plots of mean |d value / d obs| versus timesteps into "
+                             "the past, plus example per-env traces, are written to "
+                             "output_path/<run_id>/rnn_grad_mag_<step>.png (raw data in the matching .npz). The "
+                             "probe always uses full BPTT regardless of --truncate_backprop, so it shows the "
+                             "network's intrinsic gradient propagation. 0 disables the probe.")
+    parser.add_argument('--grad_viz_envs', type=int, default=8,
+                        help="Number of environments traced by the RNN gradient probe. Probe memory scales linearly "
+                             "with this (it stores grad_viz_steps x grad_viz_envs observations plus their gradient).")
     parser.add_argument('--no_connectome', action=argparse.BooleanOptionalAction, default=False,
                         help="Skip loading the connectome targets from --connectome_filepath and skip the connectome constraint term in the loss. Incompatible with --connectome_init / --connectome_zero_init / --connectome_freeze / --connectome_freeze_zeros / --connectome_randomize_targets / --connectome_uniform_targets, since those all require the loaded targets.")
     args = parser.parse_args()
+    if args.truncate_backprop < 0:
+        parser.error("--truncate_backprop must be >= 0 (0 disables truncation)")
+    if args.grad_viz_steps > 0 and args.grad_viz_envs < 1:
+        parser.error("--grad_viz_envs must be >= 1 when the gradient probe is enabled")
     if args.no_connectome:
         incompatible = [
             name for name in (
@@ -147,6 +191,19 @@ class ScannedRNN(nn.Module):
     # observation directly, so the hidden size must be set explicitly rather than
     # inheriting the (much larger) input dimensionality.
     hidden_size: int = None
+    # When > 0, truncate backprop through time: the gradient on the hidden-state
+    # carry is stopped at every `truncate_period`-step boundary (t = 0, K, 2K, ...),
+    # so a loss at step t backpropagates through at most `truncate_period`
+    # timesteps (back to the most recent boundary). The forward pass is unchanged.
+    # 0 disables truncation and traces to exactly the original full-BPTT graph.
+    truncate_period: int = 0
+
+    def __call__(self, carry, x):
+        if self.truncate_period > 0:
+            ins, resets = x
+            stop_grad = (jnp.arange(resets.shape[0]) % self.truncate_period) == 0
+            x = (ins, resets, stop_grad)
+        return self._scanned_step(carry, x)
 
     @functools.partial(
         nn.scan,
@@ -156,10 +213,19 @@ class ScannedRNN(nn.Module):
         split_rngs={"params": False},
     )
     @nn.compact
-    def __call__(self, carry, x):
+    def _scanned_step(self, carry, x):
         """Applies the module."""
         rnn_state = carry
-        ins, resets = x
+        if self.truncate_period > 0:
+            ins, resets, stop_grad = x
+            # Identity in the forward pass; on boundary steps it zeroes the
+            # gradient flowing from this step's carry back into the previous
+            # chunk, cutting the BPTT chain there.
+            rnn_state = jnp.where(
+                stop_grad, jax.lax.stop_gradient(rnn_state), rnn_state
+            )
+        else:
+            ins, resets = x
         hidden_size = self.hidden_size if self.hidden_size is not None else ins.shape[1]
         rnn_state = jnp.where(
             resets[:, np.newaxis],
@@ -190,7 +256,10 @@ class ActorCriticRNN(nn.Module):
         embedding = nn.relu(embedding)
 
         rnn_in = (embedding, dones)
-        hidden, embedding = ScannedRNN(hidden_size=self.config["LAYER_SIZE"])(hidden, rnn_in)
+        hidden, embedding = ScannedRNN(
+            hidden_size=self.config["LAYER_SIZE"],
+            truncate_period=self.config.get("TRUNCATE_BACKPROP", 0),
+        )(hidden, rnn_in)
 
         actor_mean = nn.Dense(
             self.config["LAYER_SIZE"],
@@ -259,7 +328,10 @@ class SimpleActorCriticRNN(nn.Module):
         embedding = nn.relu(embedding)
 
         rnn_in = (embedding, dones)
-        hidden, embedding = ScannedRNN(hidden_size=self.config["LAYER_SIZE"])(hidden, rnn_in)
+        hidden, embedding = ScannedRNN(
+            hidden_size=self.config["LAYER_SIZE"],
+            truncate_period=self.config.get("TRUNCATE_BACKPROP", 0),
+        )(hidden, rnn_in)
 
         actor_mean = nn.Dense(
             self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
@@ -282,7 +354,10 @@ class SimplerActorCriticRNN(nn.Module):
         obs, dones = x
 
         rnn_in = (obs, dones)
-        hidden, embedding = ScannedRNN(hidden_size=self.config["LAYER_SIZE"])(hidden, rnn_in)
+        hidden, embedding = ScannedRNN(
+            hidden_size=self.config["LAYER_SIZE"],
+            truncate_period=self.config.get("TRUNCATE_BACKPROP", 0),
+        )(hidden, rnn_in)
 
         actor_mean = nn.Dense(
             self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
@@ -473,6 +548,16 @@ def make_train(config):
                 network = SimplerActorCriticRNN(action_space_size, config=config)
             else:
                 network = ActorCriticRNN(action_space_size, config=config)
+
+        # Second instance of the same network class for the periodic gradient
+        # probe: identical param tree but full BPTT, so the probe measures the
+        # network's intrinsic gradient decay even when training truncates it.
+        do_grad_viz = (not config['NO_MEMORY']) and config['GRAD_VIZ_STEPS'] > 0
+        if do_grad_viz:
+            grad_viz_network = type(network)(
+                action_space_size,
+                config={'LAYER_SIZE': config['LAYER_SIZE'], 'TRUNCATE_BACKPROP': 0},
+            )
 
         rng, _rng = jax.random.split(rng)
         # We have to do this here because I can't figure out how to wrap the observation_space function (it's not defined in Gymnax, seemingly)
@@ -1003,6 +1088,137 @@ def make_train(config):
 
             return runner_state, None
 
+        # --- RNN gradient-propagation probe (--grad_viz_steps) ----------------
+        # Rolls the current policy forward GRAD_VIZ_STEPS steps from the live
+        # training state (purely functional: training resumes from the same
+        # env/obs state, only the rng is split), then replays the first
+        # GRAD_VIZ_ENVS envs through the network with full BPTT and takes the
+        # gradient of the final step's value estimate w.r.t. every past
+        # observation. One backward pass yields the entire magnitude-vs-lag
+        # curve; only the small (steps, envs) magnitude matrix leaves the
+        # device, so memory is bounded by the sliced obs sequence.
+
+        def _write_grad_viz(mag, within_episode, update_step):
+            # Flip time-major arrays so index k means "k timesteps into the
+            # past" relative to the probe's final step.
+            mag = np.asarray(mag)[::-1]
+            within_episode = np.asarray(within_episode)[::-1].astype(bool)
+            run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
+            os.makedirs(run_out_path, exist_ok=True)
+
+            lags = np.arange(mag.shape[0])
+            mean_all = mag.mean(axis=1)
+            n_valid = within_episode.sum(axis=1)
+            mean_within = np.where(
+                n_valid > 0,
+                (mag * within_episode).sum(axis=1) / np.maximum(n_valid, 1),
+                np.nan,
+            )
+
+            # plt.Figure (not plt.figure) keeps this off pyplot's global
+            # figure registry, which is not thread-safe under debug.callback.
+            fig = plt.Figure(figsize=(14, 5))
+            axes = fig.subplots(1, 2, sharey=True)
+            axes[0].semilogy(lags, mean_all, label='mean over probe envs')
+            axes[0].semilogy(lags, mean_within, label='mean, within-episode only')
+            axes[0].set_xlabel('timesteps into the past')
+            axes[0].set_ylabel('|d value[T] / d obs[T - lag]| (L2)')
+            axes[0].set_title(
+                'RNN gradient magnitude vs BPTT depth (update {})'.format(int(update_step))
+            )
+            axes[0].legend()
+            axes[0].grid(alpha=0.3)
+            for i in range(min(4, mag.shape[1])):
+                axes[1].semilogy(lags, mag[:, i], alpha=0.8, label='env {}'.format(i))
+            axes[1].set_xlabel('timesteps into the past')
+            axes[1].set_title('example single-env traces')
+            axes[1].legend()
+            axes[1].grid(alpha=0.3)
+            fig.tight_layout()
+            out_filename = os.path.join(
+                run_out_path, 'rnn_grad_mag_{}.png'.format(int(update_step))
+            )
+            fig.savefig(out_filename, dpi=120)
+            np.savez(
+                os.path.join(run_out_path, 'rnn_grad_mag_{}.npz'.format(int(update_step))),
+                grad_mag=mag,
+                within_episode=within_episode,
+            )
+            if config['USE_WANDB']:
+                wandb.log(
+                    {
+                        'rnn_grad_viz': wandb.Image(
+                            out_filename, caption='update {}'.format(int(update_step))
+                        )
+                    }
+                )
+            print('Writing RNN gradient viz', out_filename)
+
+        def _grad_viz(runner_state):
+            (
+                train_state,
+                env_state,
+                last_obs,
+                last_done,
+                hstate,
+                rng,
+                update_step,
+            ) = runner_state
+            rng, probe_rng = jax.random.split(rng)
+            n_probe = min(config['GRAD_VIZ_ENVS'], config['NUM_ENVS'])
+
+            def _probe_step(carry, unused):
+                env_state, obs, done, h, p_rng = carry
+                p_rng, _rng = jax.random.split(p_rng)
+                ac_in = (obs[np.newaxis, :], done[np.newaxis, :])
+                h, pi, _, _ = network.apply(train_state.params, h, ac_in)
+                action = pi.sample(seed=_rng).squeeze(0)
+                p_rng, _rng = jax.random.split(p_rng)
+                new_obs, env_state, _, new_done, _ = env.step(
+                    _rng, env_state, action, env_params
+                )
+                # Store inputs for only the probed envs to keep memory bounded.
+                return (env_state, new_obs, new_done, h, p_rng), (
+                    obs[:n_probe],
+                    done[:n_probe],
+                )
+
+            _, (obs_seq, done_seq) = jax.lax.scan(
+                _probe_step,
+                (env_state, last_obs, last_done, hstate, probe_rng),
+                None,
+                config['GRAD_VIZ_STEPS'],
+            )
+
+            h0 = hstate[:n_probe]
+
+            def _probe_loss(obs_in):
+                _, _, value, _ = grad_viz_network.apply(
+                    train_state.params, h0, (obs_in, done_seq)
+                )
+                return value[-1].sum()
+
+            grads = jax.grad(_probe_loss)(obs_seq)
+            mag = jnp.sqrt(jnp.sum(jnp.square(grads), axis=-1))  # (steps, envs)
+
+            # Mask of (s, env) pairs with no episode reset strictly after s.
+            # Resets zero the gradient exactly, so the within-episode mean
+            # shows pure BPTT decay undiluted by episode boundaries.
+            d = done_seq.astype(jnp.float32)
+            resets_after = jnp.cumsum(d[::-1], axis=0)[::-1] - d
+            within_episode = resets_after == 0
+            jax.debug.callback(_write_grad_viz, mag, within_episode, update_step)
+
+            return (
+                train_state,
+                env_state,
+                last_obs,
+                last_done,
+                hstate,
+                rng,
+                update_step,
+            )
+
         # Func to interleave update steps and plotting
         def _update_plot(runner_state, unused):
             # First, update
@@ -1036,6 +1252,11 @@ def make_train(config):
 
 
             jax.debug.callback(save_weights_callback, runner_state[0].params, runner_state[-1], ordered=True)
+
+            # RNN gradient-propagation probe, on the same cadence as the other
+            # visualization logging. Static Python flag: no cost when disabled.
+            if do_grad_viz:
+                runner_state = _grad_viz(runner_state)
 
             # Can we save the environment state and resume training later?
             #runner_state_copy = runner_state
@@ -1109,7 +1330,7 @@ def run_ppo(config):
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_REPEATS"])
 
-    train_jit = jax.jit(make_train(config), device=jax.devices()[config['GPU_ID']])
+    train_jit = jax.jit(make_train(config), device=jax.devices()[JAX_DEVICE_INDEX])
     train_vmap = jax.vmap(train_jit)
 
     t0 = time.time()
