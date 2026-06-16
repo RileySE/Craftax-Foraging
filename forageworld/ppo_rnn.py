@@ -1221,10 +1221,6 @@ def make_train(config):
 
         # Func to interleave update steps and plotting
         def _update_plot(runner_state, unused):
-            # First, update
-            runner_state, metric = jax.lax.scan(
-                _update_step, runner_state, None, config["UPDATES_PER_VIZ"]
-            )
 
             # Log model weights
             def save_weights_callback(weights, iter):
@@ -1261,9 +1257,14 @@ def make_train(config):
             # Can we save the environment state and resume training later?
             #runner_state_copy = runner_state
 
-            # Then do iterations of logging
+            # First, log things (so we have logs for the untrained network)
             runner_state, empty = jax.lax.scan(
                 partial(_logging_step, logging_threads = config["LOGGING_THREADS_PER_VIZ"]), runner_state, None, config['LOGGING_STEPS_PER_VIZ']
+            )
+
+            # Then update
+            runner_state, metric = jax.lax.scan(
+                _update_step, runner_state, None, config["UPDATES_PER_VIZ"]
             )
 
             return runner_state, metric
@@ -1285,6 +1286,14 @@ def make_train(config):
         runner_state, metric = jax.lax.scan(
             _update_plot, runner_state, None, config["NUM_UPDATES"]
         )
+
+        # Final logging step so the last training iterations are captured in
+        # the logs. _update_plot logs before each update, so without this the
+        # updates from the final iteration would never be logged.
+        runner_state, empty = jax.lax.scan(
+            partial(_logging_step, logging_threads = config["LOGGING_THREADS_PER_VIZ"]), runner_state, None, config['LOGGING_STEPS_PER_VIZ']
+        )
+
         # Do validation rollouts with a fixed random seed
         # Generate rng from validation-specific random seed
 
