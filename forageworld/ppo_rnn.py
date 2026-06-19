@@ -44,8 +44,8 @@ from orbax.checkpoint import (
 )
 
 import wandb
-from flax.linen.initializers import constant, orthogonal
-from typing import Sequence, NamedTuple, Dict
+from flax.linen.initializers import constant, orthogonal, normal, uniform
+from typing import Sequence, NamedTuple, Dict, Callable
 from flax.training.train_state import TrainState
 import distrax
 import functools
@@ -164,6 +164,7 @@ def parse_args():
                              "with this (it stores grad_viz_steps x grad_viz_envs observations plus their gradient).")
     parser.add_argument('--no_connectome', action=argparse.BooleanOptionalAction, default=False,
                         help="Skip loading the connectome targets from --connectome_filepath and skip the connectome constraint term in the loss. Incompatible with --connectome_init / --connectome_zero_init / --connectome_freeze / --connectome_freeze_zeros / --connectome_randomize_targets / --connectome_uniform_targets, since those all require the loaded targets.")
+    parser.add_argument("--rnn_hidden_initializer", type=str, default='orthogonal', help='Select an initializer for the hidden-hidden weights of the RNN. Valid options are "orthogonal" (default), "normal", and "uniform"')
     args = parser.parse_args()
     if args.truncate_backprop < 0:
         parser.error("--truncate_backprop must be >= 0 (0 disables truncation)")
@@ -184,6 +185,31 @@ def parse_args():
             )
     return args
 
+def get_rnn_hidden_initializer(name):
+    """Map a --rnn_hidden_initializer string to a flax initializer for the RNN's
+    hidden-to-hidden (recurrent) kernel.
+
+    This feeds the normal flax/jax initialization route (SimpleCell's
+    recurrent_kernel_init). The special manual initializations
+    (--connectome_init / --connectome_zero_init) are applied after
+    network.init and overwrite the recurrent kernel, so they take precedence
+    over whatever this picks. 'orthogonal' reproduces flax's default, so the
+    default option leaves initialization unchanged.
+    """
+    initializers = {
+        'orthogonal': orthogonal(),
+        'normal': normal(),
+        'uniform': uniform(),
+    }
+    if name not in initializers:
+        raise ValueError(
+            "Unknown --rnn_hidden_initializer '{}'. Valid options: {}".format(
+                name, ', '.join(sorted(initializers))
+            )
+        )
+    return initializers[name]
+
+
 class ScannedRNN(nn.Module):
     # Hidden size of the recurrent cell. When None it falls back to the input
     # dimensionality (valid only when the RNN is fed a preceding FC layer whose
@@ -197,6 +223,10 @@ class ScannedRNN(nn.Module):
     # timesteps (back to the most recent boundary). The forward pass is unchanged.
     # 0 disables truncation and traces to exactly the original full-BPTT graph.
     truncate_period: int = 0
+    # Initializer for the hidden-to-hidden (recurrent) kernel. Defaults to
+    # orthogonal(), matching flax's SimpleCell default, so the default leaves
+    # initialization unchanged. Set via --rnn_hidden_initializer.
+    recurrent_kernel_init: Callable = orthogonal()
 
     def __call__(self, carry, x):
         if self.truncate_period > 0:
@@ -232,7 +262,10 @@ class ScannedRNN(nn.Module):
             self.initialize_carry(ins.shape[0], hidden_size),
             rnn_state,
         )
-        new_rnn_state, y = nn.SimpleCell(features=hidden_size)(rnn_state, ins)
+        new_rnn_state, y = nn.SimpleCell(
+            features=hidden_size,
+            recurrent_kernel_init=self.recurrent_kernel_init,
+        )(rnn_state, ins)
         return new_rnn_state, y
 
     @staticmethod
@@ -259,6 +292,9 @@ class ActorCriticRNN(nn.Module):
         hidden, embedding = ScannedRNN(
             hidden_size=self.config["LAYER_SIZE"],
             truncate_period=self.config.get("TRUNCATE_BACKPROP", 0),
+            recurrent_kernel_init=get_rnn_hidden_initializer(
+                self.config.get("RNN_HIDDEN_INITIALIZER", "orthogonal")
+            ),
         )(hidden, rnn_in)
 
         actor_mean = nn.Dense(
@@ -331,6 +367,9 @@ class SimpleActorCriticRNN(nn.Module):
         hidden, embedding = ScannedRNN(
             hidden_size=self.config["LAYER_SIZE"],
             truncate_period=self.config.get("TRUNCATE_BACKPROP", 0),
+            recurrent_kernel_init=get_rnn_hidden_initializer(
+                self.config.get("RNN_HIDDEN_INITIALIZER", "orthogonal")
+            ),
         )(hidden, rnn_in)
 
         actor_mean = nn.Dense(
@@ -357,6 +396,9 @@ class SimplerActorCriticRNN(nn.Module):
         hidden, embedding = ScannedRNN(
             hidden_size=self.config["LAYER_SIZE"],
             truncate_period=self.config.get("TRUNCATE_BACKPROP", 0),
+            recurrent_kernel_init=get_rnn_hidden_initializer(
+                self.config.get("RNN_HIDDEN_INITIALIZER", "orthogonal")
+            ),
         )(hidden, rnn_in)
 
         actor_mean = nn.Dense(
