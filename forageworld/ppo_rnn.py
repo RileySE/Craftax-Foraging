@@ -1,4 +1,5 @@
 import argparse
+import gzip
 import os
 import sys
 
@@ -118,6 +119,8 @@ def parse_args():
     parser.add_argument("--output_path", type=str, default='./output/', help="Output path")
     parser.add_argument("--frames_per_file", type=int, default=512, help="Frames per file")
     parser.add_argument('--no_videos', action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument('--no_hidden_state_csv', action=argparse.BooleanOptionalAction, default=False,
+                        help='Disable writing the per-step hidden-state/scalar CSV logs during visualization runs. Logging is on by default.')
     parser.add_argument('--full_action_space', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--reward_function", type=str, default='foraging', help="Reward function")
     parser.add_argument("--validation_seed", type=int, default=777, help="Validation seed")
@@ -1082,29 +1085,31 @@ def make_train(config):
                 for key in header_field_names:
                     scalar_file_header += ',' + key
 
-                # We save to temp files and then append to the target file since numpy apparently cannot write files in append mode for some reason
+                # np.savetxt writes straight to an open append-mode handle, so the
+                # old temp-file round-trip (write temp -> read back -> append) is
+                # unnecessary. Each logging step appends one new chunk; for the
+                # gzipped hstates that chunk is a new gzip member, and concatenated
+                # members decompress transparently (gzip/zcat/pandas/np.loadtxt).
                 for i in range(logging_threads):
-                    out_filename_hstates = os.path.join(run_out_path, 'hstates_{}_{}.csv'.format(increment, i))
-                    temp_filename = os.path.join(run_out_path, 'temp.csv')
-                    np.savetxt(temp_filename,
-                               hstate[:, i, :], delimiter=',')
-                    temp_file = open(temp_filename, 'r')
-                    out_file_hstates = open(out_filename_hstates, 'a+')
-                    out_file_hstates.write(temp_file.read())
-                    out_file_hstates.close()
-                    temp_file.close()
-                    # Then do the same thing for the scalars
+                    # The hstate files are large/expensive; skip them when
+                    # --no_hidden_state_csv is passed. The scalar files below
+                    # are small/cheap and are always written.
+                    if not config['NO_HIDDEN_STATE_CSV']:
+                        out_filename_hstates = os.path.join(run_out_path, 'hstates_{}_{}.csv.gz'.format(increment, i))
+                        # '%.6e' preserves ~full float32 precision while roughly
+                        # halving the per-value text vs np.savetxt's default
+                        # '%.18e', cutting both formatting cost and file size.
+                        # compresslevel=1 keeps gzip CPU low; the float text still
+                        # compresses well.
+                        with gzip.open(out_filename_hstates, 'at', compresslevel=1) as out_file_hstates:
+                            np.savetxt(out_file_hstates, hstate[:, i, :], delimiter=',', fmt='%.6e')
+                        print('Writing log file', out_filename_hstates)
+                    # Then do the same thing for the scalars (plaintext, uncompressed)
                     out_filename_scalars = os.path.join(run_out_path, 'scalars_{}_{}.csv'.format(increment, i))
-                    np.savetxt(temp_filename,
-                               scalars[:, i, :], delimiter=',', fmt='%f',
-                               header=scalar_file_header
-                               )
-                    temp_file = open(temp_filename, 'r')
-                    out_file_scalars = open(out_filename_scalars, 'a+')
-                    out_file_scalars.write(temp_file.read())
-                    temp_file.close()
-                    out_file_scalars.close()
-                    print('Writing log file', out_filename_hstates)
+                    with open(out_filename_scalars, 'a') as out_file_scalars:
+                        np.savetxt(out_file_scalars, scalars[:, i, :], delimiter=',', fmt='%f',
+                                   header=scalar_file_header)
+                    print('Writing log file', out_filename_scalars)
 
 
             # Add the specified field to the logging array
@@ -1126,7 +1131,20 @@ def make_train(config):
             for field_to_log in fields_to_log:
                 log_array = add_field_to_log_array(traj_batch.info, log_array, field_to_log)
 
-            jax.debug.callback(write_rnn_hstate, hidden_states, log_array, update_step)
+            # Only the first `logging_threads` env columns are ever written, so
+            # slice on-device before the callback. The hidden-state array is
+            # (STEPS_PER_VIZ, NUM_ENVS, LAYER_SIZE) ~GB-scale; shipping all
+            # NUM_ENVS columns to the host just to write one is the dominant
+            # logging cost. When hstate logging is disabled we skip that transfer
+            # entirely (None is an empty pytree, so nothing is moved to host).
+            scalars_to_log = log_array[:, :logging_threads, :]
+            if config['NO_HIDDEN_STATE_CSV']:
+                hidden_states_to_log = None
+            else:
+                hidden_states_to_log = hidden_states[:, :logging_threads, :]
+            # write_rnn_hstate always logs the (cheap) scalar CSVs and only
+            # writes the (large) hstate CSVs when --no_hidden_state_csv is unset.
+            jax.debug.callback(write_rnn_hstate, hidden_states_to_log, scalars_to_log, update_step)
 
             return runner_state, None
 
@@ -1269,10 +1287,12 @@ def make_train(config):
                 weights_flat = jax.tree.flatten(weights)
                 run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
                 os.makedirs(run_out_path, exist_ok=True)
-                weight_filename = os.path.join(run_out_path, 'weights_fromto_{}.csv'.format(iter))
+                # Written gzip-compressed to save disk space; the formatted weight
+                # text compresses well and compresslevel=1 keeps the CPU overhead low.
+                weight_filename = os.path.join(run_out_path, 'weights_fromto_{}.csv.gz'.format(iter))
                 weights_params = weights['params']
 
-                with open(weight_filename, 'w') as weight_file:
+                with gzip.open(weight_filename, 'wt', compresslevel=1) as weight_file:
                     def save_weight_dict(curr_value, key_string=''):
                         if type(curr_value) != dict:
                             #why was this getting transposed? We want from-to ordering, not to-from
