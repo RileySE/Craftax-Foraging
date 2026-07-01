@@ -117,7 +117,13 @@ def connectome_constraint_loss(hh_weights, weight_targets, block_size):
     """
     n_hidden = hh_weights.shape[-1]
     n_blocks = n_hidden // block_size
+    # Mask self weights from the loss
+    #TODO implement toggle
+    if False:
+        self_mask = 1. - jnp.eye(n_hidden, dtype=hh_weights.dtype)
+        hh_weights_masked = hh_weights * self_mask
     abs_w = jnp.abs(hh_weights)
+
     blocked = abs_w.reshape(*abs_w.shape[:-1], n_blocks, block_size)
     sorted_desc = -jnp.sort(-blocked, axis=-1)
     sorted_flat = sorted_desc.reshape(abs_w.shape)
