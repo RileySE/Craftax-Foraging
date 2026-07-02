@@ -1,6 +1,7 @@
 import argparse
 import gzip
 import os
+import pickle
 import sys
 
 # --gpu_id must take effect before JAX initializes its backend: JAX
@@ -73,7 +74,7 @@ from forageworld.connectome_utils import (
 )
 
 
-def parse_args():
+def build_parser():
     parser = argparse.ArgumentParser(description="Run sparsity PPO.")
     parser.add_argument("--prune_step", type=int, default=20000, help="Step to prune")
     parser.add_argument('--featureless_world', action=argparse.BooleanOptionalAction, default=False)
@@ -168,9 +169,38 @@ def parse_args():
     parser.add_argument('--no_connectome', action=argparse.BooleanOptionalAction, default=False,
                         help="Skip loading the connectome targets from --connectome_filepath and skip the connectome constraint term in the loss. Incompatible with --connectome_init / --connectome_zero_init / --connectome_freeze / --connectome_freeze_zeros / --connectome_randomize_targets / --connectome_uniform_targets, since those all require the loaded targets.")
     parser.add_argument("--rnn_hidden_initializer", type=str, default='orthogonal', help='Select an initializer for the hidden-hidden weights of the RNN. Valid options are "orthogonal" (default), "normal", and "uniform"')
+    parser.add_argument('--checkpoint_interval', type=int, default=1,
+                        help="Save a full training checkpoint (network weights, optimizer state, environment states, "
+                             "RNG, and progress counters) every this many outer visualization iterations — the same "
+                             "cadence as the other periodic logging, i.e. every checkpoint_interval * updates_per_viz "
+                             "updates. Checkpoints are written gzip-compressed to "
+                             "output_path/<run_id>/checkpoint_<step>.pkl.gz. 0 disables checkpointing.")
+    parser.add_argument('--checkpoint_keep', type=int, default=1,
+                        help="Number of most recent checkpoints to retain; after each successful save, older "
+                             "checkpoint files in the run's output directory are deleted. Interruption recovery only "
+                             "ever needs the latest checkpoint, so the default of 1 keeps a run's checkpoint "
+                             "footprint constant (~the size of one compressed checkpoint) regardless of run length. "
+                             "0 keeps all checkpoints (e.g. to later branch runs from intermediate states).")
+    parser.add_argument('--resume_from', type=str, default=None,
+                        help="Path to a checkpoint_<step>.pkl.gz written by a previous run. The full training state "
+                             "(all repeats) is restored and training resumes exactly where the checkpoint left off, "
+                             "proceeding identically to an uninterrupted run. Configuration comes from the "
+                             "checkpoint, except that any flags explicitly passed on this command line override the "
+                             "stored values (e.g. to change a hyperparameter mid-run); overrides that change the "
+                             "shape of the stored state (network size, env count, map size, num_repeats, ...) fail "
+                             "at restore time.")
+    return parser
+
+
+def parse_args():
+    parser = build_parser()
     args = parser.parse_args()
     if args.truncate_backprop < 0:
         parser.error("--truncate_backprop must be >= 0 (0 disables truncation)")
+    if args.checkpoint_interval < 0:
+        parser.error("--checkpoint_interval must be >= 0 (0 disables checkpointing)")
+    if args.checkpoint_keep < 0:
+        parser.error("--checkpoint_keep must be >= 0 (0 keeps all checkpoints)")
     if args.grad_viz_steps > 0 and args.grad_viz_envs < 1:
         parser.error("--grad_viz_envs must be >= 1 when the gradient probe is enabled")
     if args.no_connectome:
@@ -187,6 +217,19 @@ def parse_args():
                 + ", ".join(f"--{n}" for n in incompatible)
             )
     return args
+
+
+def parse_explicit_args():
+    """Return a dict of only the arguments explicitly present on the command
+    line (defaults omitted). Used when resuming from a checkpoint: the
+    checkpoint's stored config is the baseline, and only flags the user
+    actually typed override it — argument defaults must not clobber the
+    original run's settings.
+    """
+    parser = build_parser()
+    for action in parser._actions:
+        action.default = argparse.SUPPRESS
+    return vars(parser.parse_known_args()[0])
 
 def get_rnn_hidden_initializer(name):
     """Map a --rnn_hidden_initializer string to a flax initializer for the RNN's
@@ -477,6 +520,41 @@ def make_train(config):
         config["NUM_ENVS"] * config["NUM_ENV_STEPS"] // config["NUM_MINIBATCHES"]
     )
 
+    def _restore_runner_state(fresh_runner_state, saved_leaves):
+        """Replace every array leaf of the freshly initialized runner state with
+        the corresponding leaf from a checkpoint. The tree structure and all
+        static/aux data (optimizer, apply_fn, ...) come from the fresh state
+        built under the CURRENT config, so command-line overrides of anything
+        that doesn't change array shapes (lr, coefficients, logging cadence,
+        total_timesteps, ...) take effect on resume. A structural conflict
+        (different network size, env count, map size, repeat count, ...) shows
+        up as a leaf count or shape/dtype mismatch and raises.
+        """
+        fresh_leaves, treedef = jax.tree_util.tree_flatten_with_path(fresh_runner_state)
+        if len(fresh_leaves) != len(saved_leaves):
+            raise ValueError(
+                "Cannot resume: checkpoint has {} state arrays but the current "
+                "configuration produces {}. The checkpoint is structurally "
+                "incompatible with the requested configuration.".format(
+                    len(saved_leaves), len(fresh_leaves)
+                )
+            )
+        restored = []
+        for (path, fresh_leaf), saved_leaf in zip(fresh_leaves, saved_leaves):
+            fresh_leaf = jnp.asarray(fresh_leaf)
+            saved_leaf = jnp.asarray(saved_leaf)
+            if fresh_leaf.shape != saved_leaf.shape or fresh_leaf.dtype != saved_leaf.dtype:
+                raise ValueError(
+                    "Cannot resume: checkpoint state {} has shape {} / dtype {} "
+                    "but the current configuration expects shape {} / dtype {}.".format(
+                        jax.tree_util.keystr(path),
+                        saved_leaf.shape, saved_leaf.dtype,
+                        fresh_leaf.shape, fresh_leaf.dtype,
+                    )
+                )
+            restored.append(saved_leaf)
+        return jax.tree_util.tree_unflatten(treedef, restored)
+
     # Define static params, modify based on command line flags and pass to env object to hold during runtime
     # We modify static params here because there's a number of core game logic functions that take static params
     # And don't take the normal "params" blob
@@ -572,7 +650,13 @@ def make_train(config):
         )
         return config["LR"] * frac
 
-    def train(rng):
+    # Builds the training entry points. The wrapper function exists only to
+    # keep one indentation level for everything that used to live inside
+    # train(rng); it returns the composed train function with .init / .step /
+    # .finish attributes exposing the individual phases so run_ppo can drive
+    # the outer loop from Python (for checkpointing) while other callers can
+    # still jit the whole thing as before.
+    def _build_train():
 
         # INIT NETWORK
         if config['FULL_ACTION_SPACE']:
@@ -604,23 +688,6 @@ def make_train(config):
                 config={'LAYER_SIZE': config['LAYER_SIZE'], 'TRUNCATE_BACKPROP': 0},
             )
 
-        rng, _rng = jax.random.split(rng)
-        # We have to do this here because I can't figure out how to wrap the observation_space function (it's not defined in Gymnax, seemingly)
-        if config['ACTION_IN_OBS']:
-            obs_shape = env.observation_space(env_params).shape[:-1] + (env.observation_space(env_params).shape[-1] + 1,)
-        else:
-            obs_shape = env.observation_space(env_params).shape
-        init_x = (
-            jnp.zeros(
-                (1, config["NUM_ENVS"], *obs_shape)
-            ),
-            jnp.zeros((1, config["NUM_ENVS"])),
-        )
-        init_hstate = ScannedRNN.initialize_carry(
-            config["NUM_ENVS"], config["LAYER_SIZE"]
-        )
-        network_params = network.init(_rng, init_hstate, init_x)
-
         # Load connectome constraint targets
         #weight_targets = load_connectome_constraints(config['CONNECTOME_FILEPATH'], config['LAYER_SIZE'])
         if config['NO_CONNECTOME']:
@@ -641,13 +708,6 @@ def make_train(config):
                     weight_targets, connectome_block_size, seed=config['SEED']
                 )
             weight_targets = jnp.asarray(weight_targets)
-
-            if config['CONNECTOME_ZERO_INIT']:
-                kernel = network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
-                network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = jnp.zeros_like(kernel)
-            elif config['CONNECTOME_INIT']:
-                random_sign_mask = jax.random.randint(rng, weight_targets.shape, 0, 2) * 2 - 1.
-                network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = weight_targets * random_sign_mask
 
         if config["ANNEAL_LR"]:
             tx = optax.chain(
@@ -701,18 +761,58 @@ def make_train(config):
         sparse_updater = jaxpruner.create_updater_from_config(sparsity_config)
         tx = sparse_updater.wrap_optax(tx)
 
-        train_state = TrainState.create(
-            apply_fn=network.apply,
-            params=network_params,
-            tx=tx,
-        )
+        def init_runner_state(rng):
+            """Network/optimizer initialization plus env reset: everything the
+            training loop's carry starts from. The rng consumption order
+            matches the original monolithic train() exactly."""
+            rng, _rng = jax.random.split(rng)
+            # We have to do this here because I can't figure out how to wrap the observation_space function (it's not defined in Gymnax, seemingly)
+            if config['ACTION_IN_OBS']:
+                obs_shape = env.observation_space(env_params).shape[:-1] + (env.observation_space(env_params).shape[-1] + 1,)
+            else:
+                obs_shape = env.observation_space(env_params).shape
+            init_x = (
+                jnp.zeros(
+                    (1, config["NUM_ENVS"], *obs_shape)
+                ),
+                jnp.zeros((1, config["NUM_ENVS"])),
+            )
+            init_hstate = ScannedRNN.initialize_carry(
+                config["NUM_ENVS"], config["LAYER_SIZE"]
+            )
+            network_params = network.init(_rng, init_hstate, init_x)
 
-        # INIT ENV
-        rng, _rng = jax.random.split(rng)
-        obsv, log_state = env.reset(_rng, env_params)
-        init_hstate = ScannedRNN.initialize_carry(
-            config["NUM_ENVS"], config["LAYER_SIZE"]
-        )
+            if not config['NO_CONNECTOME']:
+                if config['CONNECTOME_ZERO_INIT']:
+                    kernel = network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
+                    network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = jnp.zeros_like(kernel)
+                elif config['CONNECTOME_INIT']:
+                    random_sign_mask = jax.random.randint(rng, weight_targets.shape, 0, 2) * 2 - 1.
+                    network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = weight_targets * random_sign_mask
+
+            train_state = TrainState.create(
+                apply_fn=network.apply,
+                params=network_params,
+                tx=tx,
+            )
+
+            # INIT ENV
+            rng, _rng = jax.random.split(rng)
+            obsv, log_state = env.reset(_rng, env_params)
+            init_hstate = ScannedRNN.initialize_carry(
+                config["NUM_ENVS"], config["LAYER_SIZE"]
+            )
+
+            rng, _rng = jax.random.split(rng)
+            return (
+                train_state,
+                log_state,
+                obsv,
+                jnp.zeros((config["NUM_ENVS"]), dtype=bool),
+                init_hstate,
+                _rng,
+                0,
+            )
 
         # TRAIN LOOP
         def _update_step(runner_state, unused):
@@ -1316,9 +1416,6 @@ def make_train(config):
             if do_grad_viz:
                 runner_state = _grad_viz(runner_state)
 
-            # Can we save the environment state and resume training later?
-            #runner_state_copy = runner_state
-
             # First, log things (so we have logs for the untrained network)
             runner_state, empty = jax.lax.scan(
                 partial(_logging_step, logging_threads = config["LOGGING_THREADS_PER_VIZ"]), runner_state, None, config['LOGGING_STEPS_PER_VIZ']
@@ -1331,66 +1428,75 @@ def make_train(config):
 
             return runner_state, metric
 
-        rng, _rng = jax.random.split(rng)
-        runner_state = (
-            train_state,
-            log_state,
-            obsv,
-            jnp.zeros((config["NUM_ENVS"]), dtype=bool),
-            init_hstate,
-            _rng,
-            0,
-        )
+        def step(runner_state):
+            """One outer iteration of training (periodic logging/visualization
+            plus UPDATES_PER_VIZ PPO updates) — the body of the outer training
+            loop. run_ppo drives this from Python so checkpoints can be taken
+            between iterations."""
+            return _update_plot(runner_state, None)
 
-        # Copy initial runner state for final validation runs
-        initial_runner_state = runner_state
+        def finish(runner_state):
+            # Final logging step so the last training iterations are captured in
+            # the logs. _update_plot logs before each update, so without this the
+            # updates from the final iteration would never be logged.
+            runner_state, empty = jax.lax.scan(
+                partial(_logging_step, logging_threads = config["LOGGING_THREADS_PER_VIZ"]), runner_state, None, config['LOGGING_STEPS_PER_VIZ']
+            )
 
-        runner_state, metric = jax.lax.scan(
-            _update_plot, runner_state, None, config["NUM_UPDATES"]
-        )
+            # Do validation rollouts with a fixed random seed
+            # Generate rng from validation-specific random seed
 
-        # Final logging step so the last training iterations are captured in
-        # the logs. _update_plot logs before each update, so without this the
-        # updates from the final iteration would never be logged.
-        runner_state, empty = jax.lax.scan(
-            partial(_logging_step, logging_threads = config["LOGGING_THREADS_PER_VIZ"]), runner_state, None, config['LOGGING_STEPS_PER_VIZ']
-        )
+            val_rng_key = jax.random.PRNGKey(config["VALIDATION_SEED"])
 
-        # Do validation rollouts with a fixed random seed
-        # Generate rng from validation-specific random seed
+            rng, _rng = jax.random.split(val_rng_key)
 
-        val_rng_key = jax.random.PRNGKey(config["VALIDATION_SEED"])
+            #RE-INIT FOR VAL RUNS
+            obsv, log_state = env.reset(_rng, env_params)
 
-        rng, _rng = jax.random.split(val_rng_key)
+            # init_hstate = ScannedRNN.initialize_carry(
+            #     config["NUM_ENVS"], config["LAYER_SIZE"]
+            # )
 
-        #RE-INIT FOR VAL RUNS
-        obsv, log_state = env.reset(_rng, env_params)
+            val_runner_state = (
+                runner_state[0],
+                log_state,
+                obsv,
+                jnp.ones((config["NUM_ENVS"]), dtype=bool),
+                runner_state[4],
+                rng,
+                config['VALIDATION_STEP_OFFSET'] + runner_state[-1],
+            )
 
-        # init_hstate = ScannedRNN.initialize_carry(
-        #     config["NUM_ENVS"], config["LAYER_SIZE"]
-        # )
+            # Do validation logging iterations
+            # TODO separate command line argument for validation logging step count?
+            val_runner_state, empty = jax.lax.scan(
+                partial(_logging_step, logging_threads = config["LOGGING_THREADS_PER_VIZ_VAL"]), val_runner_state, None, config['LOGGING_STEPS_PER_VIZ_VAL']
+            )
+            return runner_state
 
-        val_runner_state = (
-            runner_state[0],
-            log_state,
-            obsv,
-            jnp.ones((config["NUM_ENVS"]), dtype=bool),
-            runner_state[4],
-            rng,
-            config['VALIDATION_STEP_OFFSET'] + runner_state[-1],
-        )
+        def train(rng):
+            """Whole-run entry point, semantically the original train():
+            init, NUM_UPDATES outer iterations, then final logging and
+            validation. run_ppo instead drives init/step/finish itself so it
+            can checkpoint (and resume) between outer iterations; this
+            composed form remains for callers that jit the whole run."""
+            runner_state = init_runner_state(rng)
+            runner_state, metric = jax.lax.scan(
+                _update_plot, runner_state, None, int(config["NUM_UPDATES"])
+            )
+            runner_state = finish(runner_state)
+            return {"runner_state": runner_state, "metric": metric}
 
-        # Do validation logging iterations
-        # TODO separate command line argument for validation logging step count?
-        val_runner_state, empty = jax.lax.scan(
-            partial(_logging_step, logging_threads = config["LOGGING_THREADS_PER_VIZ_VAL"]), val_runner_state, None, config['LOGGING_STEPS_PER_VIZ_VAL']
-        )
-        return {"runner_state": runner_state, "metric": metric}
+        train.init = init_runner_state
+        train.step = step
+        train.finish = finish
+        train.restore_runner_state = _restore_runner_state
+        return train
 
-    return train
+    return _build_train()
 
 
-def run_ppo(config):
+def run_ppo(config, checkpoint=None):
 
     reset_batch_logs()
 
@@ -1401,11 +1507,93 @@ def run_ppo(config):
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_REPEATS"])
 
-    train_jit = jax.jit(make_train(config), device=jax.devices()[JAX_DEVICE_INDEX])
-    train_vmap = jax.vmap(train_jit)
+    train = make_train(config)
+    device = jax.devices()[JAX_DEVICE_INDEX]
+    init_jit = jax.jit(jax.vmap(train.init), device=device)
+    # The outer training loop runs here in Python rather than inside one big
+    # lax.scan: every iteration then executes the same compiled step program,
+    # so a run resumed from a checkpoint performs bit-for-bit the computation
+    # the uninterrupted run would have (and reuses its compilation cache
+    # entries). donate_argnums recycles the carry buffers like scan did.
+    step_jit = jax.jit(jax.vmap(train.step), device=device, donate_argnums=0)
+    finish_jit = jax.jit(jax.vmap(train.finish), device=device)
+
+    num_outer_iters = int(config["NUM_UPDATES"])
+    checkpoint_interval = config.get("CHECKPOINT_INTERVAL", 0)
+    checkpoint_keep = config.get("CHECKPOINT_KEEP", 0)
+
+    def _write_checkpoint(runner_state, outer_iter):
+        # Checkpoints capture the loop carry at the start of outer iteration
+        # `outer_iter` (all repeats), i.e. exactly the state --resume_from
+        # restarts from. update_step is shared across repeats; read repeat 0.
+        update_step = int(np.asarray(jax.device_get(runner_state[-1]))[0])
+        run_out_path = os.path.join(config["OUTPUT_PATH"], wandb.run.id)
+        os.makedirs(run_out_path, exist_ok=True)
+        payload = {
+            # Config snapshot is the baseline for --resume_from; explicit
+            # command-line flags override it at resume time.
+            "config": dict(config),
+            "update_step": update_step,
+            "outer_iter": outer_iter,
+            "wandb_run_id": wandb.run.id,
+            "leaves": jax.device_get(jax.tree_util.tree_leaves(runner_state)),
+        }
+        out_filename = os.path.join(run_out_path, "checkpoint_{}.pkl.gz".format(update_step))
+        # Write-then-rename so an interrupt mid-write can't leave a truncated
+        # file under the final checkpoint name.
+        tmp_filename = out_filename + ".tmp"
+        with gzip.open(tmp_filename, "wb", compresslevel=1) as tmp_file:
+            pickle.dump(payload, tmp_file, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp_filename, out_filename)
+        print("Saving training checkpoint", out_filename)
+        if checkpoint_keep > 0:
+            stale = sorted(
+                (
+                    fname for fname in os.listdir(run_out_path)
+                    if fname.startswith("checkpoint_")
+                    and (fname.endswith(".pkl") or fname.endswith(".pkl.gz"))
+                ),
+                key=lambda fname: int(fname[len("checkpoint_"):].split(".")[0]),
+                reverse=True,
+            )[checkpoint_keep:]
+            for old_filename in stale:
+                os.remove(os.path.join(run_out_path, old_filename))
 
     t0 = time.time()
-    out = train_vmap(rngs)
+
+    runner_state = init_jit(rngs)
+    # Round-trip the freshly initialized state through host memory so its
+    # avals (dtypes / weak-type flags) are identical to a checkpoint-restored
+    # state's; fresh and resumed runs then trace, compile, and execute the
+    # very same step program.
+    runner_state = jax.tree_util.tree_map(lambda x: jnp.asarray(np.asarray(x)), runner_state)
+
+    start_iter = 0
+    if checkpoint is not None:
+        runner_state = train.restore_runner_state(runner_state, checkpoint["leaves"])
+        start_iter = int(checkpoint["outer_iter"])
+        print(
+            "Resuming from update step {} (outer iteration {}): {} of {} outer iterations remain".format(
+                int(checkpoint["update_step"]), start_iter,
+                max(num_outer_iters - start_iter, 0), num_outer_iters,
+            )
+        )
+
+    metrics = []
+    for outer_iter in range(start_iter, num_outer_iters):
+        if checkpoint_interval > 0 and outer_iter % checkpoint_interval == 0:
+            _write_checkpoint(runner_state, outer_iter)
+        runner_state, metric = step_jit(runner_state)
+        metrics.append(metric)
+
+    runner_state = finish_jit(runner_state)
+    out = {
+        "runner_state": runner_state,
+        # Stacked to the (repeats, iterations, updates) layout the old
+        # whole-run scan returned.
+        "metric": jax.tree_util.tree_map(lambda *xs: jnp.stack(xs, axis=1), *metrics) if metrics else None,
+    }
+
     t1 = time.time()
     print("Time to run experiment", t1 - t0)
     print("SPS: ", config["TOTAL_TIMESTEPS"] / (t1 - t0))
@@ -1433,11 +1621,49 @@ if __name__ == "__main__":
 
     args = parse_args()
 
+    # Persistent XLA compilation cache: relaunching an identical configuration
+    # skips the (multi-minute) compile of the training programs. Resumed runs
+    # benefit too — the step/finish programs are identical to the original
+    # run's, so resuming mostly reuses its cache entries. An externally
+    # configured cache (JAX_COMPILATION_CACHE_DIR / max size) is left
+    # untouched.
+    if jax.config.jax_compilation_cache_dir is None:
+        jax.config.update(
+            "jax_compilation_cache_dir",
+            os.path.expanduser("~/.cache/jax_comp_cache"),
+        )
+    if jax.config.jax_compilation_cache_max_size < 0:
+        jax.config.update("jax_compilation_cache_max_size", 5 * 2**30)
+
+    checkpoint = None
+    if args.resume_from is not None:
+        # Checkpoints are gzip-compressed pickles; sniff the magic bytes so
+        # uncompressed checkpoints from older runs keep working.
+        with open(args.resume_from, "rb") as checkpoint_file:
+            is_gzip = checkpoint_file.read(2) == b"\x1f\x8b"
+        opener = gzip.open if is_gzip else open
+        with opener(args.resume_from, "rb") as checkpoint_file:
+            checkpoint = pickle.load(checkpoint_file)
+        # The checkpoint's stored configuration is the baseline; flags
+        # explicitly typed on this command line override it. Options added to
+        # the code after the checkpoint was written fall back to their current
+        # defaults. Derived values make_train computes (NUM_UPDATES, ...) are
+        # recomputed from the merged config, and overrides that conflict with
+        # the stored state's shapes fail at restore time in make_train.
+        config = dict(checkpoint["config"])
+        for key, value in parse_explicit_args().items():
+            config[key.upper()] = value
+        for key, value in vars(args).items():
+            config.setdefault(key.upper(), value)
+        print("Resuming run from checkpoint", args.resume_from)
+    else:
+        config = {key.upper(): value for key, value in vars(args).items()}
+
     wandb.init(
-        project=args.wandb_project,
-        entity=args.wandb_entity,
-        config={key.upper(): value for key, value in vars(args).items()},
-        name=args.run_name,
+        project=config["WANDB_PROJECT"],
+        entity=config["WANDB_ENTITY"],
+        config=config,
+        name=config["RUN_NAME"],
     )
 
-    run_ppo(wandb.config)
+    run_ppo(wandb.config, checkpoint)
