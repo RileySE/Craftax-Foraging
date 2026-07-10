@@ -49,6 +49,29 @@ def reset_batch_logs():
     log_times = []
     batch_logs = {}
 
+
+def resumable_wandb_log(log, update_step, config):
+    """wandb.log that stays consistent across checkpoint resumes.
+
+    When continuing the pre-resume WandB run (--wandb_resume_run), metrics are
+    logged at the absolute PPO update index — which is restored from the
+    checkpoint — so curves line up across resumes, and steps the original run
+    already logged (the checkpoint-to-crash overlap, which the resumed run
+    reproduces identically) are skipped instead of double-logged.
+    WANDB_RESUME_STEP0 records where the resumed run's history left off; it is
+    set right after wandb.init. Without the flag this is plain wandb.log with
+    wandb's automatic step counter, exactly as before.
+    """
+    if config.get("WANDB_RESUME_RUN"):
+        update_step = int(update_step)
+        # WANDB_RESUME_STEP0 is the first step index the resumed history does
+        # NOT yet contain (wandb.run.step right after the resumed init).
+        if update_step < config.get("WANDB_RESUME_STEP0", 0):
+            return
+        wandb.log(log, step=update_step)
+    else:
+        wandb.log(log)
+
 def batch_log(update_step, log, config):
     update_step = int(update_step)
     if update_step not in batch_logs:
@@ -84,6 +107,7 @@ def batch_log(update_step, log, config):
                     "aux_loss",
                     "value_loss",
                     "constraint_loss",
+                    "lr",
                 ]:
                     agg_logs[key] = np.mean(agg)
                 elif key in ["goal_heatmap"]:
@@ -106,6 +130,6 @@ def batch_log(update_step, log, config):
                 sps = steps_between_updates / dt
                 agg_logs["sps"] = sps
 
-        wandb.log(agg_logs)
+        resumable_wandb_log(agg_logs, update_step, config)
 
 

@@ -64,7 +64,7 @@ from forageworld.environment_base.wrappers import (
     ReduceActionSpaceWrapper, AppendActionToObsWrapper, AppendActionToObsWrapper,
     CurriculumWrapper
 )
-from forageworld.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs
+from forageworld.logz.batch_logging import create_log_dict, batch_log, reset_batch_logs, resumable_wandb_log
 from forageworld.models.actor_critic import ActorCritic, ActorCriticConv, ActorCriticSharedRep
 from forageworld.connectome_utils import (
     connectome_constraint_loss,
@@ -175,6 +175,15 @@ def build_parser():
                              "cadence as the other periodic logging, i.e. every checkpoint_interval * updates_per_viz "
                              "updates. Checkpoints are written gzip-compressed to "
                              "output_path/<run_id>/checkpoint_<step>.pkl.gz. 0 disables checkpointing.")
+    parser.add_argument('--wandb_resume_run', action=argparse.BooleanOptionalAction, default=False,
+                        help="With --resume_from: continue logging to the same WandB run that wrote the checkpoint "
+                             "(its run id is stored in the checkpoint) instead of starting a new WandB run. Metrics "
+                             "are then logged with an explicit step — the absolute PPO update index, which survives "
+                             "the resume — so performance curves continue seamlessly; any updates re-executed "
+                             "between the checkpoint and the original run's last logged point are skipped rather "
+                             "than double-logged (the resumed computation reproduces them identically). The flag is "
+                             "stored in the checkpoint config, so later resumes inherit it unless overridden with "
+                             "--no-wandb_resume_run. Requires online WandB (wandb cannot resume offline runs).")
     parser.add_argument('--checkpoint_keep', type=int, default=1,
                         help="Number of most recent checkpoints to retain; after each successful save, older "
                              "checkpoint files in the run's output directory are deleted. Interruption recovery only "
@@ -201,6 +210,8 @@ def parse_args():
         parser.error("--checkpoint_interval must be >= 0 (0 disables checkpointing)")
     if args.checkpoint_keep < 0:
         parser.error("--checkpoint_keep must be >= 0 (0 keeps all checkpoints)")
+    if args.wandb_resume_run and args.resume_from is None:
+        parser.error("--wandb_resume_run requires --resume_from (it continues the run that wrote the checkpoint)")
     if args.grad_viz_steps > 0 and args.grad_viz_envs < 1:
         parser.error("--grad_viz_envs must be >= 1 when the gradient probe is enabled")
     if args.no_connectome:
@@ -1072,6 +1083,17 @@ def make_train(config):
                 def callback(metric, loss_log, update_step):
                     to_log = create_log_dict(metric, config)
                     to_log.update(loss_log)
+                    # Log the LR the optimizer used for this update so it can
+                    # be plotted against performance. Computed with the same
+                    # linear_schedule the optimizer runs, evaluated at this
+                    # update's optimizer step count (every minibatch step of
+                    # one update falls in the same schedule bucket).
+                    if config["ANNEAL_LR"]:
+                        to_log["lr"] = float(linear_schedule(
+                            int(update_step) * config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"]
+                        ))
+                    else:
+                        to_log["lr"] = config["LR"]
                     batch_log(update_step, to_log, config)
 
                 jax.debug.callback(callback, to_log, loss_log, update_step)
@@ -1305,12 +1327,14 @@ def make_train(config):
                 within_episode=within_episode,
             )
             if config['USE_WANDB']:
-                wandb.log(
+                resumable_wandb_log(
                     {
                         'rnn_grad_viz': wandb.Image(
                             out_filename, caption='update {}'.format(int(update_step))
                         )
-                    }
+                    },
+                    update_step,
+                    config,
                 )
             print('Writing RNN gradient viz', out_filename)
 
@@ -1659,11 +1683,48 @@ if __name__ == "__main__":
     else:
         config = {key.upper(): value for key, value in vars(args).items()}
 
+    # --wandb_resume_run: continue the WandB run that wrote the checkpoint
+    # instead of starting a new one, so long checkpointed trainings produce a
+    # single continuous set of curves.
+    wandb_init_kwargs = {}
+    if checkpoint is not None and config.get("WANDB_RESUME_RUN"):
+        resume_run_id = checkpoint.get("wandb_run_id")
+        if not resume_run_id:
+            raise ValueError(
+                "--wandb_resume_run: the checkpoint does not record a wandb run id"
+            )
+        # "must" fails loudly if the run can't be found/attached, rather than
+        # silently forking a fresh run with a broken step axis.
+        wandb_init_kwargs = dict(id=resume_run_id, resume="must")
+        print("Continuing WandB run", resume_run_id)
+
     wandb.init(
         project=config["WANDB_PROJECT"],
         entity=config["WANDB_ENTITY"],
         config=config,
         name=config["RUN_NAME"],
+        **wandb_init_kwargs,
     )
 
-    run_ppo(wandb.config, checkpoint)
+    if wandb_init_kwargs:
+        # Push the merged (checkpoint + CLI overrides) config onto the resumed
+        # run, and record where its history ends: resumable_wandb_log skips
+        # re-logging update steps below WANDB_RESUME_STEP0 (the resumed run
+        # reproduces that overlap bit-identically, and wandb rejects
+        # non-increasing steps anyway).
+        wandb.config.update(dict(config), allow_val_change=True)
+        wandb.config.update(
+            {"WANDB_RESUME_STEP0": int(wandb.run.step)}, allow_val_change=True
+        )
+        # A resumed wandb.Config rejects value changes on item assignment, but
+        # make_train writes derived keys (NUM_UPDATES, MINIBATCH_SIZE, ...)
+        # into its config — which can legitimately change, e.g. when resuming
+        # with an extended --total_timesteps. Hand run_ppo a plain-dict copy
+        # so those writes don't trip wandb's immutability; the wandb UI keeps
+        # the original run's derived values, which only differ if the resume
+        # explicitly overrode the settings they derive from.
+        run_config = dict(wandb.config)
+    else:
+        run_config = wandb.config
+
+    run_ppo(run_config, checkpoint)
