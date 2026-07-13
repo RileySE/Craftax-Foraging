@@ -98,7 +98,8 @@ def uniform_random_target_matrix(targets, block_size, seed=0):
     return sorted_blocks.reshape(arr.shape).astype(arr.dtype, copy=False)
 
 
-def connectome_constraint_loss(hh_weights, weight_targets, block_size):
+def connectome_constraint_loss(hh_weights, weight_targets, block_size,
+                               exclude_self_weights=False):
     """L1 loss between magnitude-sorted hh weights and block-sorted targets.
 
     Each RNN unit is assigned to a contiguous block along the downstream
@@ -111,17 +112,22 @@ def connectome_constraint_loss(hh_weights, weight_targets, block_size):
         hh_weights: (n_hidden, n_hidden) RNN hidden-to-hidden kernel.
         weight_targets: (n_hidden, n_hidden) pre-sorted target matrix.
         block_size: number of units per downstream block; must divide n_hidden.
+        exclude_self_weights: when True, zero the diagonal of hh_weights (each
+            unit's self connection) before sorting. Self weights then receive
+            no constraint gradient and, ranking as zeros, no longer compete
+            with other weights for the large target slots of their tile. Each
+            zeroed diagonal entry still pairs with the smallest target of its
+            tile, so a tile whose targets are all non-zero contributes a
+            small parameter-independent offset to the reported loss value.
 
     Returns:
         Scalar mean absolute error.
     """
     n_hidden = hh_weights.shape[-1]
     n_blocks = n_hidden // block_size
-    # Mask self weights from the loss
-    #TODO implement toggle
-    if False:
+    if exclude_self_weights:
         self_mask = 1. - jnp.eye(n_hidden, dtype=hh_weights.dtype)
-        hh_weights_masked = hh_weights * self_mask
+        hh_weights = hh_weights * self_mask
     abs_w = jnp.abs(hh_weights)
 
     blocked = abs_w.reshape(*abs_w.shape[:-1], n_blocks, block_size)

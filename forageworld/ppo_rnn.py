@@ -145,6 +145,12 @@ def build_parser():
                         help="Replace the loaded connectome targets with a matrix whose non-zero entries are drawn i.i.d. from Uniform(0, 1) at uniformly random positions, preserving only the count of non-zero entries. Composes with --connectome_init / --connectome_freeze / --connectome_freeze_zeros / --connectome_zero_init; if --connectome_randomize_targets is also set, the uniform replacement is applied after and effectively wins. Seed for the draw is taken from --seed.")
     parser.add_argument('--connectome_zero_init', action=argparse.BooleanOptionalAction, default=False,
                         help="Sanity-check init: set the constrained kernel to all zeros instead of the default initializer. Takes precedence over --connectome_init when both are set. Composes with --connectome_freeze / --connectome_freeze_zeros (which then freeze the zero-initialized kernel).")
+    parser.add_argument('--exclude_self_weights', action=argparse.BooleanOptionalAction, default=False,
+                        help="Exclude each unit's self weight (the diagonal of the RNN hidden-to-hidden kernel) from "
+                             "the connectome constraint loss: the diagonal is zeroed before the block-sorted "
+                             "comparison, so self weights receive no constraint gradient and do not compete with "
+                             "other weights for target slots. Requires the connectome targets (incompatible with "
+                             "--no_connectome).")
     parser.add_argument('--simple_network', action=argparse.BooleanOptionalAction, default=False, help='Use the simplified network architecture with no nonlinearity downstream of the RNN.')
     parser.add_argument('--simpler_network', action=argparse.BooleanOptionalAction, default=False,
                         help='Use an even simpler network architecture which also removes the FC layer upstream of the RNN.')
@@ -220,6 +226,7 @@ def parse_args():
                 'connectome_init', 'connectome_zero_init',
                 'connectome_freeze', 'connectome_freeze_zeros',
                 'connectome_randomize_targets', 'connectome_uniform_targets',
+                'exclude_self_weights',
             ) if getattr(args, name)
         ]
         if incompatible:
@@ -977,7 +984,8 @@ def make_train(config):
                         else:
                             hh_weights = params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
                             constraint_loss = connectome_constraint_loss(
-                                hh_weights, weight_targets, connectome_block_size
+                                hh_weights, weight_targets, connectome_block_size,
+                                exclude_self_weights=config.get('EXCLUDE_SELF_WEIGHTS', False),
                             )
 
                         total_loss = (
