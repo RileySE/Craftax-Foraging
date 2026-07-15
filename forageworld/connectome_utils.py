@@ -135,6 +135,17 @@ def connectome_constraint_loss(hh_weights, weight_targets, block_size,
     sorted_flat = sorted_desc.reshape(abs_w.shape)
     return jnp.mean(jnp.abs(sorted_flat - weight_targets))
 
+# Version of above that does not sort within blocks and instead has a fixed per-weight target value
+# (weight [i, j] is always compared to target [i, j]). Also does not need block_size, since
+# there is no within-block pairing. Selected via --fixed_connectome_targets.
+def connectome_constraint_loss_nonsorted(hh_weights, weight_targets, exclude_self_weights=False):
+    n_hidden = hh_weights.shape[-1]
+    if exclude_self_weights:
+        self_mask = 1. - jnp.eye(n_hidden, dtype=hh_weights.dtype)
+        hh_weights = hh_weights * self_mask
+    hh_weights = jnp.abs(hh_weights)
+    return jnp.mean(jnp.abs(hh_weights - weight_targets))
+
 
 def connectome_loss_nonzero(hh_weights, weight_targets, block_size, k=10.0):
     """Sigmoid loss matching the zero / non-zero structure of weight_targets.

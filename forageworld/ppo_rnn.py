@@ -68,6 +68,7 @@ from forageworld.logz.batch_logging import create_log_dict, batch_log, reset_bat
 from forageworld.models.actor_critic import ActorCritic, ActorCriticConv, ActorCriticSharedRep
 from forageworld.connectome_utils import (
     connectome_constraint_loss,
+    connectome_constraint_loss_nonsorted,
     connectome_loss_nonzero,
     randomize_target_matrix,
     uniform_random_target_matrix,
@@ -151,6 +152,13 @@ def build_parser():
                              "comparison, so self weights receive no constraint gradient and do not compete with "
                              "other weights for target slots. Requires the connectome targets (incompatible with "
                              "--no_connectome).")
+    parser.add_argument('--fixed_connectome_targets', action=argparse.BooleanOptionalAction, default=False,
+                        help="Use the non-sorted connectome constraint loss: each hidden-to-hidden weight [i, j] is "
+                             "compared directly against target [i, j], a fixed per-weight target for the whole run, "
+                             "instead of the default magnitude-sorted within-block pairing. The choice is resolved "
+                             "at JIT trace time, so the toggle adds no runtime cost. Composes with "
+                             "--exclude_self_weights and the target-replacement options; incompatible with "
+                             "--no_connectome.")
     parser.add_argument('--simple_network', action=argparse.BooleanOptionalAction, default=False, help='Use the simplified network architecture with no nonlinearity downstream of the RNN.')
     parser.add_argument('--simpler_network', action=argparse.BooleanOptionalAction, default=False,
                         help='Use an even simpler network architecture which also removes the FC layer upstream of the RNN.')
@@ -226,7 +234,7 @@ def parse_args():
                 'connectome_init', 'connectome_zero_init',
                 'connectome_freeze', 'connectome_freeze_zeros',
                 'connectome_randomize_targets', 'connectome_uniform_targets',
-                'exclude_self_weights',
+                'exclude_self_weights', 'fixed_connectome_targets',
             ) if getattr(args, name)
         ]
         if incompatible:
@@ -976,11 +984,18 @@ def make_train(config):
                         aux_loss = jnp.square(aux - traj_batch.deltas_to_start).mean()
 
                         # Compute connectome constraint loss.
-                        # config['NO_CONNECTOME'] is a Python bool, so this branch
-                        # resolves at JIT trace time — the unused side is never
-                        # emitted into the compiled graph (no inner-loop cost).
+                        # config['NO_CONNECTOME'] / config['FIXED_CONNECTOME_TARGETS']
+                        # are Python bools, so these branches resolve at JIT trace
+                        # time — the unused variants are never emitted into the
+                        # compiled graph (no inner-loop cost).
                         if config['NO_CONNECTOME']:
                             constraint_loss = jnp.zeros(())
+                        elif config.get('FIXED_CONNECTOME_TARGETS', False):
+                            hh_weights = params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
+                            constraint_loss = connectome_constraint_loss_nonsorted(
+                                hh_weights, weight_targets,
+                                exclude_self_weights=config.get('EXCLUDE_SELF_WEIGHTS', False),
+                            )
                         else:
                             hh_weights = params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
                             constraint_loss = connectome_constraint_loss(
