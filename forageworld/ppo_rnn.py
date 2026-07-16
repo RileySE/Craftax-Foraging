@@ -748,13 +748,19 @@ def make_train(config):
 
         frozen_path = ('params', 'ScannedRNN_0', 'SimpleCell_1', 'h', 'kernel')
         if config['CONNECTOME_FREEZE']:
-            param_labels = jax.tree_util.tree_map_with_path(
-                lambda path, _: 'frozen' if tuple(p.key for p in path) == frozen_path else 'trainable',
-                network_params,
-            )
+            # The params don't exist yet at this point (they are created per
+            # repeat in init_runner_state), so hand optax a callable: it
+            # resolves the labels against the actual param tree at tx.init /
+            # tx.update time.
+            def _freeze_labels(params):
+                return jax.tree_util.tree_map_with_path(
+                    lambda path, _: 'frozen' if tuple(p.key for p in path) == frozen_path else 'trainable',
+                    params,
+                )
+
             tx = optax.multi_transform(
                 {'trainable': tx, 'frozen': optax.set_to_zero()},
-                param_labels,
+                _freeze_labels,
             )
         elif config['CONNECTOME_FREEZE_ZEROS']:
             # 1.0 where the connectome target is non-zero (trainable), 0.0 where it
