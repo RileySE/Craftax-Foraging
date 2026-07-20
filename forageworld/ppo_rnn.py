@@ -1,4 +1,5 @@
 import argparse
+import glob
 import gzip
 import os
 import pickle
@@ -212,20 +213,35 @@ def build_parser():
                              "stored values (e.g. to change a hyperparameter mid-run); overrides that change the "
                              "shape of the stored state (network size, env count, map size, num_repeats, ...) fail "
                              "at restore time.")
+    parser.add_argument('--auto_resume', action=argparse.BooleanOptionalAction, default=False,
+                        help="At startup, scan output_path for training checkpoints left by a previous (interrupted) "
+                             "run of this configuration and resume from the one with the highest update step, exactly "
+                             "as if it had been passed via --resume_from; start fresh when none exist. The original "
+                             "WandB run is continued (as with --wandb_resume_run, so requires online WandB) unless "
+                             "--no-wandb_resume_run is passed explicitly. Setting PPO_AUTO_RESUME=1 in the "
+                             "environment also enables this flag - utils/auto_resume.py injects that at sbatch time "
+                             "so unmodified submission scripts become resumable. When training runs to completion "
+                             "and PPO_AUTO_RESUME_STATE_DIR is set, a done_<SLURM_ARRAY_TASK_ID> marker file is "
+                             "written there so the auto-resume manager stops submitting continuation jobs.")
     return parser
 
 
 def parse_args():
     parser = build_parser()
     args = parser.parse_args()
+    if os.environ.get("PPO_AUTO_RESUME") == "1":
+        # Injected by utils/auto_resume.py via sbatch --export so submission
+        # scripts become resumable without editing their command lines.
+        args.auto_resume = True
     if args.truncate_backprop < 0:
         parser.error("--truncate_backprop must be >= 0 (0 disables truncation)")
     if args.checkpoint_interval < 0:
         parser.error("--checkpoint_interval must be >= 0 (0 disables checkpointing)")
     if args.checkpoint_keep < 0:
         parser.error("--checkpoint_keep must be >= 0 (0 keeps all checkpoints)")
-    if args.wandb_resume_run and args.resume_from is None:
-        parser.error("--wandb_resume_run requires --resume_from (it continues the run that wrote the checkpoint)")
+    if args.wandb_resume_run and args.resume_from is None and not args.auto_resume:
+        parser.error("--wandb_resume_run requires --resume_from or --auto_resume (it continues the run that wrote "
+                     "the checkpoint)")
     if args.grad_viz_steps > 0 and args.grad_viz_envs < 1:
         parser.error("--grad_viz_envs must be >= 1 when the gradient probe is enabled")
     if args.no_connectome:
@@ -256,6 +272,30 @@ def parse_explicit_args():
     for action in parser._actions:
         action.default = argparse.SUPPRESS
     return vars(parser.parse_known_args()[0])
+
+
+def find_latest_checkpoint(output_path):
+    """Return the path of the newest training checkpoint under output_path, or
+    None when there is none (--auto_resume then starts a fresh run).
+
+    Checkpoints live at output_path/<wandb_run_id>/checkpoint_<step>.pkl[.gz].
+    A run interrupted and resumed without --wandb_resume_run spreads its
+    checkpoints over several <wandb_run_id> subdirectories, so every
+    subdirectory is scanned and the highest update step wins (ties broken by
+    mtime). Half-written *.tmp files are excluded by the extension check.
+    """
+    candidates = []
+    for path in glob.glob(os.path.join(output_path, "*", "checkpoint_*.pkl*")):
+        filename = os.path.basename(path)
+        if not (filename.endswith(".pkl") or filename.endswith(".pkl.gz")):
+            continue
+        try:
+            step = int(filename[len("checkpoint_"):].split(".")[0])
+        except ValueError:
+            continue
+        candidates.append((step, os.path.getmtime(path), path))
+    return max(candidates)[2] if candidates else None
+
 
 def get_rnn_hidden_initializer(name):
     """Map a --rnn_hidden_initializer string to a flax initializer for the RNN's
@@ -1688,6 +1728,18 @@ if __name__ == "__main__":
     if jax.config.jax_compilation_cache_max_size < 0:
         jax.config.update("jax_compilation_cache_max_size", 5 * 2**30)
 
+    # --auto_resume: pick up where a previous leg of this run left off, if
+    # there is anything to pick up. The scan happens before checkpoint loading
+    # so the discovered path flows through the ordinary --resume_from path.
+    auto_resumed = False
+    if args.auto_resume and args.resume_from is None:
+        latest_checkpoint = find_latest_checkpoint(args.output_path)
+        if latest_checkpoint is not None:
+            args.resume_from = latest_checkpoint
+            auto_resumed = True
+        else:
+            print("Auto-resume: no checkpoint found under", args.output_path, "- starting fresh")
+
     checkpoint = None
     if args.resume_from is not None:
         # Checkpoints are gzip-compressed pickles; sniff the magic bytes so
@@ -1704,10 +1756,17 @@ if __name__ == "__main__":
         # recomputed from the merged config, and overrides that conflict with
         # the stored state's shapes fail at restore time in make_train.
         config = dict(checkpoint["config"])
-        for key, value in parse_explicit_args().items():
+        explicit_args = parse_explicit_args()
+        for key, value in explicit_args.items():
             config[key.upper()] = value
         for key, value in vars(args).items():
             config.setdefault(key.upper(), value)
+        if auto_resumed and "wandb_resume_run" not in explicit_args:
+            # Auto-resume continues the original WandB run by default. The
+            # checkpoint's stored WANDB_RESUME_RUN (False on the first leg)
+            # must not override that; only an explicit --no-wandb_resume_run
+            # on this command line may.
+            config["WANDB_RESUME_RUN"] = True
         print("Resuming run from checkpoint", args.resume_from)
     else:
         config = {key.upper(): value for key, value in vars(args).items()}
@@ -1757,3 +1816,17 @@ if __name__ == "__main__":
         run_config = wandb.config
 
     run_ppo(run_config, checkpoint)
+
+    # Training ran to its final update (as opposed to being killed by the
+    # wallclock limit): leave a done marker for the auto-resume manager
+    # (utils/auto_resume.py, which provides the state dir via sbatch --export)
+    # so it stops submitting continuation jobs for this (array) task.
+    auto_resume_state_dir = os.environ.get("PPO_AUTO_RESUME_STATE_DIR")
+    if auto_resume_state_dir:
+        os.makedirs(auto_resume_state_dir, exist_ok=True)
+        marker_name = "done_{}".format(os.environ.get("SLURM_ARRAY_TASK_ID", "noarray"))
+        with open(os.path.join(auto_resume_state_dir, marker_name), "w") as marker_file:
+            marker_file.write("finished {} wandb_run={}\n".format(
+                time.strftime("%Y-%m-%d %H:%M:%S"),
+                wandb.run.id if wandb.run is not None else "unknown",
+            ))
