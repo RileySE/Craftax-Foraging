@@ -13,6 +13,8 @@ outfile_name = sys.argv[2]
 pre_cell_type_field = 'pre_level_1'
 post_cell_type_field = 'post_level_1'
 
+sort_constraints = False
+
 print('Loading CSV and parsing usable cell types...')
 data = pd.read_csv(datafile_name)
 data = data[data['syn_count'] > 5]
@@ -65,7 +67,7 @@ print('Sampling constraint distributions...')
 pre_n = 0
 post_n = 0
 # Sample from distributions to define constraints
-rnn_units_per_type = 1
+rnn_units_per_type = 4
 constraints = np.zeros((len(connection_counts_per_cell_per_type_pair.keys()), len(usable_cell_types), rnn_units_per_type, rnn_units_per_type),dtype=np.float32)
 pre_n = 0
 for pre_cell_type in connection_counts_per_cell_per_type_pair.keys():
@@ -88,7 +90,10 @@ for pre_cell_type in connection_counts_per_cell_per_type_pair.keys():
         for curr_unit in range(rnn_units_per_type):
             curr_nonzero_weights = np.random.choice(curr_syn_counts, (int(curr_count_dist[curr_unit]),))
             curr_constraints[curr_unit, :int(curr_count_dist[curr_unit])] = curr_nonzero_weights
-        curr_constraints = np.flip(np.sort(curr_constraints, 1),1)
+            # permute the order of the weights so each downstream neuron has the same odds of receiving input
+            curr_constraints[curr_unit] = np.random.default_rng().permutation(curr_constraints[curr_unit], axis=0)
+        if sort_constraints:
+            curr_constraints = np.flip(np.sort(curr_constraints, 1),1)
         constraints[pre_n][post_n] = curr_constraints
         post_n += 1
     pre_n += 1
