@@ -565,7 +565,17 @@ def load_connectome_constraints(pkl_filepath, n_neurons):
 
 def load_connectome_constraints_cellstats(pkl_filepath):
     matrix = np.load(pkl_filepath)
-    targets = matrix.reshape(matrix.shape[0] * matrix.shape[2], matrix.shape[1] * matrix.shape[3])
+    # matrix is (pre_type, post_type, pre_unit, post_unit). The 2D target wants
+    # row = pre_type * units_per_type + pre_unit, col = post_type * units_per_type
+    # + post_unit, so the two unit axes have to be interleaved with their type
+    # axes before flattening. Reshaping straight from the 4D layout instead maps
+    # tile (a, b, p) to row 4a + (4b+p)//n_types, col block (4b+p) % n_types --
+    # i.e. the row ends up depending on the POST type and the column on the PRE
+    # unit, which permutes every tile away from the unit it constrains. The two
+    # layouts coincide only when units_per_type == 1.
+    targets = matrix.transpose(0, 2, 1, 3).reshape(
+        matrix.shape[0] * matrix.shape[2], matrix.shape[1] * matrix.shape[3]
+    )
     return targets
 
 

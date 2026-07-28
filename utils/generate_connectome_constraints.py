@@ -10,8 +10,8 @@ datafile_name = sys.argv[1]
 outfile_name = sys.argv[2]
 #pre_cell_type_field = 'pre_cell_type'
 #post_cell_type_field = 'post_cell_type'
-pre_cell_type_field = 'pre_level_1'
-post_cell_type_field = 'post_level_1'
+pre_cell_type_field = 'pre_level_3'
+post_cell_type_field = 'post_level_3'
 
 sort_constraints = False
 
@@ -36,6 +36,7 @@ for cell_type in usable_cell_types:
         connection_counts_per_cell_per_type_pair[cell_type][cell_type_2] = []
 
 print('Accumulating connection and synapse counts...')
+total_connections = 0
 for cell_id in unique_cell_ids:
     entries = data.loc[data['pre_root_id'] == cell_id]
     this_cell_type = ''
@@ -56,6 +57,7 @@ for cell_id in unique_cell_ids:
             seen_cell_types.append(post_type)
             connection_counts_per_cell_per_type_pair[pre_type][post_type].append(0)
         connection_counts_per_cell_per_type_pair[pre_type][post_type][-1] += 1
+        total_connections += 1
     # Add 0's for cell types this cell did NOT connect to
     # TODO refactor to do this for all post types before the above (low priority, just for cleanliness/efficiency)
     if this_cell_type in usable_cell_types:
@@ -63,11 +65,12 @@ for cell_id in unique_cell_ids:
             if not post_type in seen_cell_types:
                 connection_counts_per_cell_per_type_pair[this_cell_type][post_type].append(0)
 
+print('Total connections:', total_connections)
 print('Sampling constraint distributions...')
 pre_n = 0
 post_n = 0
 # Sample from distributions to define constraints
-rnn_units_per_type = 4
+rnn_units_per_type = 16
 constraints = np.zeros((len(connection_counts_per_cell_per_type_pair.keys()), len(usable_cell_types), rnn_units_per_type, rnn_units_per_type),dtype=np.float32)
 pre_n = 0
 for pre_cell_type in connection_counts_per_cell_per_type_pair.keys():
