@@ -772,6 +772,7 @@ def make_train(config):
             # (the Python branch in _loss_fn elides the constraint term at trace time).
             weight_targets = jnp.zeros((1,))
             connectome_block_size = 1
+            connectome_targets_signed = False
         else:
             weight_targets = load_connectome_constraints_cellstats(config['CONNECTOME_FILEPATH'])
             # Downstream block size = number of units per post-synaptic cell type in the cellstats matrix.
@@ -795,6 +796,16 @@ def make_train(config):
                     weight_targets, connectome_block_size, seed=config['SEED'],
                     sort_blocks=sort_target_blocks,
                 )
+            # A constraint file generated with transmitter signs carries the
+            # excitatory/inhibitory polarity of each target in its sign, so the
+            # loss must constrain polarity rather than magnitude alone and
+            # --connectome_init must not overwrite it with random signs.
+            # Detected from the targets themselves (after the controls, both of
+            # which keep the sign structure) so that a signed file needs no
+            # extra flag and an unsigned one behaves exactly as before. This is
+            # a Python bool, so every branch it guards resolves at trace time.
+            connectome_targets_signed = bool(np.any(np.asarray(weight_targets) < 0))
+            print(f'Connectome targets: {"signed (transmitter polarity constrained)" if connectome_targets_signed else "unsigned (magnitude only)"}')
             weight_targets = jnp.asarray(weight_targets)
 
         if config["ANNEAL_LR"]:
@@ -892,8 +903,19 @@ def make_train(config):
                     kernel = network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
                     network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = jnp.zeros_like(kernel)
                 elif config['CONNECTOME_INIT']:
-                    random_sign_mask = jax.random.randint(rng, weight_targets.shape, 0, 2) * 2 - 1.
-                    network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = weight_targets * random_sign_mask
+                    if connectome_targets_signed:
+                        # The targets already carry a transmitter sign, which is
+                        # what the loss now constrains — randomising the sign here
+                        # would start every inhibitory connection on the wrong side
+                        # of zero. rng is used without being split below, so
+                        # skipping that draw shifts nothing downstream.
+                        init_kernel = weight_targets
+                    else:
+                        # Unsigned targets are magnitudes only, so the sign is
+                        # genuinely unspecified; pick one at random per weight.
+                        random_sign_mask = jax.random.randint(rng, weight_targets.shape, 0, 2) * 2 - 1.
+                        init_kernel = weight_targets * random_sign_mask
+                    network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = init_kernel
 
             train_state = TrainState.create(
                 apply_fn=network.apply,
@@ -1074,12 +1096,14 @@ def make_train(config):
                             constraint_loss = connectome_constraint_loss_nonsorted(
                                 hh_weights, weight_targets,
                                 exclude_self_weights=config.get('EXCLUDE_SELF_WEIGHTS', False),
+                                signed_targets=connectome_targets_signed,
                             )
                         else:
                             hh_weights = params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
                             constraint_loss = connectome_constraint_loss(
                                 hh_weights, weight_targets, connectome_block_size,
                                 exclude_self_weights=config.get('EXCLUDE_SELF_WEIGHTS', False),
+                                signed_targets=connectome_targets_signed,
                             )
 
                         total_loss = (
