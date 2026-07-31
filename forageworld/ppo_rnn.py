@@ -142,9 +142,9 @@ def build_parser():
     parser.add_argument('--connectome_freeze_zeros', action=argparse.BooleanOptionalAction, default=False,
                         help="Freeze only the entries whose connectome target is zero at their initial values; non-zero-target entries train normally. Does not change the initialization on its own — combine with --connectome_init (or --connectome_zero_init) to control what values are frozen.")
     parser.add_argument('--connectome_randomize_targets', action=argparse.BooleanOptionalAction, default=False,
-                        help="Replace the loaded connectome targets with a randomized matrix that preserves the global zero fraction and the distribution of non-zero values; the seed for the shuffle is taken from --seed")
+                        help="Replace the loaded connectome targets with a randomized matrix that preserves the global zero fraction and the distribution of non-zero values; the seed for the shuffle is taken from --seed. Block-sorted to match the default loss, or left unsorted under --fixed_connectome_targets so the control matches that loss's target layout.")
     parser.add_argument('--connectome_uniform_targets', action=argparse.BooleanOptionalAction, default=False,
-                        help="Replace the loaded connectome targets with a matrix whose non-zero entries are drawn i.i.d. from Uniform(0, 1) at uniformly random positions, preserving only the count of non-zero entries. Composes with --connectome_init / --connectome_freeze / --connectome_freeze_zeros / --connectome_zero_init; if --connectome_randomize_targets is also set, the uniform replacement is applied after and effectively wins. Seed for the draw is taken from --seed.")
+                        help="Replace the loaded connectome targets with a matrix whose non-zero entries are drawn i.i.d. from Uniform(0, 1) at uniformly random positions, preserving only the count of non-zero entries. Composes with --connectome_init / --connectome_freeze / --connectome_freeze_zeros / --connectome_zero_init; if --connectome_randomize_targets is also set, the uniform replacement is applied after and effectively wins. Seed for the draw is taken from --seed. Block-sorted to match the default loss, or left unsorted under --fixed_connectome_targets so the control matches that loss's target layout.")
     parser.add_argument('--connectome_zero_init', action=argparse.BooleanOptionalAction, default=False,
                         help="Sanity-check init: set the constrained kernel to all zeros instead of the default initializer. Takes precedence over --connectome_init when both are set. Composes with --connectome_freeze / --connectome_freeze_zeros (which then freeze the zero-initialized kernel).")
     parser.add_argument('--exclude_self_weights', action=argparse.BooleanOptionalAction, default=False,
@@ -158,8 +158,9 @@ def build_parser():
                              "compared directly against target [i, j], a fixed per-weight target for the whole run, "
                              "instead of the default magnitude-sorted within-block pairing. The choice is resolved "
                              "at JIT trace time, so the toggle adds no runtime cost. Composes with "
-                             "--exclude_self_weights and the target-replacement options; incompatible with "
-                             "--no_connectome.")
+                             "--exclude_self_weights and the target-replacement options, which skip their "
+                             "within-block sort when this is set so the controls stay comparable to the "
+                             "unsorted targets; incompatible with --no_connectome.")
     parser.add_argument('--simple_network', action=argparse.BooleanOptionalAction, default=False, help='Use the simplified network architecture with no nonlinearity downstream of the RNN.')
     parser.add_argument('--simpler_network', action=argparse.BooleanOptionalAction, default=False,
                         help='Use an even simpler network architecture which also removes the FC layer upstream of the RNN.')
@@ -773,15 +774,26 @@ def make_train(config):
             connectome_block_size = 1
         else:
             weight_targets = load_connectome_constraints_cellstats(config['CONNECTOME_FILEPATH'])
-            # Downstream block size = number of units per post-synaptic cell type in the cellstats matrix
-            connectome_block_size = int(np.load(config['CONNECTOME_FILEPATH']).shape[3])
+            # Downstream block size = number of units per post-synaptic cell type in the cellstats matrix.
+            # mmap so this reads the .npy header only — the array itself was already
+            # materialized by the loader above and is multi-hundred-MB at level_3 x 16.
+            connectome_block_size = int(
+                np.load(config['CONNECTOME_FILEPATH'], mmap_mode='r').shape[3]
+            )
+            # --fixed_connectome_targets uses the per-weight loss, which does no
+            # within-block sorting. Block-sorting the control there would give it
+            # a monotonic structure the real targets lack, so the scramble would
+            # no longer be distributionally comparable to what it controls for.
+            sort_target_blocks = not config['FIXED_CONNECTOME_TARGETS']
             if config['CONNECTOME_RANDOMIZE_TARGETS']:
                 weight_targets = randomize_target_matrix(
-                    weight_targets, connectome_block_size, seed=config['SEED']
+                    weight_targets, connectome_block_size, seed=config['SEED'],
+                    sort_blocks=sort_target_blocks,
                 )
             if config['CONNECTOME_UNIFORM_TARGETS']:
                 weight_targets = uniform_random_target_matrix(
-                    weight_targets, connectome_block_size, seed=config['SEED']
+                    weight_targets, connectome_block_size, seed=config['SEED'],
+                    sort_blocks=sort_target_blocks,
                 )
             weight_targets = jnp.asarray(weight_targets)
 
@@ -803,10 +815,21 @@ def make_train(config):
             # resolves the labels against the actual param tree at tx.init /
             # tx.update time.
             def _freeze_labels(params):
-                return jax.tree_util.tree_map_with_path(
+                labels = jax.tree_util.tree_map_with_path(
                     lambda path, _: 'frozen' if tuple(p.key for p in path) == frozen_path else 'trainable',
                     params,
                 )
+                # frozen_path is hardcoded, so a model without a ScannedRNN (e.g.
+                # --no_memory) or a flax version that renames SimpleCell_1 would
+                # match nothing and silently train the whole network while
+                # reporting the connectome was frozen. Fail loudly instead.
+                if 'frozen' not in jax.tree_util.tree_leaves(labels):
+                    raise ValueError(
+                        f"--connectome_freeze found no parameter at {frozen_path}; "
+                        f"available paths: "
+                        f"{[tuple(p.key for p in path) for path, _ in jax.tree_util.tree_leaves_with_path(params)]}"
+                    )
+                return labels
 
             tx = optax.multi_transform(
                 {'trainable': tx, 'frozen': optax.set_to_zero()},

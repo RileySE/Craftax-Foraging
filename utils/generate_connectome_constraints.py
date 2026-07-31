@@ -1,19 +1,42 @@
-import sys
+import argparse
 
 import numpy as np
 import pandas as pd
-import sys
 
 # TODO this whole thing is kinda slow, can it be parallelized more?
 
-datafile_name = sys.argv[1]
-outfile_name = sys.argv[2]
-#pre_cell_type_field = 'pre_cell_type'
-#post_cell_type_field = 'post_cell_type'
-pre_cell_type_field = 'pre_level_3'
-post_cell_type_field = 'post_level_3'
+parser = argparse.ArgumentParser(
+    description='Generate a connectome constraint .npy from a synapse table.')
+parser.add_argument('datafile_name', help='Input CSV of pre/post cell pairs.')
+parser.add_argument('outfile_name', help='Output .npy path.')
+parser.add_argument(
+    '--cell_type_field', default='level_3',
+    help="Cell type column, without the pre_/post_ prefix: 'level_3' reads "
+         "pre_level_3/post_level_3, 'cell_type' reads pre_cell_type/post_cell_type. "
+         "(default: %(default)s)")
+parser.add_argument(
+    '--rnn_units_per_type', type=int, default=16,
+    help='RNN units to sample per cell type (default: %(default)s).')
+parser.add_argument(
+    '--sort_constraints', action=argparse.BooleanOptionalAction, default=True,
+    help='Sort each row of a block descending, which is the layout '
+         'connectome_constraint_loss assumes. Pass --no-sort_constraints only '
+         'for runs using ppo_rnn.py --fixed_connectome_targets, whose per-weight '
+         'loss does no within-block sorting. (default: sorted)')
+parser.add_argument('--seed', type=int, default=0,
+                    help='RNG seed (default: %(default)s).')
+args = parser.parse_args()
 
-sort_constraints = False
+datafile_name = args.datafile_name
+outfile_name = args.outfile_name
+pre_cell_type_field = 'pre_' + args.cell_type_field
+post_cell_type_field = 'post_' + args.cell_type_field
+rnn_units_per_type = args.rnn_units_per_type
+sort_constraints = args.sort_constraints
+
+# One Generator for the whole run, so the output is reproducible from --seed.
+rng = np.random.default_rng(args.seed)
+np.random.seed(args.seed)
 
 print('Loading CSV and parsing usable cell types...')
 data = pd.read_csv(datafile_name)
@@ -70,7 +93,6 @@ print('Sampling constraint distributions...')
 pre_n = 0
 post_n = 0
 # Sample from distributions to define constraints
-rnn_units_per_type = 16
 constraints = np.zeros((len(connection_counts_per_cell_per_type_pair.keys()), len(usable_cell_types), rnn_units_per_type, rnn_units_per_type),dtype=np.float32)
 pre_n = 0
 for pre_cell_type in connection_counts_per_cell_per_type_pair.keys():
@@ -93,10 +115,14 @@ for pre_cell_type in connection_counts_per_cell_per_type_pair.keys():
         for curr_unit in range(rnn_units_per_type):
             curr_nonzero_weights = np.random.choice(curr_syn_counts, (int(curr_count_dist[curr_unit]),))
             curr_constraints[curr_unit, :int(curr_count_dist[curr_unit])] = curr_nonzero_weights
-            # permute the order of the weights so each downstream neuron has the same odds of receiving input
-            curr_constraints[curr_unit] = np.random.default_rng().permutation(curr_constraints[curr_unit], axis=0)
         if sort_constraints:
             curr_constraints = np.flip(np.sort(curr_constraints, 1),1)
+        else:
+            # Permute the order of the weights so each downstream neuron has the
+            # same odds of receiving input. Skipped when sorting, which would
+            # discard the permutation anyway.
+            for curr_unit in range(rnn_units_per_type):
+                curr_constraints[curr_unit] = rng.permutation(curr_constraints[curr_unit], axis=0)
         constraints[pre_n][post_n] = curr_constraints
         post_n += 1
     pre_n += 1

@@ -17,6 +17,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Patch
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from forageworld.ppo_rnn import load_connectome_constraints_cellstats
+
 KERNEL_TAG = "/ScannedRNN_0/SimpleCell_1/h/kernel"
 TARGET_NPY = "cellstats_constraint_level1_test.npy"
 N_NEURONS_PLOT = 4
@@ -67,9 +70,13 @@ def main():
     )
     args = parser.parse_args()
 
-    target = np.load(args.target).squeeze()
+    # Use the training code's loader rather than re-deriving the layout: a
+    # cellstats matrix is (pre_type, post_type, pre_unit, post_unit) and needs
+    # its unit axes interleaved with their type axes. squeeze() only happened to
+    # work back when rnn_units_per_type was 1.
+    target = load_connectome_constraints_cellstats(args.target)
     if target.ndim != 2:
-        sys.exit(f"Target must be 2D after squeeze, got shape {target.shape}.")
+        sys.exit(f"Target must be 2D, got shape {target.shape}.")
 
     kernels = []
     for path in args.csv_files:

@@ -4,22 +4,29 @@ import jax.numpy as jnp
 import numpy as np
 
 
-def randomize_target_matrix(targets, block_size, seed=0):
+def randomize_target_matrix(targets, block_size, seed=0, sort_blocks=True):
     """Return a randomized target matrix preserving the zero fraction and the
     multiset of non-zero values from `targets`.
 
     The non-zero values are randomly redistributed across the matrix (shuffled
     without replacement), so the global fraction of zeros and the empirical
-    distribution of non-zero entries are preserved exactly. Each (row,
-    downstream-block) tile is then sorted in descending order to match the
-    pre-sorted convention used by ``connectome_constraint_loss``, making the
-    result a drop-in replacement for the original targets.
+    distribution of non-zero entries are preserved exactly. When
+    ``sort_blocks`` is True each (row, downstream-block) tile is then sorted in
+    descending order to match the pre-sorted convention used by
+    ``connectome_constraint_loss``, making the result a drop-in replacement for
+    the original targets.
 
     Args:
         targets: ``(n_rows, n_cols)`` array of non-negative target weights.
         block_size: number of columns per downstream block; must divide
-            ``n_cols``.
+            ``n_cols``. Unused when ``sort_blocks`` is False, but still
+            validated so a bad value is caught either way.
         seed: integer seed for the NumPy RNG used to shuffle the values.
+        sort_blocks: sort each tile descending (the layout
+            ``connectome_constraint_loss`` assumes). Pass False for
+            ``connectome_constraint_loss_nonsorted``, whose per-weight targets
+            are not block-sorted — sorting the control but not the experimental
+            condition would make the two distributionally incomparable.
 
     Returns:
         ``np.ndarray`` with the same shape and dtype as ``targets``.
@@ -35,6 +42,10 @@ def randomize_target_matrix(targets, block_size, seed=0):
 
     rng = np.random.default_rng(seed)
     shuffled = rng.permutation(arr.flatten()).reshape(arr.shape)
+    if not sort_blocks:
+        # The flat permutation already placed every value uniformly at random,
+        # so the unsorted result is a valid control on its own.
+        return shuffled.astype(arr.dtype, copy=False)
 
     # Sort each downstream block descending so the result respects the same
     # block-sorted invariant assumed by connectome_constraint_loss.
@@ -44,7 +55,7 @@ def randomize_target_matrix(targets, block_size, seed=0):
     return sorted_blocks.reshape(arr.shape).astype(arr.dtype, copy=False)
 
 
-def uniform_random_target_matrix(targets, block_size, seed=0):
+def uniform_random_target_matrix(targets, block_size, seed=0, sort_blocks=True):
     """Return a target matrix whose non-zero entries are i.i.d. samples from
     Uniform(0, 1), placed at uniformly random positions, with the same total
     number of non-zero entries as ``targets``.
@@ -52,17 +63,24 @@ def uniform_random_target_matrix(targets, block_size, seed=0):
     The global zero fraction is preserved exactly; unlike
     :func:`randomize_target_matrix`, the multiset of non-zero values is *not*
     preserved — values are freshly drawn from U(0, 1) rather than shuffled
-    from the original. Each (row, downstream-block) tile is then sorted in
-    descending order to match the convention used by
-    :func:`connectome_constraint_loss`, making the result a drop-in
-    replacement for the original targets.
+    from the original. When ``sort_blocks`` is True each (row,
+    downstream-block) tile is then sorted in descending order to match the
+    convention used by :func:`connectome_constraint_loss`, making the result a
+    drop-in replacement for the original targets.
 
     Args:
         targets: ``(n_rows, n_cols)`` array of non-negative target weights.
             Used only for shape, dtype, and the count of non-zero entries.
         block_size: number of columns per downstream block; must divide
-            ``n_cols``.
+            ``n_cols``. Unused when ``sort_blocks`` is False, but still
+            validated so a bad value is caught either way.
         seed: integer seed for the NumPy RNG.
+        sort_blocks: sort each tile descending (the layout
+            :func:`connectome_constraint_loss` assumes). Pass False for
+            :func:`connectome_constraint_loss_nonsorted`, whose per-weight
+            targets are not block-sorted — sorting the control but not the
+            experimental condition would make the two distributionally
+            incomparable.
 
     Returns:
         ``np.ndarray`` with the same shape and dtype as ``targets``.
@@ -91,6 +109,10 @@ def uniform_random_target_matrix(targets, block_size, seed=0):
         values[zero_idx] = rng.random(zero_idx.size).astype(arr.dtype)
     flat[positions] = values
     new_mat = flat.reshape(arr.shape)
+    if not sort_blocks:
+        # Positions were already drawn uniformly at random, so the unsorted
+        # result is a valid control on its own.
+        return new_mat.astype(arr.dtype, copy=False)
 
     n_blocks = n_cols // block_size
     blocked = new_mat.reshape(n_rows, n_blocks, block_size)
