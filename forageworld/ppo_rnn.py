@@ -26,6 +26,29 @@ if os.environ.get("_PPO_RNN_MASKED_CUDA_DEVICES") == os.environ["CUDA_VISIBLE_DE
 else:
     JAX_DEVICE_INDEX = _gpu_id
 
+# Work around an XLA (jaxlib 0.4.33) codegen bug that aborts the process while
+# compiling the training step. XLA's Triton GEMM autotuner rewrites some of the
+# Dense weight-gradient dots in the minibatch update loop with split-K, i.e.
+# into [split_k, M, N] partial sums plus a reduce over dim 0. Those dots have a
+# transposed output layout, so the partial-sums tensor is non-monotonic
+# (f32[4,517,517]{1,2,0}); when the split-K reduce then gets multi-output-fused
+# with the sum-of-squares reduce that optax.clip_by_global_norm emits, the
+# fusion becomes kInput and the GPU reduction emitter CHECK-fails with
+# "reduction-layout-normalizer must run before code generation" (an abort(),
+# not a catchable exception). Which dots get split-K depends on the minibatch
+# shape, so whether a run hits this depends on --num_envs / --num_env_steps /
+# --num_minibatches / --layer_size: --num_envs 256 aborts while 1024 happens to
+# survive (it builds the same transposed split-K reduces, they just land in
+# layout-agnostic kLoop fusions). Disabling split-K autotuning removes the
+# rewrite entirely; on the 1024-env config it measured within noise of the
+# default. XLA_FLAGS must be set before JAX initializes its backend, and an
+# explicit setting from the environment wins.
+_xla_flags = os.environ.get("XLA_FLAGS", "")
+if "xla_gpu_enable_split_k_autotuning" not in _xla_flags:
+    os.environ["XLA_FLAGS"] = (
+        _xla_flags + " --xla_gpu_enable_split_k_autotuning=false"
+    ).strip()
+
 import random
 from math import ceil, sqrt
 from functools import partial
@@ -206,6 +229,13 @@ def build_parser():
                              "ever needs the latest checkpoint, so the default of 1 keeps a run's checkpoint "
                              "footprint constant (~the size of one compressed checkpoint) regardless of run length. "
                              "0 keeps all checkpoints (e.g. to later branch runs from intermediate states).")
+    parser.add_argument('--final_checkpoint', action=argparse.BooleanOptionalAction, default=True,
+                        help="Write a training checkpoint once the last training iteration completes (before the "
+                             "final logging/validation pass), so a finished run leaves behind the state needed to "
+                             "fine-tune or branch from it with --resume_from. Independent of --checkpoint_interval: "
+                             "a run with periodic checkpointing disabled still gets this one. Subject to "
+                             "--checkpoint_keep, so with the default keep of 1 it is the only checkpoint left on "
+                             "disk when the run ends.")
     parser.add_argument('--resume_from', type=str, default=None,
                         help="Path to a checkpoint_<step>.pkl.gz written by a previous run. The full training state "
                              "(all repeats) is restored and training resumes exactly where the checkpoint left off, "
@@ -1529,36 +1559,39 @@ def make_train(config):
                 update_step,
             )
 
+        # Log model weights. Called on the periodic logging cadence from
+        # _update_plot, and once more from finish so the fully trained weights
+        # land on disk next to the final logs.
+        def save_weights_callback(weights, iter):
+            weights_flat = jax.tree.flatten(weights)
+            run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
+            os.makedirs(run_out_path, exist_ok=True)
+            # Written gzip-compressed to save disk space; the formatted weight
+            # text compresses well and compresslevel=1 keeps the CPU overhead low.
+            weight_filename = os.path.join(run_out_path, 'weights_fromto_{}.csv.gz'.format(iter))
+            weights_params = weights['params']
+
+            with gzip.open(weight_filename, 'wt', compresslevel=1) as weight_file:
+                def save_weight_dict(curr_value, key_string=''):
+                    if type(curr_value) != dict:
+                        #why was this getting transposed? We want from-to ordering, not to-from
+                        #np.savetxt(weight_file, np.transpose(curr_value), delimiter=',', fmt='%f', header=key_string)
+                        np.savetxt(weight_file, curr_value, delimiter=',', fmt='%f', header=key_string)
+                        return True
+                    else:
+                        for key in curr_value.keys():
+                            save_weight_dict(curr_value[key], key_string + '/' + key)
+                    return True
+
+                save_weight_dict(weights_params)
+
+            print('Saving weights in file', weight_filename)
+
+
         # Func to interleave update steps and plotting
         def _update_plot(runner_state, unused):
 
             # Log model weights
-            def save_weights_callback(weights, iter):
-                weights_flat = jax.tree.flatten(weights)
-                run_out_path = os.path.join(config['OUTPUT_PATH'], wandb.run.id)
-                os.makedirs(run_out_path, exist_ok=True)
-                # Written gzip-compressed to save disk space; the formatted weight
-                # text compresses well and compresslevel=1 keeps the CPU overhead low.
-                weight_filename = os.path.join(run_out_path, 'weights_fromto_{}.csv.gz'.format(iter))
-                weights_params = weights['params']
-
-                with gzip.open(weight_filename, 'wt', compresslevel=1) as weight_file:
-                    def save_weight_dict(curr_value, key_string=''):
-                        if type(curr_value) != dict:
-                            #why was this getting transposed? We want from-to ordering, not to-from
-                            #np.savetxt(weight_file, np.transpose(curr_value), delimiter=',', fmt='%f', header=key_string)
-                            np.savetxt(weight_file, curr_value, delimiter=',', fmt='%f', header=key_string)
-                            return True
-                        else:
-                            for key in curr_value.keys():
-                                save_weight_dict(curr_value[key], key_string + '/' + key)
-                        return True
-
-                    save_weight_dict(weights_params)
-
-                print('Saving weights in file', weight_filename)
-
-
             jax.debug.callback(save_weights_callback, runner_state[0].params, runner_state[-1], ordered=True)
 
             # RNN gradient-propagation probe, on the same cadence as the other
@@ -1586,6 +1619,12 @@ def make_train(config):
             return _update_plot(runner_state, None)
 
         def finish(runner_state):
+            # Final weight dump so the fully trained network is on disk for
+            # downstream analysis. _update_plot writes the weights before each
+            # iteration's updates, so without this the last iteration's updates
+            # would only ever exist inside the final checkpoint.
+            jax.debug.callback(save_weights_callback, runner_state[0].params, runner_state[-1], ordered=True)
+
             # Final logging step so the last training iterations are captured in
             # the logs. _update_plot logs before each update, so without this the
             # updates from the final iteration would never be logged.
@@ -1736,6 +1775,16 @@ def run_ppo(config, checkpoint=None):
         runner_state, metric = step_jit(runner_state)
         metrics.append(metric)
 
+    # Final checkpoint: the loop carry at the end of the last training
+    # iteration, i.e. the state --resume_from needs to continue (or fine-tune)
+    # from a finished run. Written before finish() so that resuming from it
+    # replays the final logging/validation rollouts on exactly the state the
+    # original run fed them, and independently of --checkpoint_interval so a
+    # run that skips periodic checkpoints still leaves its trained weights
+    # behind.
+    if config.get("FINAL_CHECKPOINT", True):
+        _write_checkpoint(runner_state, num_outer_iters)
+
     runner_state = finish_jit(runner_state)
     out = {
         "runner_state": runner_state,
@@ -1861,13 +1910,17 @@ if __name__ == "__main__":
         wandb.config.update(
             {"WANDB_RESUME_STEP0": int(wandb.run.step)}, allow_val_change=True
         )
-        # A resumed wandb.Config rejects value changes on item assignment, but
-        # make_train writes derived keys (NUM_UPDATES, MINIBATCH_SIZE, ...)
-        # into its config — which can legitimately change, e.g. when resuming
-        # with an extended --total_timesteps. Hand run_ppo a plain-dict copy
-        # so those writes don't trip wandb's immutability; the wandb UI keeps
-        # the original run's derived values, which only differ if the resume
-        # explicitly overrode the settings they derive from.
+
+    if checkpoint is not None:
+        # wandb.Config rejects item assignment that changes an existing value,
+        # and a resumed config already carries the derived keys (NUM_UPDATES,
+        # MINIBATCH_SIZE, ...) the checkpoint stored — which make_train
+        # recomputes and writes back, and which legitimately change whenever
+        # the resume overrides what they derive from (fine-tuning a finished
+        # run from its final checkpoint with an extended --total_timesteps is
+        # exactly that). Hand run_ppo a plain-dict copy so those writes don't
+        # trip wandb's immutability; the wandb UI keeps the original run's
+        # derived values.
         run_config = dict(wandb.config)
     else:
         run_config = wandb.config
