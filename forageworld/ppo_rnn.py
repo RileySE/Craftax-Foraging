@@ -170,6 +170,14 @@ def build_parser():
                         help="Replace the loaded connectome targets with a matrix whose non-zero entries are drawn i.i.d. from Uniform(0, 1) at uniformly random positions, preserving only the count of non-zero entries. Composes with --connectome_init / --connectome_freeze / --connectome_freeze_zeros / --connectome_zero_init; if --connectome_randomize_targets is also set, the uniform replacement is applied after and effectively wins. Seed for the draw is taken from --seed. Block-sorted to match the default loss, or left unsorted under --fixed_connectome_targets so the control matches that loss's target layout.")
     parser.add_argument('--connectome_zero_init', action=argparse.BooleanOptionalAction, default=False,
                         help="Sanity-check init: set the constrained kernel to all zeros instead of the default initializer. Takes precedence over --connectome_init when both are set. Composes with --connectome_freeze / --connectome_freeze_zeros (which then freeze the zero-initialized kernel).")
+    parser.add_argument('--no_init_diags', action=argparse.BooleanOptionalAction, default=False,
+                        help="Leave the diagonal (each unit's self weight) of the RNN hidden-to-hidden kernel out "
+                             "of the manual connectome initialization: the off-diagonal entries are overwritten by "
+                             "--connectome_init / --connectome_zero_init as usual, while the diagonal keeps the "
+                             "value drawn by --rnn_hidden_initializer (orthogonal / normal / uniform). Only affects "
+                             "initialization - it does not change the constraint loss (see --exclude_self_weights "
+                             "for that) or which weights train. Requires --connectome_init or "
+                             "--connectome_zero_init, since it has nothing to modify otherwise.")
     parser.add_argument('--exclude_self_weights', action=argparse.BooleanOptionalAction, default=False,
                         help="Exclude each unit's self weight (the diagonal of the RNN hidden-to-hidden kernel) from "
                              "the connectome constraint loss: the diagonal is zeroed before the block-sorted "
@@ -282,6 +290,7 @@ def parse_args():
                 'connectome_freeze', 'connectome_freeze_zeros',
                 'connectome_randomize_targets', 'connectome_uniform_targets',
                 'exclude_self_weights', 'fixed_connectome_targets',
+                'no_init_diags',
             ) if getattr(args, name)
         ]
         if incompatible:
@@ -289,6 +298,10 @@ def parse_args():
                 "--no_connectome is incompatible with: "
                 + ", ".join(f"--{n}" for n in incompatible)
             )
+    if args.no_init_diags and not (args.connectome_init or args.connectome_zero_init):
+        parser.error("--no_init_diags requires --connectome_init or --connectome_zero_init; it only changes "
+                     "which entries those manual initializations overwrite, so on its own it does nothing "
+                     "(the diagonal already comes from --rnn_hidden_initializer)")
     return args
 
 
@@ -336,8 +349,10 @@ def get_rnn_hidden_initializer(name):
     recurrent_kernel_init). The special manual initializations
     (--connectome_init / --connectome_zero_init) are applied after
     network.init and overwrite the recurrent kernel, so they take precedence
-    over whatever this picks. 'orthogonal' reproduces flax's default, so the
-    default option leaves initialization unchanged.
+    over whatever this picks - except under --no_init_diags, which leaves the
+    kernel's diagonal at the value this initializer drew. 'orthogonal'
+    reproduces flax's default, so the default option leaves initialization
+    unchanged.
     """
     initializers = {
         'orthogonal': orthogonal(),
@@ -929,9 +944,10 @@ def make_train(config):
             network_params = network.init(_rng, init_hstate, init_x)
 
             if not config['NO_CONNECTOME']:
+                kernel = network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
+                init_kernel = None
                 if config['CONNECTOME_ZERO_INIT']:
-                    kernel = network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
-                    network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = jnp.zeros_like(kernel)
+                    init_kernel = jnp.zeros_like(kernel)
                 elif config['CONNECTOME_INIT']:
                     if connectome_targets_signed:
                         # The targets already carry a transmitter sign, which is
@@ -945,6 +961,16 @@ def make_train(config):
                         # genuinely unspecified; pick one at random per weight.
                         random_sign_mask = jax.random.randint(rng, weight_targets.shape, 0, 2) * 2 - 1.
                         init_kernel = weight_targets * random_sign_mask
+                if init_kernel is not None:
+                    if config.get('NO_INIT_DIAGS', False):
+                        # Keep each unit's self weight as drawn by
+                        # --rnn_hidden_initializer (network.init above) and
+                        # overwrite only the off-diagonal entries. The rng draw
+                        # in the unsigned branch still happens over the full
+                        # matrix, so toggling this leaves the rng stream, and
+                        # therefore everything downstream, untouched.
+                        diag = jnp.eye(kernel.shape[0], kernel.shape[1], dtype=bool)
+                        init_kernel = jnp.where(diag, kernel, init_kernel)
                     network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel'] = init_kernel
 
             train_state = TrainState.create(
