@@ -1030,8 +1030,12 @@ def make_train(config):
                      _rng, env_state, action, env_params
                 )
 
-                # Compute distance to origin for aux loss
-                starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
+                # Compute distance to origin for aux loss. player_starting_position
+                # holds one (2,) coordinate per env, not one per level, so indexing
+                # it with player_level indexed the ENV axis: every env was handed
+                # env 0's starting position. Invisible while --random_start is off
+                # (all envs then start at the map centre), wrong as soon as it is on.
+                starting_pos = env_state.env_state.player_starting_position
                 # dists_to_start = jnp.linalg.norm(env_state.player_position - starting_pos, ord=1, axis=-1)
                 deltas_to_start = env_state.env_state.player_position - starting_pos
 
@@ -1323,8 +1327,9 @@ def make_train(config):
                 _rng, env_state, action, env_params
             )
 
-            # Compute distance to origin for aux loss
-            starting_pos = env_state.env_state.player_starting_position[env_state.env_state.player_level]
+            # Compute distance to origin for aux loss. Per-env starting position,
+            # not indexed by player_level — see the note in _env_step.
+            starting_pos = env_state.env_state.player_starting_position
             deltas_to_start = env_state.env_state.player_position - starting_pos
 
             # Add hstate and other non-env metrics to info so they can be logged
@@ -1351,6 +1356,10 @@ def make_train(config):
 
             # Do one "step" of logging, writing the result to a file.
             # Several steps can be run in series using --logging_steps_per_viz to do long rollouts without hitting memory limits
+
+        # Log files this process has already written to. The first write of a
+        # leg truncates its file and later writes append; see open_log_file.
+        started_log_files = set()
 
         def _logging_step(runner_state, unused, logging_threads):
             # Visualization rollouts
@@ -1389,11 +1398,27 @@ def make_train(config):
                 for key in header_field_names:
                     scalar_file_header += ',' + key
 
-                # np.savetxt writes straight to an open append-mode handle, so the
-                # old temp-file round-trip (write temp -> read back -> append) is
-                # unnecessary. Each logging step appends one new chunk; for the
+                # np.savetxt writes straight to an open file handle, so the old
+                # temp-file round-trip (write temp -> read back -> append) is
+                # unnecessary. Each logging step adds one more chunk; for the
                 # gzipped hstates that chunk is a new gzip member, and concatenated
                 # members decompress transparently (gzip/zcat/pandas/np.loadtxt).
+                # The first write this process makes to a file truncates it and
+                # every later one appends: a leg resumed from a checkpoint replays
+                # the logging rollout that the checkpoint was taken just before,
+                # so appending unconditionally would leave the previous leg's
+                # files holding a second copy of that identical rollout (and, if
+                # the previous leg died mid-rollout, a truncated partial copy in
+                # front of it).
+                def open_log_file(filename, gzipped):
+                    seen = filename in started_log_files
+                    started_log_files.add(filename)
+                    if gzipped:
+                        return gzip.open(
+                            filename, 'at' if seen else 'wt', compresslevel=1
+                        )
+                    return open(filename, 'a' if seen else 'w')
+
                 for i in range(logging_threads):
                     # The hstate files are large/expensive; skip them when
                     # --no_hidden_state_csv is passed. The scalar files below
@@ -1405,12 +1430,12 @@ def make_train(config):
                         # '%.18e', cutting both formatting cost and file size.
                         # compresslevel=1 keeps gzip CPU low; the float text still
                         # compresses well.
-                        with gzip.open(out_filename_hstates, 'at', compresslevel=1) as out_file_hstates:
+                        with open_log_file(out_filename_hstates, True) as out_file_hstates:
                             np.savetxt(out_file_hstates, hstate[:, i, :], delimiter=',', fmt='%.6e')
                         print('Writing log file', out_filename_hstates)
                     # Then do the same thing for the scalars (plaintext, uncompressed)
                     out_filename_scalars = os.path.join(run_out_path, 'scalars_{}_{}.csv'.format(increment, i))
-                    with open(out_filename_scalars, 'a') as out_file_scalars:
+                    with open_log_file(out_filename_scalars, False) as out_file_scalars:
                         np.savetxt(out_file_scalars, scalars[:, i, :], delimiter=',', fmt='%f',
                                    header=scalar_file_header)
                     print('Writing log file', out_filename_scalars)
@@ -1448,7 +1473,13 @@ def make_train(config):
                 hidden_states_to_log = hidden_states[:, :logging_threads, :]
             # write_rnn_hstate always logs the (cheap) scalar CSVs and only
             # writes the (large) hstate CSVs when --no_hidden_state_csv is unset.
-            jax.debug.callback(write_rnn_hstate, hidden_states_to_log, scalars_to_log, update_step)
+            # ordered=True: the chunks of a logging phase are appended to one
+            # file in the order they are produced, and the first of them
+            # truncates it, so they have to reach the host in program order.
+            jax.debug.callback(
+                write_rnn_hstate, hidden_states_to_log, scalars_to_log, update_step,
+                ordered=True,
+            )
 
             return runner_state, None
 
@@ -1625,12 +1656,52 @@ def make_train(config):
             if do_grad_viz:
                 runner_state = _grad_viz(runner_state)
 
-            # First, log things (so we have logs for the untrained network)
-            runner_state, empty = jax.lax.scan(
-                partial(_logging_step, logging_threads = config["LOGGING_THREADS_PER_VIZ"]), runner_state, None, config['LOGGING_STEPS_PER_VIZ']
+            # First, log things (so we have logs for the untrained network).
+            # The logging rollout runs on a BRANCH of the training carry: it
+            # starts from the current env/hidden state, but its advanced state is
+            # discarded and training continues from exactly where it left off.
+            # When the carry was shared, training resumed each iteration from an
+            # env/hidden state that had been rolled LOGGING_STEPS_PER_VIZ *
+            # STEPS_PER_VIZ steps forward under frozen parameters, which showed
+            # up as a spike in the auxiliary (displacement-prediction) loss on
+            # the first update of every iteration, decaying over the next ~10-30
+            # updates. Branching also stops the logging rollout from consuming
+            # environment steps that no update ever trains on.
+            (
+                train_state,
+                env_state,
+                last_obs,
+                last_done,
+                hstate,
+                rng,
+                update_step,
+            ) = runner_state
+            # The branch gets its own rng so the discarded rollout does not
+            # replay the same action-sampling keys the training rollout uses.
+            rng, viz_rng = jax.random.split(rng)
+            viz_runner_state = (
+                train_state,
+                env_state,
+                last_obs,
+                last_done,
+                hstate,
+                viz_rng,
+                update_step,
+            )
+            viz_runner_state, empty = jax.lax.scan(
+                partial(_logging_step, logging_threads = config["LOGGING_THREADS_PER_VIZ"]), viz_runner_state, None, config['LOGGING_STEPS_PER_VIZ']
             )
 
-            # Then update
+            # Then update, from the pre-logging carry
+            runner_state = (
+                train_state,
+                env_state,
+                last_obs,
+                last_done,
+                hstate,
+                rng,
+                update_step,
+            )
             runner_state, metric = jax.lax.scan(
                 _update_step, runner_state, None, config["UPDATES_PER_VIZ"]
             )

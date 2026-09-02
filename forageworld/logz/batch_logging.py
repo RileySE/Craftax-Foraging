@@ -132,4 +132,9 @@ def batch_log(update_step, log, config):
 
         resumable_wandb_log(agg_logs, update_step, config)
 
+        # This step is fully logged; drop its buffer. Without this, batch_logs
+        # keeps one entry per update for the lifetime of the process, which on a
+        # long run is tens of thousands of dicts of held-onto metric arrays.
+        del batch_logs[update_step]
+
 
