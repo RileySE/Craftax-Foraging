@@ -107,9 +107,9 @@ def build_parser():
     parser.add_argument("--env_name", type=str, default="Craftax-Symbolic-v1", help="Environment name")
     parser.add_argument("--sparse_alg", type=str, default="magnitude", help="options, magnitude, no_prune, saliency, random")
     parser.add_argument("--gpu_id", type=int, default=0, help="GPU ID")
-    parser.add_argument("--predators", type=bool, default=True, help="Use predators")
+    parser.add_argument("--predators", action=argparse.BooleanOptionalAction, default=True, help="Use predators")
     parser.add_argument("--sparsity", type=float, default=0.4, help="Sparsity value")
-    parser.add_argument("--max_cows", type=int, default=72, help="Maximum number of cows that can exist at a time")
+    parser.add_argument("--max_cows", type=int, default=108, help="Maximum number of cows that can exist at a time")
     parser.add_argument("--num_envs", type=int, default=1024, help="Number of environments")
     parser.add_argument("--total_timesteps", type=float, default=3e9, help="Total timesteps")
     parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
@@ -685,8 +685,7 @@ def make_train(config):
         static_params.reward_func = 'vanilla'
     if config['FEATURELESS_WORLD']:
         static_params.featureless_world = True
-    if config['PREDATORS']:
-        static_params.predators = True
+    static_params.predators = config['PREDATORS']
     if config['RANDOM_START']:
         static_params.random_start = True
     static_params.map_size = (config['MAP_SIZE'],config['MAP_SIZE'])

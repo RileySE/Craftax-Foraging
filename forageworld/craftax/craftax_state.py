@@ -137,14 +137,14 @@ class StaticEnvParams:
     reward_func: str = 'foraging'
     map_type: str = 'normal'
     featureless_world: bool = False
-    predators: bool = False
+    predators: bool = True
     directional_vision: bool = False
     random_start : bool = False
 
     # Mobs
     # HACK: Doubled to 18 for patch depletion stuff
     # TODO make passive max scale with arena size to maintain constant density
-    max_passive_mobs: int = 72
+    max_passive_mobs: int = 108
     max_growing_plants: int = 30
     max_mob_projectiles: int = 3
     max_player_projectiles: int = 3
