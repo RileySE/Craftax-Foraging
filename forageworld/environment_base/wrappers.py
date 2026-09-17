@@ -10,6 +10,7 @@ from functools import partial
 from typing import Optional, Tuple, Union, Any
 from gymnax.environments import environment, spaces
 
+from forageworld.craftax.constants import OBS_DIM
 from forageworld.craftax.renderer import render_craftax_pixels
 
 
@@ -45,10 +46,17 @@ class BatchEnvWrapper(GymnaxWrapper):
         return obs, env_state
 
     @partial(jax.jit, static_argnums=(0, 4))
-    def step(self, rng, state, action, params=None):
+    def step(self, rng, state, action, params=None, reset_rng=None):
         rng, _rng = jax.random.split(rng)
         rngs = jax.random.split(_rng, self.num_envs)
-        obs, state, reward, done, info = self.step_fn(rngs, state, action, params)
+        if reset_rng is None:
+            obs, state, reward, done, info = self.step_fn(rngs, state, action, params)
+        else:
+            # Per-env reset keys for a wrapped AutoResetEnvWrapper.
+            reset_rngs = jax.random.split(reset_rng, self.num_envs)
+            obs, state, reward, done, info = jax.vmap(
+                self._env.step, in_axes=(0, 0, 0, None, 0)
+            )(rngs, state, action, params, reset_rngs)
 
         return obs, state, reward, done, info
 
@@ -66,13 +74,18 @@ class AutoResetEnvWrapper(GymnaxWrapper):
         return self._env.reset(key, params)
 
     @partial(jax.jit, static_argnums=(0, 4))
-    def step(self, rng, state, action, params=None):
+    def step(self, rng, state, action, params=None, reset_rng=None):
+        """reset_rng, if given, is the key for the reset state (and so the map)
+        instead of a key split from rng, keeping map generation off the
+        action/dynamics RNG stream."""
         rng, _rng = jax.random.split(rng)
         obs_st, state_st, reward, done, info = self._env.step(
             _rng, state, action, params
         )
 
         rng, _rng = jax.random.split(rng)
+        if reset_rng is not None:
+            _rng = reset_rng
         obs_re, state_re = self._env.reset(_rng, params)
 
         # Auto-reset environment based on termination
@@ -120,12 +133,17 @@ class OptimisticResetVecEnvWrapper(GymnaxWrapper):
         return obs, env_state
 
     @partial(jax.jit, static_argnums=(0, 4))
-    def step(self, rng, state, action, params=None):
+    def step(self, rng, state, action, params=None, reset_rng=None):
+        """reset_rng, if given, is the key for this step's reset states (and so
+        the maps) instead of a key split from rng, keeping map generation off
+        the action/dynamics RNG stream."""
         rng, _rng = jax.random.split(rng)
         rngs = jax.random.split(_rng, self.num_envs)
         obs_st, state_st, reward, done, info = self.step_fn(rngs, state, action, params)
 
         rng, _rng = jax.random.split(rng)
+        if reset_rng is not None:
+            _rng = reset_rng
         rngs = jax.random.split(_rng, self.num_resets)
         obs_re, state_re = self.reset_fn(rngs, params)
 
@@ -287,6 +305,14 @@ class EpisodeInfoWrapper(LogWrapper):
         info['light_level'] = env_state.light_level
         # TODO why is this an array? It's supposed to be an int...
         info['episode_id'] = env_state.env_id.squeeze()
+        info['map_seed'] = env_state.map_seed
+
+        # The agent sees an OBS_DIM window centred on itself, OBS_DIM[0] rows by
+        # OBS_DIM[1] columns, so a mob is on screen within +-(OBS_DIM[0] // 2) on
+        # axis 0 and +-(OBS_DIM[1] // 2) on axis 1. Taken from OBS_DIM rather
+        # than written out, because the two bounds differ (9 x 11) and are easy
+        # to swap.
+        on_screen_rows, on_screen_cols = OBS_DIM[0] // 2, OBS_DIM[1] // 2
 
         melee_pos = env_state.melee_mobs.position[env_state.player_level]
         melee_mask = env_state.melee_mobs.mask[env_state.player_level]
@@ -295,8 +321,8 @@ class EpisodeInfoWrapper(LogWrapper):
         dists_to_melee = jnp.where(melee_mask, dists_to_melee, jnp.inf)
         closest_melee_idx = jnp.argmin(dists_to_melee)
         closest_melee_dist_xy = env_state.player_position - melee_pos[closest_melee_idx]
-        melee_on_screen = jnp.logical_and(jnp.abs(closest_melee_dist_xy[0]) <= 5,
-                                          jnp.abs(closest_melee_dist_xy[1]) <= 4)
+        melee_on_screen = jnp.logical_and(jnp.abs(closest_melee_dist_xy[0]) <= on_screen_rows,
+                                          jnp.abs(closest_melee_dist_xy[1]) <= on_screen_cols)
         melee_on_screen = jnp.logical_and(melee_on_screen, melee_mask[closest_melee_idx])
         dist_to_melee = dists_to_melee[closest_melee_idx]
 
@@ -307,8 +333,8 @@ class EpisodeInfoWrapper(LogWrapper):
         dists_to_passive = jnp.where(passive_mask, dists_to_passive, jnp.inf)
         closest_passive_idx = jnp.argmin(dists_to_passive)
         closest_passive_dist_xy = env_state.player_position - passive_pos[closest_passive_idx]
-        passive_on_screen = jnp.logical_and(jnp.abs(closest_passive_dist_xy[0]) <= 5,
-                                            jnp.abs(closest_passive_dist_xy[1]) <= 4)
+        passive_on_screen = jnp.logical_and(jnp.abs(closest_passive_dist_xy[0]) <= on_screen_rows,
+                                            jnp.abs(closest_passive_dist_xy[1]) <= on_screen_cols)
         passive_on_screen = jnp.logical_and(passive_on_screen, passive_mask[closest_passive_idx])
         dist_to_passive = dists_to_passive[closest_passive_idx]
 
@@ -319,7 +345,8 @@ class EpisodeInfoWrapper(LogWrapper):
         dists_to_ranged = jnp.where(ranged_mask, dists_to_ranged, jnp.inf)
         closest_ranged_idx = jnp.argmin(dists_to_ranged)
         closest_ranged_dist_xy = env_state.player_position - ranged_pos[closest_ranged_idx]
-        ranged_on_screen = jnp.logical_and(jnp.abs(closest_ranged_dist_xy[0]) <= 5, jnp.abs(closest_ranged_dist_xy[1]) <= 4)
+        ranged_on_screen = jnp.logical_and(jnp.abs(closest_ranged_dist_xy[0]) <= on_screen_rows,
+                                           jnp.abs(closest_ranged_dist_xy[1]) <= on_screen_cols)
         ranged_on_screen = jnp.logical_and(ranged_on_screen, ranged_mask[closest_ranged_idx])
         dist_to_ranged = dists_to_ranged[closest_ranged_idx]
 
@@ -488,8 +515,9 @@ class FastVideoWrapper(GymnaxWrapper):
         state,
         action: Union[int, float],
         params: Optional[environment.EnvParams] = None,
+        reset_rng: Optional[chex.PRNGKey] = None,
     ):
-        obs, state, reward, done, info = self._env.step(key, state, action, params)
+        obs, state, reward, done, info = self._env.step(key, state, action, params, reset_rng)
 
         if self.do_videos:
             # The wrapped env may be LogWrapped; drill through to the raw env

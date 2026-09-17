@@ -78,6 +78,7 @@ import functools
 from ml_collections import ConfigDict
 
 from forageworld.craftax import craftax_state
+from forageworld.craftax.world_gen.world_gen import MAP_SEED_BOUND
 from forageworld.environment_base.wrappers import (
     LogWrapper,
     OptimisticResetVecEnvWrapper,
@@ -103,6 +104,15 @@ def build_parser():
     parser = argparse.ArgumentParser(description="Run sparsity PPO.")
     parser.add_argument("--prune_step", type=int, default=20000, help="Step to prune")
     parser.add_argument('--featureless_world', action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument('--stripped_world', action=argparse.BooleanOptionalAction, default=False,
+                        help="Replace level 0's map with a minimal world for isolated evaluation: nothing but grass, "
+                             "one water tile, one cow and one predator, each placed uniformly at random (levels 1-8 "
+                             "are left as generated, being legacy and unused). Nothing spawns or respawns in it, and "
+                             "the predator never despawns, so the world stays exactly as generated apart from what "
+                             "the agent does to it; --predators therefore defaults to off here (pass it explicitly to "
+                             "override). Takes precedence over --featureless_world. Other env flags (--map_size, "
+                             "--random_start, --directional_vision, --replay_map_seed, ...) apply as usual. Intended "
+                             "for evaluating a trained agent, e.g. via this entrypoint with --lr 0, not for training.")
     parser.add_argument("--run_name", type=str, default="default_run", help="Name of the run")
     parser.add_argument("--env_name", type=str, default="Craftax-Symbolic-v1", help="Environment name")
     parser.add_argument("--sparse_alg", type=str, default="magnitude", help="options, magnitude, no_prune, saliency, random")
@@ -130,6 +140,19 @@ def build_parser():
     parser.add_argument("--jit", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--action_in_obs', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--seed", type=int, default=np.random.randint(2 ** 31), help="Random seed")
+    parser.add_argument("--env_seed", type=int, default=None,
+                        help="Seed for the map-generation RNG stream, which is separate from the agent's RNG stream "
+                             "(network init, action sampling, minibatch shuffling, in-episode env dynamics): holding "
+                             "--env_seed fixed while varying --seed keeps the sequence of generated maps the same. "
+                             "Defaults to --seed. The seed of each episode's map is logged in the map_seed column "
+                             "of the scalar CSVs; see --replay_map_seed.")
+    parser.add_argument("--replay_map_seed", type=int, default=None,
+                        help="Generate every map (training, logging and validation, in every env) from this map "
+                             "seed, i.e. a value from the map_seed column of the scalar CSVs, to reproduce that "
+                             "episode's starting world. Only the map is reproduced: the agent and the in-episode "
+                             "dynamics (mob spawns, etc.) still vary. The world also depends on the map-shaping "
+                             "flags (--map_size, --featureless_world, --random_start, --max_cows, --env_name), so "
+                             "pass the same values the logged run used.")
     parser.add_argument("--use_wandb", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save_policy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--num_repeats", type=int, default=1, help="Number of repeats")
@@ -283,6 +306,17 @@ def parse_args():
                      "the checkpoint)")
     if args.grad_viz_steps > 0 and args.grad_viz_envs < 1:
         parser.error("--grad_viz_envs must be >= 1 when the gradient probe is enabled")
+    if args.stripped_world and 'predators' not in parse_explicit_args():
+        # Nothing spawns in the stripped world anyway (spawning needs a PATH
+        # tile and it has none), but this keeps the reported config honest
+        # about there being no predators beyond the one that is placed.
+        args.predators = False
+    if args.env_seed is None:
+        # Resolved here rather than at use so the effective value is recorded
+        # in the run config.
+        args.env_seed = args.seed
+    if args.replay_map_seed is not None and not 0 <= args.replay_map_seed < MAP_SEED_BOUND:
+        parser.error("--replay_map_seed must be in [0, {}), the range map seeds are drawn from".format(MAP_SEED_BOUND))
     if args.no_connectome:
         incompatible = [
             name for name in (
@@ -339,6 +373,34 @@ def find_latest_checkpoint(output_path):
             continue
         candidates.append((step, os.path.getmtime(path), path))
     return max(candidates)[2] if candidates else None
+
+
+# fold_in tag separating the map-generation RNG stream from the agent's stream
+# when both come from the same seed. Deliberately huge: fold_in(key, 1) equals
+# jax.random.split(key, 1)[0], and under jax_threefry_partitionable
+# split(key, n)[i] equals fold_in(key, i), so a small tag could hand the map
+# stream the same key as the agent.
+MAP_RNG_STREAM = 0x6D617073
+
+# Position of the map RNG key in the runner state tuple (train_state, env_state,
+# last_obs, last_done, hstate, rng, map_rng, update_step).
+RUNNER_STATE_MAP_RNG_INDEX = 6
+
+
+def map_rng_from_key(key):
+    """Root of the map-generation RNG stream for a seed key. Env resets, and so
+    all map generation, draw only from this stream, never from the agent's, so
+    the maps do not depend on the agent's random draws."""
+    return jax.random.fold_in(key, MAP_RNG_STREAM)
+
+
+def is_map_rng_state_leaf(path):
+    """Whether a runner-state leaf was introduced by the separate map RNG
+    stream: the map RNG key itself, or an env's recorded map_seed. Checkpoints
+    written before that change lack exactly these leaves."""
+    if path == (jax.tree_util.SequenceKey(RUNNER_STATE_MAP_RNG_INDEX),):
+        return True
+    return any(isinstance(k, jax.tree_util.GetAttrKey) and k.name == 'map_seed' for k in path)
 
 
 def get_rnn_hidden_initializer(name):
@@ -653,6 +715,24 @@ def make_train(config):
         up as a leaf count or shape/dtype mismatch and raises.
         """
         fresh_leaves, treedef = jax.tree_util.tree_flatten_with_path(fresh_runner_state)
+        saved_leaves = list(saved_leaves)
+        added_leaves = [
+            i for i, (path, _) in enumerate(fresh_leaves) if is_map_rng_state_leaf(path)
+        ]
+        if len(saved_leaves) == len(fresh_leaves) - len(added_leaves):
+            # Checkpoint from before map generation got its own RNG stream: it
+            # has no map RNG key and no per-env map seeds. Continue with a map
+            # stream seeded from --env_seed, and mark the episodes already in
+            # progress with map_seed -1 (unknown), since their maps were not
+            # generated from a recorded seed.
+            print("Checkpoint predates map seeds: starting a fresh map RNG stream; "
+                  "in-progress episodes are logged with map_seed -1")
+            for i in added_leaves:
+                path, fresh_leaf = fresh_leaves[i]
+                if path[0] == jax.tree_util.SequenceKey(RUNNER_STATE_MAP_RNG_INDEX):
+                    saved_leaves.insert(i, fresh_leaf)
+                else:
+                    saved_leaves.insert(i, jnp.full_like(fresh_leaf, -1))
         if len(fresh_leaves) != len(saved_leaves):
             raise ValueError(
                 "Cannot resume: checkpoint has {} state arrays but the current "
@@ -685,11 +765,13 @@ def make_train(config):
         static_params.reward_func = 'vanilla'
     if config['FEATURELESS_WORLD']:
         static_params.featureless_world = True
+    static_params.stripped_world = config.get('STRIPPED_WORLD', False)
     static_params.predators = config['PREDATORS']
     if config['RANDOM_START']:
         static_params.random_start = True
     static_params.map_size = (config['MAP_SIZE'],config['MAP_SIZE'])
     static_params.directional_vision = config['DIRECTIONAL_VISION']
+    static_params.replay_map_seed = config.get('REPLAY_MAP_SEED')
 
     static_params.max_passive_mobs = config['MAX_COWS']
 
@@ -921,10 +1003,14 @@ def make_train(config):
         sparse_updater = jaxpruner.create_updater_from_config(sparsity_config)
         tx = sparse_updater.wrap_optax(tx)
 
-        def init_runner_state(rng):
+        def init_runner_state(rng, env_seed_key=None):
             """Network/optimizer initialization plus env reset: everything the
             training loop's carry starts from. The rng consumption order
-            matches the original monolithic train() exactly."""
+            matches the original monolithic train() exactly, except that the
+            env reset draws from the map RNG stream, rooted at env_seed_key
+            (this repeat's key split from --env_seed; defaults to rng, which
+            is what --env_seed == --seed gives)."""
+            map_rng = map_rng_from_key(rng if env_seed_key is None else env_seed_key)
             rng, _rng = jax.random.split(rng)
             # We have to do this here because I can't figure out how to wrap the observation_space function (it's not defined in Gymnax, seemingly)
             if config['ACTION_IN_OBS']:
@@ -979,8 +1065,8 @@ def make_train(config):
             )
 
             # INIT ENV
-            rng, _rng = jax.random.split(rng)
-            obsv, log_state = env.reset(_rng, env_params)
+            map_rng, _map_rng = jax.random.split(map_rng)
+            obsv, log_state = env.reset(_map_rng, env_params)
             init_hstate = ScannedRNN.initialize_carry(
                 config["NUM_ENVS"], config["LAYER_SIZE"]
             )
@@ -993,6 +1079,7 @@ def make_train(config):
                 jnp.zeros((config["NUM_ENVS"]), dtype=bool),
                 init_hstate,
                 _rng,
+                map_rng,
                 0,
             )
 
@@ -1008,6 +1095,7 @@ def make_train(config):
                     last_done,
                     hstate,
                     rng,
+                    map_rng,
                     update_step,
                 ) = runner_state
                 rng, _rng = jax.random.split(rng)
@@ -1023,10 +1111,11 @@ def make_train(config):
                     log_prob.squeeze(0),
                 )
 
-                # STEP ENV
+                # STEP ENV. Resets (new maps) draw from the map RNG stream.
                 rng, _rng = jax.random.split(rng)
+                map_rng, _map_rng = jax.random.split(map_rng)
                 obsv, env_state, reward, done, info, = env.step(
-                     _rng, env_state, action, env_params
+                     _rng, env_state, action, env_params, _map_rng
                 )
 
                 # Compute distance to origin for aux loss. player_starting_position
@@ -1048,13 +1137,14 @@ def make_train(config):
                     done,
                     hstate,
                     rng,
+                    map_rng,
                     update_step,
                 )
                 return runner_state, transition
 
             train_state = runner_state[0]
 
-            initial_hstate = runner_state[-3]
+            initial_hstate = runner_state[4]
             runner_state, traj_batch = jax.lax.scan(
                 _env_step, runner_state, None, config["NUM_ENV_STEPS"]
             )
@@ -1067,6 +1157,7 @@ def make_train(config):
                 last_done,
                 hstate,
                 rng,
+                map_rng,
                 update_step,
             ) = runner_state
             ac_in = (last_obs[np.newaxis, :], last_done[np.newaxis, :])
@@ -1290,6 +1381,7 @@ def make_train(config):
                 last_done,
                 hstate,
                 rng,
+                map_rng,
                 update_step + 1,
             )
 
@@ -1305,6 +1397,7 @@ def make_train(config):
                 last_done,
                 hstate,
                 rng,
+                map_rng,
                 update_step,
             ) = runner_state
             rng, _rng = jax.random.split(rng)
@@ -1322,8 +1415,9 @@ def make_train(config):
 
             # STEP ENV
             rng, _rng = jax.random.split(rng)
+            map_rng, _map_rng = jax.random.split(map_rng)
             obsv, env_state, reward, done, info = env_viz.step(
-                _rng, env_state, action, env_params
+                _rng, env_state, action, env_params, _map_rng
             )
 
             # Compute distance to origin for aux loss. Per-env starting position,
@@ -1349,6 +1443,7 @@ def make_train(config):
                 done,
                 hstate,
                 rng,
+                map_rng,
                 update_step,
             )
             return runner_state, transition
@@ -1381,7 +1476,7 @@ def make_train(config):
                             'entropy', 'log_prob', 'episode_id']
 
             # Callback function for logging hidden states
-            def write_rnn_hstate(hstate, scalars, increment=0):
+            def write_rnn_hstate(hstate, scalars, map_seeds, increment=0):
 
                 header_field_names = ['health','food','drink','energy','done','is_sleeping','is_resting','player_position_x',
                                       'player_position_y','recover','hunger','thirst','fatigue','light_level','dist_to_melee_l1',
@@ -1396,6 +1491,7 @@ def make_train(config):
                 scalar_file_header = 'action'
                 for key in header_field_names:
                     scalar_file_header += ',' + key
+                scalar_file_header += ',map_seed'
 
                 # np.savetxt writes straight to an open file handle, so the old
                 # temp-file round-trip (write temp -> read back -> append) is
@@ -1434,8 +1530,19 @@ def make_train(config):
                         print('Writing log file', out_filename_hstates)
                     # Then do the same thing for the scalars (plaintext, uncompressed)
                     out_filename_scalars = os.path.join(run_out_path, 'scalars_{}_{}.csv'.format(increment, i))
+                    # The map_seed column is appended as an exact integer.
+                    # float64 holds any int32 exactly and leaves the '%f' text
+                    # of the float32 scalars unchanged. Convert to numpy first:
+                    # the callback receives JAX arrays, whose astype silently
+                    # truncates float64 to float32.
+                    scalar_rows = np.concatenate(
+                        [np.asarray(scalars[:, i, :]).astype(np.float64),
+                         np.asarray(map_seeds[:, i, None]).astype(np.float64)],
+                        axis=-1,
+                    )
                     with open_log_file(out_filename_scalars, False) as out_file_scalars:
-                        np.savetxt(out_file_scalars, scalars[:, i, :], delimiter=',', fmt='%f',
+                        np.savetxt(out_file_scalars, scalar_rows, delimiter=',',
+                                   fmt=['%f'] * scalars.shape[-1] + ['%d'],
                                    header=scalar_file_header)
                     print('Writing log file', out_filename_scalars)
 
@@ -1466,6 +1573,9 @@ def make_train(config):
             # logging cost. When hstate logging is disabled we skip that transfer
             # entirely (None is an empty pytree, so nothing is moved to host).
             scalars_to_log = log_array[:, :logging_threads, :]
+            # Kept out of log_array: it is float32, which rounds integers above
+            # 2**24, and a seed that is off by one replays a different map.
+            map_seeds_to_log = traj_batch.info['map_seed'][:, :logging_threads]
             if config['NO_HIDDEN_STATE_CSV']:
                 hidden_states_to_log = None
             else:
@@ -1476,7 +1586,7 @@ def make_train(config):
             # file in the order they are produced, and the first of them
             # truncates it, so they have to reach the host in program order.
             jax.debug.callback(
-                write_rnn_hstate, hidden_states_to_log, scalars_to_log, update_step,
+                write_rnn_hstate, hidden_states_to_log, scalars_to_log, map_seeds_to_log, update_step,
                 ordered=True,
             )
 
@@ -1558,30 +1668,33 @@ def make_train(config):
                 last_done,
                 hstate,
                 rng,
+                map_rng,
                 update_step,
             ) = runner_state
             rng, probe_rng = jax.random.split(rng)
+            map_rng, probe_map_rng = jax.random.split(map_rng)
             n_probe = min(config['GRAD_VIZ_ENVS'], config['NUM_ENVS'])
 
             def _probe_step(carry, unused):
-                env_state, obs, done, h, p_rng = carry
+                env_state, obs, done, h, p_rng, p_map_rng = carry
                 p_rng, _rng = jax.random.split(p_rng)
                 ac_in = (obs[np.newaxis, :], done[np.newaxis, :])
                 h, pi, _, _ = network.apply(train_state.params, h, ac_in)
                 action = pi.sample(seed=_rng).squeeze(0)
                 p_rng, _rng = jax.random.split(p_rng)
+                p_map_rng, _map_rng = jax.random.split(p_map_rng)
                 new_obs, env_state, _, new_done, _ = env.step(
-                    _rng, env_state, action, env_params
+                    _rng, env_state, action, env_params, _map_rng
                 )
                 # Store inputs for only the probed envs to keep memory bounded.
-                return (env_state, new_obs, new_done, h, p_rng), (
+                return (env_state, new_obs, new_done, h, p_rng, p_map_rng), (
                     obs[:n_probe],
                     done[:n_probe],
                 )
 
             _, (obs_seq, done_seq) = jax.lax.scan(
                 _probe_step,
-                (env_state, last_obs, last_done, hstate, probe_rng),
+                (env_state, last_obs, last_done, hstate, probe_rng, probe_map_rng),
                 None,
                 config['GRAD_VIZ_STEPS'],
             )
@@ -1612,6 +1725,7 @@ def make_train(config):
                 last_done,
                 hstate,
                 rng,
+                map_rng,
                 update_step,
             )
 
@@ -1673,11 +1787,15 @@ def make_train(config):
                 last_done,
                 hstate,
                 rng,
+                map_rng,
                 update_step,
             ) = runner_state
             # The branch gets its own rng so the discarded rollout does not
-            # replay the same action-sampling keys the training rollout uses.
+            # replay the same action-sampling keys the training rollout uses,
+            # and likewise its own map rng so it does not preview the maps the
+            # training rollout is about to generate.
             rng, viz_rng = jax.random.split(rng)
+            map_rng, viz_map_rng = jax.random.split(map_rng)
             viz_runner_state = (
                 train_state,
                 env_state,
@@ -1685,6 +1803,7 @@ def make_train(config):
                 last_done,
                 hstate,
                 viz_rng,
+                viz_map_rng,
                 update_step,
             )
             viz_runner_state, empty = jax.lax.scan(
@@ -1699,6 +1818,7 @@ def make_train(config):
                 last_done,
                 hstate,
                 rng,
+                map_rng,
                 update_step,
             )
             runner_state, metric = jax.lax.scan(
@@ -1731,12 +1851,12 @@ def make_train(config):
             # Do validation rollouts with a fixed random seed
             # Generate rng from validation-specific random seed
 
-            val_rng_key = jax.random.PRNGKey(config["VALIDATION_SEED"])
+            rng = jax.random.PRNGKey(config["VALIDATION_SEED"])
 
-            rng, _rng = jax.random.split(val_rng_key)
-
-            #RE-INIT FOR VAL RUNS
-            obsv, log_state = env.reset(_rng, env_params)
+            #RE-INIT FOR VAL RUNS. Validation maps come from their own map RNG
+            # stream, so they are fixed by --validation_seed alone.
+            map_rng, _map_rng = jax.random.split(map_rng_from_key(rng))
+            obsv, log_state = env.reset(_map_rng, env_params)
 
             # init_hstate = ScannedRNN.initialize_carry(
             #     config["NUM_ENVS"], config["LAYER_SIZE"]
@@ -1749,6 +1869,7 @@ def make_train(config):
                 jnp.ones((config["NUM_ENVS"]), dtype=bool),
                 runner_state[4],
                 rng,
+                map_rng,
                 config['VALIDATION_STEP_OFFSET'] + runner_state[-1],
             )
 
@@ -1759,13 +1880,13 @@ def make_train(config):
             )
             return runner_state
 
-        def train(rng):
+        def train(rng, env_seed_key=None):
             """Whole-run entry point, semantically the original train():
             init, NUM_UPDATES outer iterations, then final logging and
             validation. run_ppo instead drives init/step/finish itself so it
             can checkpoint (and resume) between outer iterations; this
             composed form remains for callers that jit the whole run."""
-            runner_state = init_runner_state(rng)
+            runner_state = init_runner_state(rng, env_seed_key)
             runner_state, metric = jax.lax.scan(
                 _update_plot, runner_state, None, int(config["NUM_UPDATES"])
             )
@@ -1791,6 +1912,13 @@ def run_ppo(config, checkpoint=None):
 
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_REPEATS"])
+    # Per-repeat keys the map-generation RNG streams are rooted at; split the
+    # same way as the agent's keys so --env_seed == --seed matches the default.
+    env_seed_keys = jax.random.split(
+        jax.random.PRNGKey(config.get("ENV_SEED", config["SEED"])), config["NUM_REPEATS"]
+    )
+    if config.get("REPLAY_MAP_SEED") is not None:
+        print("Replaying map seed {} for every episode".format(config["REPLAY_MAP_SEED"]))
 
     train = make_train(config)
     device = jax.devices()[JAX_DEVICE_INDEX]
@@ -1846,7 +1974,7 @@ def run_ppo(config, checkpoint=None):
 
     t0 = time.time()
 
-    runner_state = init_jit(rngs)
+    runner_state = init_jit(rngs, env_seed_keys)
     # Round-trip the freshly initialized state through host memory so its
     # avals (dtypes / weak-type flags) are identical to a checkpoint-restored
     # state's; fresh and resumed runs then trace, compile, and execute the

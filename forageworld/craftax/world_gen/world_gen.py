@@ -550,7 +550,100 @@ def generate_smoothworld(rng, static_params, player_position, config, params=Non
     return map, item_map, light_map, ladder_down, ladder_up
 
 
+# Map seeds are drawn from [0, MAP_SEED_BOUND): non-negative int32, so a seed
+# round-trips exactly through the scalar logs and the command line.
+MAP_SEED_BOUND = 2**31 - 1
+
+
+def strip_world_level_zero(rng, state, static_params):
+    """Replace level 0 with the minimal evaluation world: nothing but grass,
+    one water tile, one passive mob (cow) and one predator. The three are
+    placed uniformly at random over distinct cells, none of them the player's,
+    so no mob starts in the water or on top of the other. Levels 1-8 are left
+    as generated, being legacy and unused.
+
+    Nothing respawns here: passive and monster spawning both require a PATH
+    tile (see spawn_mobs) and this world has none, so the cow is gone once
+    eaten, and the predator is the only one there will ever be. It also never
+    despawns (update_mobs), unlike a normally spawned predator, which vanishes
+    once the player walks mob_despawn_distance away.
+
+    Meant for studying a trained agent's dynamics in isolation, not training.
+    """
+    map_size = static_params.map_size
+    n_cells = map_size[0] * map_size[1]
+    cell_weights = (
+        jnp.ones(n_cells)
+        .at[state.player_position[0] * map_size[1] + state.player_position[1]]
+        .set(0.0)
+    )
+    cells = jax.random.choice(
+        rng, n_cells, shape=(3,), replace=False, p=cell_weights / cell_weights.sum()
+    )
+    water_position, passive_position, melee_position = jnp.stack(
+        [cells // map_size[1], cells % map_size[1]], axis=-1
+    ).astype(jnp.int32)
+
+    level_map = jnp.full(map_size, BlockType.GRASS.value, dtype=state.map.dtype)
+    level_map = level_map.at[water_position[0], water_position[1]].set(
+        BlockType.WATER.value
+    )
+
+    # Mob types and health match what spawn_mobs would give level 0's mobs.
+    passive_type = FLOOR_MOB_MAPPING[0, MobType.PASSIVE.value]
+    melee_type = FLOOR_MOB_MAPPING[0, MobType.MELEE.value]
+
+    return state.replace(
+        map=state.map.at[0].set(level_map),
+        item_map=state.item_map.at[0].set(
+            jnp.full(map_size, ItemType.NONE.value, dtype=state.item_map.dtype)
+        ),
+        light_map=state.light_map.at[0].set(
+            jnp.ones(map_size, dtype=state.light_map.dtype)
+        ),
+        mob_map=state.mob_map.at[0].set(
+            jnp.zeros(map_size, dtype=bool)
+            .at[passive_position[0], passive_position[1]]
+            .set(True)
+            .at[melee_position[0], melee_position[1]]
+            .set(True)
+        ),
+        passive_mobs=state.passive_mobs.replace(
+            position=state.passive_mobs.position.at[0, 0].set(passive_position),
+            health=state.passive_mobs.health.at[0, 0].set(
+                MOB_TYPE_HEALTH_MAPPING[passive_type, MobType.PASSIVE.value]
+            ),
+            mask=state.passive_mobs.mask.at[0, 0].set(True),
+            type_id=state.passive_mobs.type_id.at[0, 0].set(passive_type),
+        ),
+        melee_mobs=state.melee_mobs.replace(
+            position=state.melee_mobs.position.at[0, 0].set(melee_position),
+            health=state.melee_mobs.health.at[0, 0].set(
+                MOB_TYPE_HEALTH_MAPPING[melee_type, MobType.MELEE.value]
+            ),
+            mask=state.melee_mobs.mask.at[0, 0].set(True),
+            type_id=state.melee_mobs.type_id.at[0, 0].set(melee_type),
+        ),
+    )
+
+
 def generate_world(rng, params, static_params):
+    # The world is generated from an integer map seed drawn from rng rather
+    # than from rng directly, and the seed is recorded in state.map_seed. The
+    # same seed and static params always rebuild the same world (terrain on
+    # every level, player start position, potion mapping), so
+    # static_params.replay_map_seed can replace the draw to reproduce a logged
+    # episode's map. env_id comes from rng instead of the seed so that replayed
+    # episodes still get distinct episode ids.
+    seed_rng, env_id_rng = jax.random.split(rng)
+    if static_params.replay_map_seed is None:
+        map_seed = jax.random.randint(
+            seed_rng, (), 0, MAP_SEED_BOUND, dtype=jnp.int32
+        )
+    else:
+        map_seed = jnp.asarray(static_params.replay_map_seed, dtype=jnp.int32)
+    rng = jax.random.PRNGKey(map_seed)
+
     player_position = jnp.array(
         [static_params.map_size[0] // 2, static_params.map_size[1] // 2]
     )
@@ -663,7 +756,8 @@ def generate_world(rng, params, static_params):
     rng, _rng = jax.random.split(rng)
 
     state = EnvState(
-        env_id=jax.random.randint(rng, shape=(1,), minval=0, maxval=999999),
+        env_id=jax.random.randint(env_id_rng, shape=(1,), minval=0, maxval=999999),
+        map_seed=map_seed,
         map=map,
         item_map=item_map,
         mob_map=jnp.zeros(
@@ -721,5 +815,11 @@ def generate_world(rng, params, static_params):
         state_rng=_rng,
         timestep=jnp.asarray(0, dtype=jnp.int32),
     )
+
+    if static_params.stripped_world:
+        # Level 0 is generated and then thrown away here. Wasteful, but this
+        # world is only ever used for evaluation, and going through the normal
+        # generation keeps every other part of the state consistent.
+        state = strip_world_level_zero(rng, state, static_params)
 
     return state

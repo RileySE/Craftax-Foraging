@@ -1,5 +1,5 @@
 from dataclasses import field
-from typing import Tuple, Any
+from typing import Tuple, Any, Optional
 
 import jax
 from flax import struct
@@ -38,6 +38,9 @@ class Mobs:
 @struct.dataclass
 class EnvState:
     env_id: int
+    # Integer seed this episode's world was generated from (see generate_world);
+    # passing it to --replay_map_seed regenerates the same world.
+    map_seed: int
     map: jnp.ndarray
     item_map: jnp.ndarray
     mob_map: jnp.ndarray
@@ -140,6 +143,12 @@ class StaticEnvParams:
     predators: bool = True
     directional_vision: bool = False
     random_start : bool = False
+    # When set, every reset generates its world from this map seed instead of
+    # drawing a fresh one, reproducing a logged episode's map (--replay_map_seed).
+    replay_map_seed: Optional[int] = None
+    # Minimal evaluation world on level 0: grass, one water tile, one passive
+    # mob and one predator, nothing else (--stripped_world).
+    stripped_world: bool = False
 
     # Mobs
     # HACK: Doubled to 18 for patch depletion stuff

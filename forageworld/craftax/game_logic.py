@@ -1242,6 +1242,11 @@ def update_mobs(rng, state, params, static_params):
         should_not_despawn = jnp.logical_or(
             should_not_despawn, is_fighting_boss(state, static_params)
         )
+        if static_params.stripped_world:
+            # The stripped evaluation world's single predator is placed at
+            # generation time and nothing ever spawns another, so letting it
+            # despawn would empty the world as soon as the player walked away.
+            should_not_despawn = jnp.array(True)
 
         rng, _rng = jax.random.split(rng)
 
