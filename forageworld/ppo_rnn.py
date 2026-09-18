@@ -112,7 +112,8 @@ def build_parser():
                              "the agent does to it; --predators therefore defaults to off here (pass it explicitly to "
                              "override). Takes precedence over --featureless_world. Other env flags (--map_size, "
                              "--random_start, --directional_vision, --replay_map_seed, ...) apply as usual. Intended "
-                             "for evaluating a trained agent, e.g. via this entrypoint with --lr 0, not for training.")
+                             "for evaluating a trained agent, e.g. via this entrypoint with --init_from (to load the "
+                             "trained weights into fresh stripped-world environments) and --lr 0, not for training.")
     parser.add_argument("--run_name", type=str, default="default_run", help="Name of the run")
     parser.add_argument("--env_name", type=str, default="Craftax-Symbolic-v1", help="Environment name")
     parser.add_argument("--sparse_alg", type=str, default="magnitude", help="options, magnitude, no_prune, saliency, random")
@@ -275,6 +276,21 @@ def build_parser():
                              "stored values (e.g. to change a hyperparameter mid-run); overrides that change the "
                              "shape of the stored state (network size, env count, map size, num_repeats, ...) fail "
                              "at restore time.")
+    parser.add_argument('--init_from', type=str, default=None,
+                        help="Path to a checkpoint_<step>.pkl.gz to take the network parameters from, starting an "
+                             "otherwise fresh run: new optimizer state, environments, hidden states, RNG streams and "
+                             "update counter. Fine-tuning therefore anneals the learning rate over THIS run's "
+                             "--total_timesteps from the start, rather than continuing the source run's schedule, and "
+                             "a checkpoint's jaxpruner masks are not carried over (the new run prunes per its own "
+                             "--sparse_alg / --prune_step / --sparsity). This is what evaluating a trained agent under different environment "
+                             "settings needs (e.g. --stripped_world, a different --num_envs or --map_size, --lr 0), "
+                             "since unlike --resume_from it does not restore the checkpoint's environments, and so "
+                             "is not restricted to configurations with the same array shapes. Configuration is taken "
+                             "from the checkpoint and overridden by whatever is passed here, exactly as with "
+                             "--resume_from, but the run length comes from --total_timesteps as for a fresh run "
+                             "rather than continuing the checkpoint's schedule. With --auto_resume, a checkpoint "
+                             "found in --output_path wins, so an interrupted evaluation resumes itself instead of "
+                             "restarting from the pretrained weights.")
     parser.add_argument('--auto_resume', action=argparse.BooleanOptionalAction, default=False,
                         help="At startup, scan output_path for training checkpoints left by a previous (interrupted) "
                              "run of this configuration and resume from the one with the highest update step, exactly "
@@ -301,6 +317,12 @@ def parse_args():
         parser.error("--checkpoint_interval must be >= 0 (0 disables checkpointing)")
     if args.checkpoint_keep < 0:
         parser.error("--checkpoint_keep must be >= 0 (0 keeps all checkpoints)")
+    if args.init_from is not None and args.resume_from is not None:
+        parser.error("--init_from and --resume_from are mutually exclusive: --resume_from continues a run from its "
+                     "checkpoint, --init_from starts a new run from a checkpoint's weights")
+    if args.wandb_resume_run and args.init_from is not None:
+        parser.error("--wandb_resume_run cannot be used with --init_from: the new run restarts the update counter "
+                     "at 0, so it cannot continue the WandB run that wrote the checkpoint")
     if args.wandb_resume_run and args.resume_from is None and not args.auto_resume:
         parser.error("--wandb_resume_run requires --resume_from or --auto_resume (it continues the run that wrote "
                      "the checkpoint)")
@@ -704,9 +726,10 @@ def make_train(config):
         config["NUM_ENVS"] * config["NUM_ENV_STEPS"] // config["NUM_MINIBATCHES"]
     )
 
-    def _restore_runner_state(fresh_runner_state, saved_leaves):
+    def _restore_runner_state(fresh_runner_state, saved_leaves, weights_only=False):
         """Replace every array leaf of the freshly initialized runner state with
-        the corresponding leaf from a checkpoint. The tree structure and all
+        the corresponding leaf from a checkpoint (or, with weights_only, just
+        the network and optimizer ones). The tree structure and all
         static/aux data (optimizer, apply_fn, ...) come from the fresh state
         built under the CURRENT config, so command-line overrides of anything
         that doesn't change array shapes (lr, coefficients, logging cadence,
@@ -716,6 +739,55 @@ def make_train(config):
         """
         fresh_leaves, treedef = jax.tree_util.tree_flatten_with_path(fresh_runner_state)
         saved_leaves = list(saved_leaves)
+
+        def _checked(path, fresh_leaf, saved_leaf):
+            fresh_leaf = jnp.asarray(fresh_leaf)
+            saved_leaf = jnp.asarray(saved_leaf)
+            if fresh_leaf.shape != saved_leaf.shape or fresh_leaf.dtype != saved_leaf.dtype:
+                raise ValueError(
+                    "Cannot resume: checkpoint state {} has shape {} / dtype {} "
+                    "but the current configuration expects shape {} / dtype {}.".format(
+                        jax.tree_util.keystr(path),
+                        saved_leaf.shape, saved_leaf.dtype,
+                        fresh_leaf.shape, fresh_leaf.dtype,
+                    )
+                )
+            return saved_leaf
+
+        if weights_only:
+            # --init_from: take only the network parameters (runner state
+            # element 0, TrainState.params) and keep everything else as freshly
+            # initialized - optimizer state, environments, hidden states, RNG
+            # streams and counters. The run is then a fresh run that happens to
+            # start from trained weights: its env count, map size and world type
+            # may differ from the run that wrote the checkpoint, and its
+            # optimizer (Adam moments, and the step count the learning-rate
+            # schedule anneals on) starts from zero under the CURRENT config
+            # rather than continuing the source run's schedule, which would
+            # otherwise resume mid-anneal and go negative once the source's step
+            # count exceeded this run's annealing horizon.
+            # A TrainState flattens as step, params..., opt_state..., so the
+            # params occupy the same leaf indices in the checkpoint as here even
+            # when the source run's optimizer differed.
+            param_leaves = [
+                i for i, (path, _) in enumerate(fresh_leaves)
+                if path[0] == jax.tree_util.SequenceKey(0)
+                and isinstance(path[1], jax.tree_util.GetAttrKey)
+                and path[1].name == "params"
+            ]
+            if len(saved_leaves) <= param_leaves[-1]:
+                raise ValueError(
+                    "Cannot load weights: the checkpoint holds {} state arrays, too few for "
+                    "the {} network parameter arrays this configuration needs.".format(
+                        len(saved_leaves), len(param_leaves)
+                    )
+                )
+            restored = [jnp.asarray(leaf) for _, leaf in fresh_leaves]
+            for i in param_leaves:
+                path, fresh_leaf = fresh_leaves[i]
+                restored[i] = _checked(path, fresh_leaf, saved_leaves[i])
+            return jax.tree_util.tree_unflatten(treedef, restored)
+
         added_leaves = [
             i for i, (path, _) in enumerate(fresh_leaves) if is_map_rng_state_leaf(path)
         ]
@@ -741,20 +813,10 @@ def make_train(config):
                     len(saved_leaves), len(fresh_leaves)
                 )
             )
-        restored = []
-        for (path, fresh_leaf), saved_leaf in zip(fresh_leaves, saved_leaves):
-            fresh_leaf = jnp.asarray(fresh_leaf)
-            saved_leaf = jnp.asarray(saved_leaf)
-            if fresh_leaf.shape != saved_leaf.shape or fresh_leaf.dtype != saved_leaf.dtype:
-                raise ValueError(
-                    "Cannot resume: checkpoint state {} has shape {} / dtype {} "
-                    "but the current configuration expects shape {} / dtype {}.".format(
-                        jax.tree_util.keystr(path),
-                        saved_leaf.shape, saved_leaf.dtype,
-                        fresh_leaf.shape, fresh_leaf.dtype,
-                    )
-                )
-            restored.append(saved_leaf)
+        restored = [
+            _checked(path, fresh_leaf, saved_leaf)
+            for (path, fresh_leaf), saved_leaf in zip(fresh_leaves, saved_leaves)
+        ]
         return jax.tree_util.tree_unflatten(treedef, restored)
 
     # Define static params, modify based on command line flags and pass to env object to hold during runtime
@@ -1902,7 +1964,7 @@ def make_train(config):
     return _build_train()
 
 
-def run_ppo(config, checkpoint=None):
+def run_ppo(config, checkpoint=None, weights_only=False):
 
     reset_batch_logs()
 
@@ -1983,14 +2045,26 @@ def run_ppo(config, checkpoint=None):
 
     start_iter = 0
     if checkpoint is not None:
-        runner_state = train.restore_runner_state(runner_state, checkpoint["leaves"])
-        start_iter = int(checkpoint["outer_iter"])
-        print(
-            "Resuming from update step {} (outer iteration {}): {} of {} outer iterations remain".format(
-                int(checkpoint["update_step"]), start_iter,
-                max(num_outer_iters - start_iter, 0), num_outer_iters,
-            )
+        runner_state = train.restore_runner_state(
+            runner_state, checkpoint["leaves"], weights_only
         )
+        if weights_only:
+            # Fresh environments and counters, so the run starts at iteration 0
+            # and its length comes from --total_timesteps like any fresh run.
+            print(
+                "Loaded network parameters from update step {} of {}; optimizer, environments, "
+                "RNG and counters start fresh, for {} outer iterations".format(
+                    int(checkpoint["update_step"]), config.get("INIT_FROM"), num_outer_iters,
+                )
+            )
+        else:
+            start_iter = int(checkpoint["outer_iter"])
+            print(
+                "Resuming from update step {} (outer iteration {}): {} of {} outer iterations remain".format(
+                    int(checkpoint["update_step"]), start_iter,
+                    max(num_outer_iters - start_iter, 0), num_outer_iters,
+                )
+            )
 
     metrics = []
     for outer_iter in range(start_iter, num_outer_iters):
@@ -2070,6 +2144,16 @@ if __name__ == "__main__":
         else:
             print("Auto-resume: no checkpoint found under", args.output_path, "- starting fresh")
 
+    # --init_from: load the pretrained weights into an otherwise fresh run.
+    # An auto-resume checkpoint takes precedence, so a restarted evaluation
+    # continues itself rather than starting over from the pretrained weights.
+    init_only = False
+    if args.resume_from is None and args.init_from is not None:
+        args.resume_from = args.init_from
+        init_only = True
+    elif args.init_from is not None:
+        print("Auto-resume found a checkpoint, so --init_from", args.init_from, "is ignored")
+
     checkpoint = None
     if args.resume_from is not None:
         # Checkpoints are gzip-compressed pickles; sniff the magic bytes so
@@ -2091,13 +2175,39 @@ if __name__ == "__main__":
             config[key.upper()] = value
         for key, value in vars(args).items():
             config.setdefault(key.upper(), value)
+        if explicit_args.get("stripped_world") and "predators" not in explicit_args:
+            # Same default as a fresh --stripped_world run: turning the stripped
+            # world on here must not inherit the trained run's predators.
+            config["PREDATORS"] = False
+        if init_only:
+            # A new run with its own update counter; it cannot continue the
+            # WandB run of whichever run wrote the checkpoint.
+            config["WANDB_RESUME_RUN"] = False
+        else:
+            world_changes = [
+                key for key in ("STRIPPED_WORLD", "FEATURELESS_WORLD", "MAP_SIZE",
+                                "RANDOM_START", "PREDATORS", "MAX_COWS")
+                if checkpoint["config"].get(key) != config.get(key)
+            ]
+            if world_changes:
+                print(
+                    "Warning: {} differ(s) from the checkpoint, but --resume_from restores the "
+                    "checkpoint's environments, so the episodes already in progress keep running in "
+                    "worlds generated under the old settings until they end. Use --init_from to start "
+                    "from the weights with environments generated under the new settings.".format(
+                        ", ".join(world_changes)
+                    )
+                )
         if auto_resumed and "wandb_resume_run" not in explicit_args:
             # Auto-resume continues the original WandB run by default. The
             # checkpoint's stored WANDB_RESUME_RUN (False on the first leg)
             # must not override that; only an explicit --no-wandb_resume_run
             # on this command line may.
             config["WANDB_RESUME_RUN"] = True
-        print("Resuming run from checkpoint", args.resume_from)
+        print("{} checkpoint {}".format(
+            "Initializing network weights from" if init_only else "Resuming run from",
+            args.resume_from,
+        ))
     else:
         config = {key.upper(): value for key, value in vars(args).items()}
 
@@ -2149,7 +2259,7 @@ if __name__ == "__main__":
     else:
         run_config = wandb.config
 
-    run_ppo(run_config, checkpoint)
+    run_ppo(run_config, checkpoint, weights_only=init_only)
 
     # Training ran to its final update (as opposed to being killed by the
     # wallclock limit): leave a done marker for the auto-resume manager
