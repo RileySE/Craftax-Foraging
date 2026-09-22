@@ -93,6 +93,7 @@ from forageworld.logz.batch_logging import create_log_dict, batch_log, reset_bat
 from forageworld.models.actor_critic import ActorCritic, ActorCriticConv, ActorCriticSharedRep
 from forageworld.connectome_utils import (
     connectome_constraint_loss,
+    random_sparsity_mask,
     connectome_constraint_loss_nonsorted,
     connectome_loss_nonzero,
     randomize_target_matrix,
@@ -192,6 +193,34 @@ def build_parser():
                         help="Replace the loaded connectome targets with a randomized matrix that preserves the global zero fraction and the distribution of non-zero values; the seed for the shuffle is taken from --seed. Block-sorted to match the default loss, or left unsorted under --fixed_connectome_targets so the control matches that loss's target layout.")
     parser.add_argument('--connectome_uniform_targets', action=argparse.BooleanOptionalAction, default=False,
                         help="Replace the loaded connectome targets with a matrix whose non-zero entries are drawn i.i.d. from Uniform(0, 1) at uniformly random positions, preserving only the count of non-zero entries. Composes with --connectome_init / --connectome_freeze / --connectome_freeze_zeros / --connectome_zero_init; if --connectome_randomize_targets is also set, the uniform replacement is applied after and effectively wins. Seed for the draw is taken from --seed. Block-sorted to match the default loss, or left unsorted under --fixed_connectome_targets so the control matches that loss's target layout.")
+    parser.add_argument('--sparse_default_init', action=argparse.BooleanOptionalAction, default=False,
+                        help="Structural control for --connectome_init: initialize the RNN hidden-to-hidden kernel "
+                             "to the sparsity of the connectome targets (exactly as many non-zero weights) but with "
+                             "those non-zeros at uniformly random positions and their values drawn by "
+                             "--rnn_hidden_initializer, i.e. the default orthogonal matrix with all but that fraction "
+                             "of its entries zeroed. The surviving weights therefore keep the default init's "
+                             "distribution exactly; the matrix is NOT orthogonal, which at the connectome's density "
+                             "is unachievable (far more orthonormality constraints than surviving weights) and in any "
+                             "case incompatible with keeping that distribution, since unit-norm rows would need much "
+                             "larger entries. The random positions are drawn from --seed, so they are shared across "
+                             "--num_repeats while the weight values differ per repeat. By default only the total "
+                             "number of non-zero weights is matched, which leaves each unit with a binomial share of "
+                             "them and so flattens the connectome's out-degree distribution; add "
+                             "--match_row_degrees to keep that distribution too. Composes with "
+                             "--connectome_freeze, --connectome_freeze_zeros (which then freezes the zeros of THIS "
+                             "pattern, keeping the random sparsity structure fixed, rather than the connectome's) "
+                             "and --no_init_diags; mutually exclusive with --connectome_init / --connectome_zero_init.")
+    parser.add_argument('--match_row_degrees', action=argparse.BooleanOptionalAction, default=False,
+                        help="Make --sparse_default_init match the connectome's sparsity row by row instead of only "
+                             "in total: each unit keeps exactly its own number of outgoing connections (the row's "
+                             "non-zero count, rows being pre-synaptic in the from-to kernel), redrawn uniformly "
+                             "among that row's columns. The out-degree sequence is then identical to the "
+                             "connectome's and only which units each one connects to is randomized, which puts this "
+                             "one rung closer to --connectome_init than the plain flag, whose rows carry a binomial "
+                             "share of the total instead. Requires --sparse_default_init; composes with the same "
+                             "flags it does. Note that --no_init_diags restores the drawn diagonal afterwards, so a "
+                             "row whose redrawn support missed the diagonal ends up with one more non-zero weight "
+                             "than the connectome row it matches.")
     parser.add_argument('--connectome_zero_init', action=argparse.BooleanOptionalAction, default=False,
                         help="Sanity-check init: set the constrained kernel to all zeros instead of the default initializer. Takes precedence over --connectome_init when both are set. Composes with --connectome_freeze / --connectome_freeze_zeros (which then freeze the zero-initialized kernel).")
     parser.add_argument('--no_init_diags', action=argparse.BooleanOptionalAction, default=False,
@@ -342,8 +371,8 @@ def parse_args():
     if args.no_connectome:
         incompatible = [
             name for name in (
-                'connectome_init', 'connectome_zero_init',
-                'connectome_freeze', 'connectome_freeze_zeros',
+                'connectome_init', 'connectome_zero_init', 'sparse_default_init',
+                'match_row_degrees', 'connectome_freeze', 'connectome_freeze_zeros',
                 'connectome_randomize_targets', 'connectome_uniform_targets',
                 'exclude_self_weights', 'fixed_connectome_targets',
                 'no_init_diags',
@@ -354,10 +383,18 @@ def parse_args():
                 "--no_connectome is incompatible with: "
                 + ", ".join(f"--{n}" for n in incompatible)
             )
-    if args.no_init_diags and not (args.connectome_init or args.connectome_zero_init):
-        parser.error("--no_init_diags requires --connectome_init or --connectome_zero_init; it only changes "
-                     "which entries those manual initializations overwrite, so on its own it does nothing "
-                     "(the diagonal already comes from --rnn_hidden_initializer)")
+    if args.match_row_degrees and not args.sparse_default_init:
+        parser.error("--match_row_degrees requires --sparse_default_init: it only changes how that "
+                     "initialization draws its sparsity pattern")
+    if args.sparse_default_init and (args.connectome_init or args.connectome_zero_init):
+        parser.error("--sparse_default_init is mutually exclusive with --connectome_init and "
+                     "--connectome_zero_init: all three set the recurrent kernel's initial values")
+    if args.no_init_diags and not (args.connectome_init or args.connectome_zero_init
+                                   or args.sparse_default_init):
+        parser.error("--no_init_diags requires --connectome_init, --connectome_zero_init or "
+                     "--sparse_default_init; it only changes which entries those manual initializations "
+                     "overwrite, so on its own it does nothing (the diagonal already comes from "
+                     "--rnn_hidden_initializer)")
     return args
 
 
@@ -961,6 +998,7 @@ def make_train(config):
             weight_targets = jnp.zeros((1,))
             connectome_block_size = 1
             connectome_targets_signed = False
+            sparse_init_mask = None
         else:
             weight_targets = load_connectome_constraints_cellstats(config['CONNECTOME_FILEPATH'])
             # Downstream block size = number of units per post-synaptic cell type in the cellstats matrix.
@@ -992,6 +1030,22 @@ def make_train(config):
             # which keep the sign structure) so that a signed file needs no
             # extra flag and an unsigned one behaves exactly as before. This is
             # a Python bool, so every branch it guards resolves at trace time.
+            # Structural control for --connectome_init: which entries are
+            # non-zero is redrawn uniformly at random, keeping the total count
+            # and, under --match_row_degrees, each row's count as well.
+            # Built here, from --seed rather than the per-repeat init key, so
+            # that the same pattern is available both to the initializer below
+            # and to --connectome_freeze_zeros, whose optimizer transformation
+            # closes over it before any parameters exist. This matches how the
+            # other target-level controls are seeded.
+            sparse_init_mask = None
+            if config.get('SPARSE_DEFAULT_INIT', False):
+                sparse_init_mask = jnp.asarray(
+                    random_sparsity_mask(
+                        weight_targets, seed=config['SEED'],
+                        per_row=config.get('MATCH_ROW_DEGREES', False),
+                    )
+                )
             connectome_targets_signed = bool(np.any(np.asarray(weight_targets) < 0))
             print(f'Connectome targets: {"signed (transmitter polarity constrained)" if connectome_targets_signed else "unsigned (magnitude only)"}')
             weight_targets = jnp.asarray(weight_targets)
@@ -1035,10 +1089,18 @@ def make_train(config):
                 _freeze_labels,
             )
         elif config['CONNECTOME_FREEZE_ZEROS']:
-            # 1.0 where the connectome target is non-zero (trainable), 0.0 where it
-            # is zero (frozen). Multiplying the kernel's update by this mask leaves
-            # zero-target entries untouched while allowing the rest to train.
-            trainable_elem_mask = (weight_targets != 0).astype(weight_targets.dtype)
+            # 1.0 where the kernel's initial value is meant to be non-zero
+            # (trainable), 0.0 where it is zero (frozen). Multiplying the kernel's
+            # update by this mask leaves those entries untouched while allowing the
+            # rest to train. Under --sparse_default_init the pattern to hold
+            # fixed is that control's random one, not the connectome's, since
+            # freezing the connectome's zeros would leave the randomly placed
+            # weights sitting at them free to train and the control's own
+            # sparsity structure unfrozen.
+            if sparse_init_mask is not None:
+                trainable_elem_mask = sparse_init_mask.astype(weight_targets.dtype)
+            else:
+                trainable_elem_mask = (weight_targets != 0).astype(weight_targets.dtype)
 
             def _mask_init(params):
                 return optax.EmptyState()
@@ -1095,6 +1157,12 @@ def make_train(config):
                 init_kernel = None
                 if config['CONNECTOME_ZERO_INIT']:
                     init_kernel = jnp.zeros_like(kernel)
+                elif sparse_init_mask is not None:
+                    # Keep the kernel drawn by --rnn_hidden_initializer, zeroing
+                    # all but the randomly chosen entries: the surviving weights
+                    # are untouched draws from that initializer, so their
+                    # distribution is exactly the default one.
+                    init_kernel = jnp.where(sparse_init_mask, kernel, 0.0)
                 elif config['CONNECTOME_INIT']:
                     if connectome_targets_signed:
                         # The targets already carry a transmitter sign, which is

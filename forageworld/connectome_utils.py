@@ -279,3 +279,52 @@ def connectome_loss_nonzero(hh_weights, weight_targets, block_size, k=10.0):
         )
 
     return jnp.mean(loss)
+
+
+def random_sparsity_mask(targets, seed=0, per_row=False):
+    """Return a boolean mask with the same shape as ``targets`` and exactly as
+    many True entries as ``targets`` has non-zero entries, at uniformly random
+    positions - globally, or within each row when ``per_row`` is set.
+
+    This is the structural control for the connectome's sparsity: it keeps the
+    density of the constraint file but throws away where the connections are.
+    Applied to a matrix drawn by the usual recurrent-kernel initializer (see
+    ``--sparse_default_init``), it gives a kernel that is as sparse as the
+    connectome while the surviving weights are ordinary initializer draws, so
+    the connectome's specific wiring and weights are the only thing a run using
+    the real targets adds on top.
+
+    Positions are drawn without replacement, so counts match exactly rather
+    than in expectation. The two modes differ in what structure survives:
+
+    * Globally (the default), only the total count is matched, and each row
+      ends up with a binomial share of it. For a connectome whose out-degrees
+      are heavy-tailed this flattens the degree distribution, so the control
+      differs from the real targets in degree structure as well as in wiring.
+    * ``per_row``, each row keeps exactly its own number of non-zero entries,
+      redrawn uniformly among that row's columns. The out-degree sequence is
+      then identical to the connectome's and only *which* targets each unit
+      connects to is randomized - the next rung down from the real wiring.
+
+    Args:
+        targets: ``(n_rows, n_cols)`` array of target weights, used only for
+            its shape and its per-row / total number of non-zero entries.
+        seed: integer seed for the NumPy RNG used to draw the positions.
+        per_row: match each row's non-zero count instead of only the total.
+
+    Returns:
+        ``np.ndarray`` of bools with the shape of ``targets``.
+    """
+    arr = np.asarray(targets)
+    if arr.ndim != 2:
+        raise ValueError(f"targets must be 2D, got shape {arr.shape}")
+    rng = np.random.default_rng(seed)
+    if per_row:
+        # Rank each column within a random per-row ordering and keep as many as
+        # that row has non-zero entries: one uniform draw of the row's support,
+        # without looping over rows.
+        ranks = np.argsort(np.argsort(rng.random(arr.shape), axis=1), axis=1)
+        return ranks < (arr != 0).sum(axis=1, keepdims=True)
+    mask = np.zeros(arr.size, dtype=bool)
+    mask[rng.choice(arr.size, size=int((arr != 0).sum()), replace=False)] = True
+    return mask.reshape(arr.shape)
