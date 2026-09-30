@@ -281,10 +281,11 @@ def connectome_loss_nonzero(hh_weights, weight_targets, block_size, k=10.0):
     return jnp.mean(loss)
 
 
-def random_sparsity_mask(targets, seed=0, per_row=False):
+def random_sparsity_mask(targets, seed=0, per_row=False, per_col=False):
     """Return a boolean mask with the same shape as ``targets`` and exactly as
     many True entries as ``targets`` has non-zero entries, at uniformly random
-    positions - globally, or within each row when ``per_row`` is set.
+    positions - globally, within each row when ``per_row`` is set, or within
+    each column when ``per_col`` is set.
 
     This is the structural control for the connectome's sparsity: it keeps the
     density of the constraint file but throws away where the connections are.
@@ -295,7 +296,7 @@ def random_sparsity_mask(targets, seed=0, per_row=False):
     the real targets adds on top.
 
     Positions are drawn without replacement, so counts match exactly rather
-    than in expectation. The two modes differ in what structure survives:
+    than in expectation. The modes differ in what structure survives:
 
     * Globally (the default), only the total count is matched, and each row
       ends up with a binomial share of it. For a connectome whose out-degrees
@@ -305,12 +306,24 @@ def random_sparsity_mask(targets, seed=0, per_row=False):
       redrawn uniformly among that row's columns. The out-degree sequence is
       then identical to the connectome's and only *which* targets each unit
       connects to is randomized - the next rung down from the real wiring.
+    * ``per_col``, the same with rows and columns swapped: each column keeps
+      exactly its own number of non-zero entries, redrawn uniformly among
+      that column's rows. Columns are post-synaptic in the from-to kernel, so
+      the in-degree sequence is the connectome's while out-degrees, like the
+      wiring, are left to the draw (each row gets a Poisson-binomial share,
+      flattening them as the global mode does).
+
+    ``per_row`` and ``per_col`` are mutually exclusive: keeping both degree
+    sequences at once needs a degree-preserving rewiring of the whole matrix,
+    not an independent draw per row or per column.
 
     Args:
         targets: ``(n_rows, n_cols)`` array of target weights, used only for
-            its shape and its per-row / total number of non-zero entries.
+            its shape and its per-row / per-column / total number of non-zero
+            entries.
         seed: integer seed for the NumPy RNG used to draw the positions.
         per_row: match each row's non-zero count instead of only the total.
+        per_col: match each column's non-zero count instead of only the total.
 
     Returns:
         ``np.ndarray`` of bools with the shape of ``targets``.
@@ -318,13 +331,16 @@ def random_sparsity_mask(targets, seed=0, per_row=False):
     arr = np.asarray(targets)
     if arr.ndim != 2:
         raise ValueError(f"targets must be 2D, got shape {arr.shape}")
+    if per_row and per_col:
+        raise ValueError("per_row and per_col are mutually exclusive")
     rng = np.random.default_rng(seed)
-    if per_row:
-        # Rank each column within a random per-row ordering and keep as many as
-        # that row has non-zero entries: one uniform draw of the row's support,
-        # without looping over rows.
-        ranks = np.argsort(np.argsort(rng.random(arr.shape), axis=1), axis=1)
-        return ranks < (arr != 0).sum(axis=1, keepdims=True)
+    if per_row or per_col:
+        # Rank each entry within a random ordering of its row (per_row) or
+        # column (per_col) and keep as many as that line has non-zero entries:
+        # one uniform draw of every line's support, without looping over them.
+        axis = 1 if per_row else 0
+        ranks = np.argsort(np.argsort(rng.random(arr.shape), axis=axis), axis=axis)
+        return ranks < (arr != 0).sum(axis=axis, keepdims=True)
     mask = np.zeros(arr.size, dtype=bool)
     mask[rng.choice(arr.size, size=int((arr != 0).sum()), replace=False)] = True
     return mask.reshape(arr.shape)

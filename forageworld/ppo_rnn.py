@@ -206,7 +206,8 @@ def build_parser():
                              "--num_repeats while the weight values differ per repeat. By default only the total "
                              "number of non-zero weights is matched, which leaves each unit with a binomial share of "
                              "them and so flattens the connectome's out-degree distribution; add "
-                             "--match_row_degrees to keep that distribution too. Composes with "
+                             "--match_row_degrees to keep that distribution too, or --match_col_degrees to keep "
+                             "the in-degree distribution instead. Composes with "
                              "--connectome_freeze, --connectome_freeze_zeros (which then freezes the zeros of THIS "
                              "pattern, keeping the random sparsity structure fixed, rather than the connectome's) "
                              "and --no_init_diags; mutually exclusive with --connectome_init / --connectome_zero_init.")
@@ -221,6 +222,22 @@ def build_parser():
                              "flags it does. Note that --no_init_diags restores the drawn diagonal afterwards, so a "
                              "row whose redrawn support missed the diagonal ends up with one more non-zero weight "
                              "than the connectome row it matches.")
+    parser.add_argument('--match_col_degrees', action=argparse.BooleanOptionalAction, default=False,
+                        help="The in-degree counterpart of --match_row_degrees: make --sparse_default_init match the "
+                             "connectome's sparsity column by column, so each unit keeps exactly its own number of "
+                             "incoming connections (the column's non-zero count, columns being post-synaptic in the "
+                             "from-to kernel), redrawn uniformly among that column's rows. The in-degree sequence "
+                             "and the total are then the connectome's, while which units project to each one is "
+                             "randomized, and with it every unit's out-degree, which gets the flattened spread of "
+                             "the plain flag. With a block-sorted constraint file of more than one unit per cell "
+                             "type, every (row, type) tile is sorted by magnitude, so each type's first units hold "
+                             "most of its in-degree: that is also the in-degree sequence --connectome_init starts "
+                             "from, and it is what gets matched. Requires --sparse_default_init and is mutually "
+                             "exclusive with --match_row_degrees (keeping both degree sequences needs a "
+                             "degree-preserving rewiring, not a per-column draw); composes with the same flags. "
+                             "As there, --no_init_diags restores the drawn diagonal afterwards, so a column whose "
+                             "redrawn support missed the diagonal ends up with one more non-zero weight than the "
+                             "connectome column it matches.")
     parser.add_argument('--connectome_zero_init', action=argparse.BooleanOptionalAction, default=False,
                         help="Sanity-check init: set the constrained kernel to all zeros instead of the default initializer. Takes precedence over --connectome_init when both are set. Composes with --connectome_freeze / --connectome_freeze_zeros (which then freeze the zero-initialized kernel).")
     parser.add_argument('--no_init_diags', action=argparse.BooleanOptionalAction, default=False,
@@ -372,7 +389,8 @@ def parse_args():
         incompatible = [
             name for name in (
                 'connectome_init', 'connectome_zero_init', 'sparse_default_init',
-                'match_row_degrees', 'connectome_freeze', 'connectome_freeze_zeros',
+                'match_row_degrees', 'match_col_degrees',
+                'connectome_freeze', 'connectome_freeze_zeros',
                 'connectome_randomize_targets', 'connectome_uniform_targets',
                 'exclude_self_weights', 'fixed_connectome_targets',
                 'no_init_diags',
@@ -386,6 +404,13 @@ def parse_args():
     if args.match_row_degrees and not args.sparse_default_init:
         parser.error("--match_row_degrees requires --sparse_default_init: it only changes how that "
                      "initialization draws its sparsity pattern")
+    if args.match_col_degrees and not args.sparse_default_init:
+        parser.error("--match_col_degrees requires --sparse_default_init: it only changes how that "
+                     "initialization draws its sparsity pattern")
+    if args.match_row_degrees and args.match_col_degrees:
+        parser.error("--match_row_degrees and --match_col_degrees are mutually exclusive: each draws "
+                     "every row's (or column's) support independently, which cannot keep the other "
+                     "degree sequence too")
     if args.sparse_default_init and (args.connectome_init or args.connectome_zero_init):
         parser.error("--sparse_default_init is mutually exclusive with --connectome_init and "
                      "--connectome_zero_init: all three set the recurrent kernel's initial values")
@@ -1032,7 +1057,8 @@ def make_train(config):
             # a Python bool, so every branch it guards resolves at trace time.
             # Structural control for --connectome_init: which entries are
             # non-zero is redrawn uniformly at random, keeping the total count
-            # and, under --match_row_degrees, each row's count as well.
+            # and, under --match_row_degrees / --match_col_degrees, each row's
+            # (out-degree) or column's (in-degree) count as well.
             # Built here, from --seed rather than the per-repeat init key, so
             # that the same pattern is available both to the initializer below
             # and to --connectome_freeze_zeros, whose optimizer transformation
@@ -1044,6 +1070,7 @@ def make_train(config):
                     random_sparsity_mask(
                         weight_targets, seed=config['SEED'],
                         per_row=config.get('MATCH_ROW_DEGREES', False),
+                        per_col=config.get('MATCH_COL_DEGREES', False),
                     )
                 )
             connectome_targets_signed = bool(np.any(np.asarray(weight_targets) < 0))
