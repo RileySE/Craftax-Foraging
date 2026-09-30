@@ -210,7 +210,8 @@ def build_parser():
                              "the in-degree distribution instead. Composes with "
                              "--connectome_freeze, --connectome_freeze_zeros (which then freezes the zeros of THIS "
                              "pattern, keeping the random sparsity structure fixed, rather than the connectome's) "
-                             "and --no_init_diags; mutually exclusive with --connectome_init / --connectome_zero_init.")
+                             "and --no_init_diags; mutually exclusive with --connectome_init / --connectome_zero_init "
+                             "/ --connectome_mask_init.")
     parser.add_argument('--match_row_degrees', action=argparse.BooleanOptionalAction, default=False,
                         help="Make --sparse_default_init match the connectome's sparsity row by row instead of only "
                              "in total: each unit keeps exactly its own number of outgoing connections (the row's "
@@ -238,6 +239,26 @@ def build_parser():
                              "As there, --no_init_diags restores the drawn diagonal afterwards, so a column whose "
                              "redrawn support missed the diagonal ends up with one more non-zero weight than the "
                              "connectome column it matches.")
+    parser.add_argument('--connectome_mask_init', action=argparse.BooleanOptionalAction, default=False,
+                        help="Value control for --connectome_init: initialize the RNN hidden-to-hidden kernel with "
+                             "exactly the connectome's connectivity (non-zero where the constraint targets are "
+                             "non-zero, zero everywhere else) but with the non-zero weights' values drawn by "
+                             "--rnn_hidden_initializer instead of taken from the targets, i.e. the default "
+                             "orthogonal matrix with every entry outside the connectome's support zeroed. It "
+                             "differs from --connectome_init only in the weight values, so comparing the two "
+                             "isolates the effect of the connectome's values from that of its wiring; it is the "
+                             "top rung of the --sparse_default_init (+ --match_row_degrees / --match_col_degrees) "
+                             "ladder, whose patterns are random. The support is the one --connectome_init writes: "
+                             "that of the targets after --connectome_randomize_targets / "
+                             "--connectome_uniform_targets, including the sorted per-tile layout of a block-sorted "
+                             "multi-unit file. Values are used exactly as drawn, sign included, so a signed "
+                             "constraint file's transmitter polarity is NOT copied (--connectome_init copies it), "
+                             "and the scale is the initializer's, not the targets'. No extra random draw is made, "
+                             "so for a given --seed the surviving weights equal the default init's at the same "
+                             "positions. Composes with the connectome constraint loss, --connectome_freeze, "
+                             "--connectome_freeze_zeros (whose frozen zeros are then exactly this init's zeros) "
+                             "and --no_init_diags; mutually exclusive with --connectome_init, "
+                             "--connectome_zero_init and --sparse_default_init.")
     parser.add_argument('--connectome_zero_init', action=argparse.BooleanOptionalAction, default=False,
                         help="Sanity-check init: set the constrained kernel to all zeros instead of the default initializer. Takes precedence over --connectome_init when both are set. Composes with --connectome_freeze / --connectome_freeze_zeros (which then freeze the zero-initialized kernel).")
     parser.add_argument('--no_init_diags', action=argparse.BooleanOptionalAction, default=False,
@@ -246,8 +267,9 @@ def build_parser():
                              "--connectome_init / --connectome_zero_init as usual, while the diagonal keeps the "
                              "value drawn by --rnn_hidden_initializer (orthogonal / normal / uniform). Only affects "
                              "initialization - it does not change the constraint loss (see --exclude_self_weights "
-                             "for that) or which weights train. Requires --connectome_init or "
-                             "--connectome_zero_init, since it has nothing to modify otherwise.")
+                             "for that) or which weights train. Requires --connectome_init, "
+                             "--connectome_zero_init, --sparse_default_init or --connectome_mask_init, since it has "
+                             "nothing to modify otherwise.")
     parser.add_argument('--exclude_self_weights', action=argparse.BooleanOptionalAction, default=False,
                         help="Exclude each unit's self weight (the diagonal of the RNN hidden-to-hidden kernel) from "
                              "the connectome constraint loss: the diagonal is zeroed before the block-sorted "
@@ -284,7 +306,7 @@ def build_parser():
                         help="Number of environments traced by the RNN gradient probe. Probe memory scales linearly "
                              "with this (it stores grad_viz_steps x grad_viz_envs observations plus their gradient).")
     parser.add_argument('--no_connectome', action=argparse.BooleanOptionalAction, default=False,
-                        help="Skip loading the connectome targets from --connectome_filepath and skip the connectome constraint term in the loss. Incompatible with --connectome_init / --connectome_zero_init / --connectome_freeze / --connectome_freeze_zeros / --connectome_randomize_targets / --connectome_uniform_targets, since those all require the loaded targets.")
+                        help="Skip loading the connectome targets from --connectome_filepath and skip the connectome constraint term in the loss. Incompatible with --connectome_init / --connectome_zero_init / --connectome_mask_init / --connectome_freeze / --connectome_freeze_zeros / --connectome_randomize_targets / --connectome_uniform_targets, since those all require the loaded targets.")
     parser.add_argument("--rnn_hidden_initializer", type=str, default='orthogonal', help='Select an initializer for the hidden-hidden weights of the RNN. Valid options are "orthogonal" (default), "normal", and "uniform"')
     parser.add_argument('--checkpoint_interval', type=int, default=1,
                         help="Save a full training checkpoint (network weights, optimizer state, environment states, "
@@ -389,7 +411,7 @@ def parse_args():
         incompatible = [
             name for name in (
                 'connectome_init', 'connectome_zero_init', 'sparse_default_init',
-                'match_row_degrees', 'match_col_degrees',
+                'connectome_mask_init', 'match_row_degrees', 'match_col_degrees',
                 'connectome_freeze', 'connectome_freeze_zeros',
                 'connectome_randomize_targets', 'connectome_uniform_targets',
                 'exclude_self_weights', 'fixed_connectome_targets',
@@ -414,12 +436,17 @@ def parse_args():
     if args.sparse_default_init and (args.connectome_init or args.connectome_zero_init):
         parser.error("--sparse_default_init is mutually exclusive with --connectome_init and "
                      "--connectome_zero_init: all three set the recurrent kernel's initial values")
+    if args.connectome_mask_init and (args.connectome_init or args.connectome_zero_init
+                                      or args.sparse_default_init):
+        parser.error("--connectome_mask_init is mutually exclusive with --connectome_init, "
+                     "--connectome_zero_init and --sparse_default_init: all of them set the recurrent "
+                     "kernel's initial values")
     if args.no_init_diags and not (args.connectome_init or args.connectome_zero_init
-                                   or args.sparse_default_init):
-        parser.error("--no_init_diags requires --connectome_init, --connectome_zero_init or "
-                     "--sparse_default_init; it only changes which entries those manual initializations "
-                     "overwrite, so on its own it does nothing (the diagonal already comes from "
-                     "--rnn_hidden_initializer)")
+                                   or args.sparse_default_init or args.connectome_mask_init):
+        parser.error("--no_init_diags requires --connectome_init, --connectome_zero_init, "
+                     "--sparse_default_init or --connectome_mask_init; it only changes which entries those "
+                     "manual initializations overwrite, so on its own it does nothing (the diagonal already "
+                     "comes from --rnn_hidden_initializer)")
     return args
 
 
@@ -1073,6 +1100,13 @@ def make_train(config):
                         per_col=config.get('MATCH_COL_DEGREES', False),
                     )
                 )
+            elif config.get('CONNECTOME_MASK_INIT', False):
+                # Value control for --connectome_init: the same initializer
+                # masking, but with the connectome's own support, i.e. exactly
+                # the entries --connectome_init writes non-zero. Under
+                # --connectome_freeze_zeros this mask equals the connectome's
+                # zero pattern, so both inits freeze the same entries.
+                sparse_init_mask = jnp.asarray(np.asarray(weight_targets) != 0)
             connectome_targets_signed = bool(np.any(np.asarray(weight_targets) < 0))
             print(f'Connectome targets: {"signed (transmitter polarity constrained)" if connectome_targets_signed else "unsigned (magnitude only)"}')
             weight_targets = jnp.asarray(weight_targets)
@@ -1185,8 +1219,9 @@ def make_train(config):
                 if config['CONNECTOME_ZERO_INIT']:
                     init_kernel = jnp.zeros_like(kernel)
                 elif sparse_init_mask is not None:
-                    # Keep the kernel drawn by --rnn_hidden_initializer, zeroing
-                    # all but the randomly chosen entries: the surviving weights
+                    # --sparse_default_init / --connectome_mask_init: keep the
+                    # kernel drawn by --rnn_hidden_initializer, zeroing all but
+                    # the random or connectome entries: the surviving weights
                     # are untouched draws from that initializer, so their
                     # distribution is exactly the default one.
                     init_kernel = jnp.where(sparse_init_mask, kernel, 0.0)
