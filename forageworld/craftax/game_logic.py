@@ -1836,11 +1836,12 @@ def update_mobs(rng, state, params, static_params):
         return (rng, state), None
 
     rng, _rng = jax.random.split(rng)
-    (rng, state), _ = jax.lax.scan(
-        _move_player_projectile,
-        (rng, state),
-        jnp.arange(static_params.max_player_projectiles),
-    )
+    if static_params.player_projectiles:
+        (rng, state), _ = jax.lax.scan(
+            _move_player_projectile,
+            (rng, state),
+            jnp.arange(static_params.max_player_projectiles),
+        )
 
     return state
 

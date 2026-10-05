@@ -39,59 +39,70 @@ def render_craftax_symbolic(state: EnvState, directional_vision: bool = True):
         (*OBS_DIM, 5 * mob_types_per_class), dtype=jnp.int32
     )  # 5 classes * 8 types
 
-    def _add_mob_to_map(carry, mob_index):
-        mob_map, mobs, mob_class_index = carry
-
+    # Draws one mob class with a single batched write. This used to be a
+    # lax.scan writing one mob at a time,
+    #     mob_map.at[local_position[0], local_position[1], mob_identifier].set(
+    #         on_screen)
+    # and the batched write reproduces it exactly: indices are resolved as
+    # .at[] resolves them (a negative index wraps around once, and a write
+    # with any index still out of range is dropped), and where several mobs
+    # of the class land on the same cell only the last one (highest slot)
+    # counts. That includes mobs that are off screen, which write 0, so a mob
+    # whose screen position wraps around can still blank the cell of a
+    # visible mob of the same type, as it always could.
+    def _add_mobs_to_map(mob_map, mobs, mob_class_index):
         local_position = (
-            mobs.position[mob_index]
+            mobs.position
             - state.player_position
             + jnp.array([OBS_DIM[0], OBS_DIM[1]]) // 2
         )
         on_screen = jnp.logical_and(
             local_position >= 0, local_position < jnp.array([OBS_DIM[0], OBS_DIM[1]])
-        ).all()
-        on_screen *= mobs.mask[mob_index]
+        ).all(axis=-1)
+        on_screen = jnp.logical_and(on_screen, mobs.mask)
 
-        mob_identifier = mob_class_index * mob_types_per_class + mobs.type_id[mob_index]
-        mob_map = mob_map.at[local_position[0], local_position[1], mob_identifier].set(
-            on_screen.astype(jnp.int32)
+        mob_identifier = mob_class_index * mob_types_per_class + mobs.type_id
+        index = jnp.stack(
+            [local_position[:, 0], local_position[:, 1], mob_identifier], axis=-1
+        )
+        dims = jnp.array(mob_map.shape)
+        index = jnp.where(index < 0, index + dims, index)
+        written = jnp.logical_and(index >= 0, index < dims).all(axis=-1)
+        cell = (index[:, 0] * dims[1] + index[:, 1]) * dims[2] + index[:, 2]
+
+        slots = jnp.arange(mobs.mask.shape[0])
+        overwritten = jnp.logical_and(
+            jnp.logical_and(slots[None, :] > slots[:, None], written[None, :]),
+            cell[None, :] == cell[:, None],
+        ).any(axis=1)
+        # Writes that are dropped or overwritten get distinct out-of-range
+        # cells, so the remaining ones are unique.
+        cell = jnp.where(
+            jnp.logical_and(written, jnp.logical_not(overwritten)),
+            cell,
+            mob_map.size + slots,
+        )
+        return (
+            mob_map.reshape(-1)
+            .at[cell]
+            .set(on_screen.astype(jnp.int32), mode="drop", unique_indices=True)
+            .reshape(mob_map.shape)
         )
 
-        return (mob_map, mobs, mob_class_index), None
-
-    (mob_map, _, _), _ = jax.lax.scan(
-        _add_mob_to_map,
-        (mob_map, jax.tree.map(lambda x: x[state.player_level], state.melee_mobs), 0),
-        jnp.arange(state.melee_mobs.mask.shape[1]),
-    )
-    (mob_map, _, _), _ = jax.lax.scan(
-        _add_mob_to_map,
-        (mob_map, jax.tree.map(lambda x: x[state.player_level], state.passive_mobs), 1),
-        jnp.arange(state.passive_mobs.mask.shape[1]),
-    )
-    (mob_map, _, _), _ = jax.lax.scan(
-        _add_mob_to_map,
-        (mob_map, jax.tree.map(lambda x: x[state.player_level], state.ranged_mobs), 2),
-        jnp.arange(state.ranged_mobs.mask.shape[1]),
-    )
-    (mob_map, _, _), _ = jax.lax.scan(
-        _add_mob_to_map,
+    for mob_class_index, mobs in enumerate(
         (
+            state.melee_mobs,
+            state.passive_mobs,
+            state.ranged_mobs,
+            state.mob_projectiles,
+            state.player_projectiles,
+        )
+    ):
+        mob_map = _add_mobs_to_map(
             mob_map,
-            jax.tree.map(lambda x: x[state.player_level], state.mob_projectiles),
-            3,
-        ),
-        jnp.arange(state.mob_projectiles.mask.shape[1]),
-    )
-    (mob_map, _, _), _ = jax.lax.scan(
-        _add_mob_to_map,
-        (
-            mob_map,
-            jax.tree.map(lambda x: x[state.player_level], state.player_projectiles),
-            4,
-        ),
-        jnp.arange(state.player_projectiles.mask.shape[1]),
-    )
+            jax.tree.map(lambda x: x[state.player_level], mobs),
+            mob_class_index,
+        )
 
     all_map = jnp.concatenate(
         [map_view_one_hot, item_map_view_one_hot, mob_map], axis=-1

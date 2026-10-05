@@ -156,6 +156,11 @@ class StaticEnvParams:
     # same RNG keys either way, so it is identical to level 0 of the full world.
     # num_levels keeps meaning the game's level count (boss on the last level).
     single_level: bool = False
+    # Whether player projectiles can exist, i.e. whether SHOOT_ARROW,
+    # CAST_FIREBALL or CAST_ICEBALL is in the agent's action space. When none
+    # is, the per-step player-projectile update is skipped: with every
+    # projectile inactive it would only move their unobservable positions.
+    player_projectiles: bool = True
 
     @property
     def num_stored_levels(self) -> int:

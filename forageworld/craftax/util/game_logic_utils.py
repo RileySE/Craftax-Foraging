@@ -39,12 +39,12 @@ def attack_mob_class(
     can_get_achievement,
     mob_class_index,
 ):
-    def is_attacking_mob_at_index(unused, mob_index):
-        in_mob = (mobs.position[state.player_level, mob_index] == position).all()
-        return None, jnp.logical_and(in_mob, mobs.mask[state.player_level, mob_index])
-
-    _, is_attacking_mob_array = jax.lax.scan(
-        is_attacking_mob_at_index, None, jnp.arange(mobs.mask.shape[1])
+    # Whether each mob slot is alive and at position, for all slots at once
+    # (this used to be a lax.scan over the slots, one launch-bound iteration
+    # per slot, run 7 times per env step).
+    is_attacking_mob_array = jnp.logical_and(
+        (mobs.position[state.player_level] == position).all(axis=-1),
+        mobs.mask[state.player_level],
     )
     is_attacking_mob = is_attacking_mob_array.sum() > 0
     target_mob_index = jnp.argmax(is_attacking_mob_array)

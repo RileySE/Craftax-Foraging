@@ -967,6 +967,9 @@ def make_train(config):
     # written before single-level storage no longer restore; --init_from, which
     # only loads network weights, still works.
     static_params.single_level = not config['FULL_ACTION_SPACE']
+    # Nor can it shoot or cast (SHOOT_ARROW / CAST_*), so player projectiles
+    # never exist and their per-step update can be skipped.
+    static_params.player_projectiles = config['FULL_ACTION_SPACE']
 
     if config["ENV_NAME"] == "Craftax-Classic-Symbolic-v1":
         from forageworld.craftax_classic.envs.craftax_symbolic_env import (
