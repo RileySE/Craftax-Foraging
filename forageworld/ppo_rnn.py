@@ -186,9 +186,9 @@ def build_parser():
     parser.add_argument('--random_start', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument('--connectome_init', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument('--connectome_freeze', action=argparse.BooleanOptionalAction, default=False,
-                        help="Freeze the constrained weights at their initial values throughout training. Does not change the initialization on its own — combine with --connectome_init (or --connectome_zero_init) to control what values are frozen.")
+                        help="Freeze the constrained weights at their initial values throughout training. Does not change the initialization on its own — combine with --connectome_init, --connectome_zero_init, --connectome_mask_init or --sparse_default_init to control what values are frozen.")
     parser.add_argument('--connectome_freeze_zeros', action=argparse.BooleanOptionalAction, default=False,
-                        help="Freeze only the entries whose connectome target is zero at their initial values; non-zero-target entries train normally. Does not change the initialization on its own — combine with --connectome_init (or --connectome_zero_init) to control what values are frozen.")
+                        help="Freeze only the entries whose connectome target is zero at their initial values; non-zero-target entries train normally. Under --sparse_default_init the frozen entries are instead the zeros of that init's random pattern. Does not change the initialization on its own — combine with --connectome_init, --connectome_zero_init, --connectome_mask_init or --sparse_default_init, each of which starts the frozen entries at zero (without one they are frozen at the default initializer's values). With --no_init_diags, frozen diagonal entries keep their drawn non-zero values instead, since freezing follows the targets or pattern, not the initial values.")
     parser.add_argument('--connectome_randomize_targets', action=argparse.BooleanOptionalAction, default=False,
                         help="Replace the loaded connectome targets with a randomized matrix that preserves the global zero fraction and the distribution of non-zero values; the seed for the shuffle is taken from --seed. Block-sorted to match the default loss, or left unsorted under --fixed_connectome_targets so the control matches that loss's target layout.")
     parser.add_argument('--connectome_uniform_targets', action=argparse.BooleanOptionalAction, default=False,
@@ -256,18 +256,24 @@ def build_parser():
                              "and the scale is the initializer's, not the targets'. No extra random draw is made, "
                              "so for a given --seed the surviving weights equal the default init's at the same "
                              "positions. Composes with the connectome constraint loss, --connectome_freeze, "
-                             "--connectome_freeze_zeros (whose frozen zeros are then exactly this init's zeros) "
+                             "--connectome_freeze_zeros (which then freezes exactly the entries this init zeroes, "
+                             "the same ones it freezes under --connectome_init, though with --no_init_diags any "
+                             "diagonal ones among them are frozen at their drawn values rather than at zero) "
                              "and --no_init_diags; mutually exclusive with --connectome_init, "
                              "--connectome_zero_init and --sparse_default_init.")
     parser.add_argument('--connectome_zero_init', action=argparse.BooleanOptionalAction, default=False,
                         help="Sanity-check init: set the constrained kernel to all zeros instead of the default initializer. Takes precedence over --connectome_init when both are set. Composes with --connectome_freeze / --connectome_freeze_zeros (which then freeze the zero-initialized kernel).")
     parser.add_argument('--no_init_diags', action=argparse.BooleanOptionalAction, default=False,
                         help="Leave the diagonal (each unit's self weight) of the RNN hidden-to-hidden kernel out "
-                             "of the manual connectome initialization: the off-diagonal entries are overwritten by "
-                             "--connectome_init / --connectome_zero_init as usual, while the diagonal keeps the "
-                             "value drawn by --rnn_hidden_initializer (orthogonal / normal / uniform). Only affects "
+                             "of the manual connectome initialization: the off-diagonal entries are set by "
+                             "--connectome_init, --connectome_zero_init, --sparse_default_init or "
+                             "--connectome_mask_init as usual, while the diagonal keeps the value drawn by "
+                             "--rnn_hidden_initializer (orthogonal / normal / uniform). Only affects "
                              "initialization - it does not change the constraint loss (see --exclude_self_weights "
-                             "for that) or which weights train. Requires --connectome_init, "
+                             "for that) or which weights train. With --connectome_freeze_zeros, a diagonal entry "
+                             "outside the init's support (a zero target, or outside --sparse_default_init's "
+                             "pattern) is therefore frozen at its drawn non-zero value for the whole run rather "
+                             "than at zero. Requires --connectome_init, "
                              "--connectome_zero_init, --sparse_default_init or --connectome_mask_init, since it has "
                              "nothing to modify otherwise.")
     parser.add_argument('--exclude_self_weights', action=argparse.BooleanOptionalAction, default=False,
@@ -372,6 +378,31 @@ def build_parser():
     return parser
 
 
+# Options that choose the recurrent kernel's initial values.
+KERNEL_INIT_FLAGS = ('connectome_init', 'connectome_zero_init', 'sparse_default_init', 'connectome_mask_init')
+
+
+def kernel_init_conflict(flags):
+    """Return an error message if `flags` (option name -> value) selects
+    incompatible recurrent-kernel initializations, else None.
+
+    Shared by parse_args, which sees only the typed flags, and the resume
+    path, whose config also carries the checkpoint's stored ones. A clash
+    must not get past either: init_runner_state picks one mode by if/elif
+    and would resolve it silently.
+    """
+    if flags.get('sparse_default_init') and (flags.get('connectome_init')
+                                             or flags.get('connectome_zero_init')):
+        return ("--sparse_default_init is mutually exclusive with --connectome_init and "
+                "--connectome_zero_init: all three set the recurrent kernel's initial values")
+    if flags.get('connectome_mask_init') and (flags.get('connectome_init') or flags.get('connectome_zero_init')
+                                              or flags.get('sparse_default_init')):
+        return ("--connectome_mask_init is mutually exclusive with --connectome_init, "
+                "--connectome_zero_init and --sparse_default_init: all of them set the recurrent "
+                "kernel's initial values")
+    return None
+
+
 def parse_args():
     parser = build_parser()
     args = parser.parse_args()
@@ -433,14 +464,9 @@ def parse_args():
         parser.error("--match_row_degrees and --match_col_degrees are mutually exclusive: each draws "
                      "every row's (or column's) support independently, which cannot keep the other "
                      "degree sequence too")
-    if args.sparse_default_init and (args.connectome_init or args.connectome_zero_init):
-        parser.error("--sparse_default_init is mutually exclusive with --connectome_init and "
-                     "--connectome_zero_init: all three set the recurrent kernel's initial values")
-    if args.connectome_mask_init and (args.connectome_init or args.connectome_zero_init
-                                      or args.sparse_default_init):
-        parser.error("--connectome_mask_init is mutually exclusive with --connectome_init, "
-                     "--connectome_zero_init and --sparse_default_init: all of them set the recurrent "
-                     "kernel's initial values")
+    conflict = kernel_init_conflict(vars(args))
+    if conflict:
+        parser.error(conflict)
     if args.no_init_diags and not (args.connectome_init or args.connectome_zero_init
                                    or args.sparse_default_init or args.connectome_mask_init):
         parser.error("--no_init_diags requires --connectome_init, --connectome_zero_init, "
@@ -2305,6 +2331,29 @@ if __name__ == "__main__":
             config[key.upper()] = value
         for key, value in vars(args).items():
             config.setdefault(key.upper(), value)
+        conflict = kernel_init_conflict({key.lower(): value for key, value in config.items()})
+        if conflict:
+            # parse_args already rejected clashes among the typed flags, so at
+            # least one side of this one comes from the checkpoint.
+            inherited = [
+                name for name in KERNEL_INIT_FLAGS
+                if config.get(name.upper()) and name not in explicit_args
+            ]
+            raise ValueError("{} ({} set in the checkpoint's stored config; pass {} to override)".format(
+                conflict,
+                ", ".join(f"--{name}" for name in inherited),
+                " ".join(f"--no-{name}" for name in inherited),
+            ))
+        if config.get("CONNECTOME_MASK_INIT") and not checkpoint["config"].get("CONNECTOME_MASK_INIT", False):
+            # Only when turned on relative to the checkpoint: resuming a
+            # --connectome_mask_init run (every auto-resume leg retypes the
+            # flag) loads a kernel that init did produce.
+            print("Warning: --connectome_mask_init only sets the recurrent kernel's initial values, but this "
+                  "run loads the kernel from the checkpoint, so it is NOT masked to the connectome's support{}. "
+                  "The run config still records CONNECTOME_MASK_INIT=True.".format(
+                      "; --connectome_freeze_zeros freezes the entries outside that support at their loaded "
+                      "values rather than at zero" if config.get("CONNECTOME_FREEZE_ZEROS") else ""
+                  ))
         if explicit_args.get("stripped_world") and "predators" not in explicit_args:
             # Same default as a fresh --stripped_world run: turning the stripped
             # world on here must not inherit the trained run's predators.
