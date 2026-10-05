@@ -1,5 +1,17 @@
 from forageworld.craftax.util.game_logic_utils import *
 
+from jax._src.interpreters import batching as _batching
+from jax._src.lax.lax import optimization_barrier_p as _optimization_barrier_p
+
+# jax 0.4.33 has no vmap rule for jax.lax.optimization_barrier (later releases
+# add one), and update_mobs uses it under the env's vmap. The barrier is an
+# identity, so it batches by passing the batch dimensions straight through.
+if _optimization_barrier_p not in _batching.primitive_batchers:
+    _batching.primitive_batchers[_optimization_barrier_p] = lambda args, dims: (
+        _optimization_barrier_p.bind(*args),
+        dims,
+    )
+
 
 def update_plants_with_eat(state, plant_position, static_params):
     def _is_plant(unused, index):
@@ -169,25 +181,28 @@ def do_action(rng, state, action, static_params):
 
     block_position = state.player_position + DIRECTIONS[state.player_direction]
 
+    # mob_map is updated at the end, at cell level (see below).
     state, did_attack_mob, did_kill_mob = attack_mob(
-        state, block_position, get_player_damage_vector(state), True
+        state,
+        block_position,
+        get_player_damage_vector(state),
+        True,
+        update_mob_map=False,
     )
+
+    # The map can only change at block_position, so its new value there is
+    # carried as a scalar (cell) and written once at the end, instead of
+    # rebuilding and selecting the whole level map for every block type. Every
+    # read of the old map goes through old_cell, the single gather that the
+    # final in-place write depends on.
+    old_cell = state.map[state.player_level, block_position[0], block_position[1]]
 
     # BLOCKS
     # Tree
     can_mine_tree = True
-    is_block_tree = (
-        state.map[state.player_level, block_position[0], block_position[1]]
-        == BlockType.TREE.value
-    )
-    is_block_fire_tree = (
-        state.map[state.player_level, block_position[0], block_position[1]]
-        == BlockType.FIRE_TREE.value
-    )
-    is_block_ice_shrub = (
-        state.map[state.player_level, block_position[0], block_position[1]]
-        == BlockType.ICE_SHRUB.value
-    )
+    is_block_tree = old_cell == BlockType.TREE.value
+    is_block_fire_tree = old_cell == BlockType.FIRE_TREE.value
+    is_block_ice_shrub = old_cell == BlockType.ICE_SHRUB.value
 
     is_block_tree_type = jnp.logical_or(
         is_block_tree, jnp.logical_or(is_block_fire_tree, is_block_ice_shrub)
@@ -205,13 +220,9 @@ def do_action(rng, state, action, static_params):
     mined_tree_block = jax.lax.select(
         is_mining_tree,
         tree_replacement_block,
-        state.map[state.player_level, block_position[0], block_position[1]],
+        old_cell,
     )
-    new_map = (
-        state.map[state.player_level]
-        .at[block_position[0], block_position[1]]
-        .set(mined_tree_block)
-    )
+    cell = mined_tree_block
     new_inventory = state.inventory.replace(
         wood=state.inventory.wood + 1 * is_mining_tree
     )
@@ -219,94 +230,82 @@ def do_action(rng, state, action, static_params):
     # Stone
     can_mine_stone = state.inventory.pickaxe >= 1
     is_mining_stone = jnp.logical_and(
-        state.map[state.player_level][block_position[0], block_position[1]]
-        == BlockType.STONE.value,
+        old_cell == BlockType.STONE.value,
         can_mine_stone,
     )
     # HACK: Replace stone with grass to prevent agent from making cow patches
     mined_stone_block = jax.lax.select(
         is_mining_stone,
         BlockType.GRASS.value,
-        new_map[block_position[0], block_position[1]],
+        cell,
     )
-    new_map = new_map.at[block_position[0], block_position[1]].set(mined_stone_block)
+    cell = mined_stone_block
     new_inventory = new_inventory.replace(
         stone=new_inventory.stone + 1 * is_mining_stone
     )
 
     # Furnace
-    is_mining_furnace = (
-        state.map[state.player_level][block_position[0], block_position[1]]
-        == BlockType.FURNACE.value
-    )
+    is_mining_furnace = old_cell == BlockType.FURNACE.value
 
     # HACK: Mined constructed surfaces leave behind grass rather than path, to prevent agent from building a cow farm
     mined_furnace_block = jax.lax.select(
         is_mining_furnace,
         BlockType.GRASS.value,
-        new_map[block_position[0], block_position[1]],
+        cell,
     )
-    new_map = new_map.at[block_position[0], block_position[1]].set(mined_furnace_block)
+    cell = mined_furnace_block
 
     # Crafting Bench
-    is_mining_crafting_table = (
-        state.map[state.player_level][block_position[0], block_position[1]]
-        == BlockType.CRAFTING_TABLE.value
-    )
+    is_mining_crafting_table = old_cell == BlockType.CRAFTING_TABLE.value
 
     mined_crafting_table_block = jax.lax.select(
         is_mining_crafting_table,
         BlockType.GRASS.value,
-        new_map[block_position[0], block_position[1]],
+        cell,
     )
-    new_map = new_map.at[block_position[0], block_position[1]].set(
-        mined_crafting_table_block
-    )
+    cell = mined_crafting_table_block
 
     # Coal
     can_mine_coal = state.inventory.pickaxe >= 1
     is_mining_coal = jnp.logical_and(
-        state.map[state.player_level][block_position[0], block_position[1]]
-        == BlockType.COAL.value,
+        old_cell == BlockType.COAL.value,
         can_mine_coal,
     )
     # HACK: Coal and iron also leave behind grass rather than path
     mined_coal_block = jax.lax.select(
         is_mining_coal,
         BlockType.GRASS.value,
-        new_map[block_position[0], block_position[1]],
+        cell,
     )
-    new_map = new_map.at[block_position[0], block_position[1]].set(mined_coal_block)
+    cell = mined_coal_block
     new_inventory = new_inventory.replace(coal=new_inventory.coal + 1 * is_mining_coal)
 
     # Iron
     can_mine_iron = state.inventory.pickaxe >= 2
     is_mining_iron = jnp.logical_and(
-        state.map[state.player_level][block_position[0], block_position[1]]
-        == BlockType.IRON.value,
+        old_cell == BlockType.IRON.value,
         can_mine_iron,
     )
     mined_iron_block = jax.lax.select(
         is_mining_iron,
         BlockType.GRASS.value,
-        new_map[block_position[0], block_position[1]],
+        cell,
     )
-    new_map = new_map.at[block_position[0], block_position[1]].set(mined_iron_block)
+    cell = mined_iron_block
     new_inventory = new_inventory.replace(iron=new_inventory.iron + 1 * is_mining_iron)
 
     # Diamond
     can_mine_diamond = state.inventory.pickaxe >= 3
     is_mining_diamond = jnp.logical_and(
-        state.map[state.player_level][block_position[0], block_position[1]]
-        == BlockType.DIAMOND.value,
+        old_cell == BlockType.DIAMOND.value,
         can_mine_diamond,
     )
     mined_diamond_block = jax.lax.select(
         is_mining_diamond,
         BlockType.GRASS.value,
-        new_map[block_position[0], block_position[1]],
+        cell,
     )
-    new_map = new_map.at[block_position[0], block_position[1]].set(mined_diamond_block)
+    cell = mined_diamond_block
     new_inventory = new_inventory.replace(
         diamond=new_inventory.diamond + 1 * is_mining_diamond
     )
@@ -314,16 +313,15 @@ def do_action(rng, state, action, static_params):
     # Sapphire
     can_mine_sapphire = state.inventory.pickaxe >= 4
     is_mining_sapphire = jnp.logical_and(
-        state.map[state.player_level][block_position[0], block_position[1]]
-        == BlockType.SAPPHIRE.value,
+        old_cell == BlockType.SAPPHIRE.value,
         can_mine_sapphire,
     )
     mined_sapphire_block = jax.lax.select(
         is_mining_sapphire,
         BlockType.PATH.value,
-        new_map[block_position[0], block_position[1]],
+        cell,
     )
-    new_map = new_map.at[block_position[0], block_position[1]].set(mined_sapphire_block)
+    cell = mined_sapphire_block
     new_inventory = new_inventory.replace(
         sapphire=new_inventory.sapphire + 1 * is_mining_sapphire
     )
@@ -331,23 +329,21 @@ def do_action(rng, state, action, static_params):
     # Ruby
     can_mine_ruby = state.inventory.pickaxe >= 4
     is_mining_ruby = jnp.logical_and(
-        state.map[state.player_level][block_position[0], block_position[1]]
-        == BlockType.RUBY.value,
+        old_cell == BlockType.RUBY.value,
         can_mine_ruby,
     )
     mined_ruby_block = jax.lax.select(
         is_mining_ruby,
         BlockType.PATH.value,
-        new_map[block_position[0], block_position[1]],
+        cell,
     )
-    new_map = new_map.at[block_position[0], block_position[1]].set(mined_ruby_block)
+    cell = mined_ruby_block
     new_inventory = new_inventory.replace(ruby=new_inventory.ruby + 1 * is_mining_ruby)
 
     # Sapling
     rng, _rng = jax.random.split(rng)
     is_mining_sapling = jnp.logical_and(
-        state.map[state.player_level][block_position[0], block_position[1]]
-        == BlockType.GRASS.value,
+        old_cell == BlockType.GRASS.value,
         jax.random.uniform(_rng) < 0.1,
     )
 
@@ -357,10 +353,8 @@ def do_action(rng, state, action, static_params):
 
     # Water
     is_drinking_water = jnp.logical_or(
-        state.map[state.player_level][block_position[0], block_position[1]]
-        == BlockType.WATER.value,
-        state.map[state.player_level][block_position[0], block_position[1]]
-        == BlockType.FOUNTAIN.value,
+        old_cell == BlockType.WATER.value,
+        old_cell == BlockType.FOUNTAIN.value,
     )
     new_drink = jax.lax.select(
         is_drinking_water,
@@ -375,16 +369,13 @@ def do_action(rng, state, action, static_params):
     )
 
     # Plant
-    is_eating_plant = (
-        state.map[state.player_level][block_position[0], block_position[1]]
-        == BlockType.RIPE_PLANT.value
-    )
+    is_eating_plant = old_cell == BlockType.RIPE_PLANT.value
     new_plant = jax.lax.select(
         is_eating_plant,
         BlockType.PLANT.value,
-        new_map[block_position[0], block_position[1]],
+        cell,
     )
-    new_map = new_map.at[block_position[0], block_position[1]].set(new_plant)
+    cell = new_plant
     new_food = jax.lax.select(
         is_eating_plant,
         jnp.minimum(get_max_food(state), state.player_food + 4),
@@ -401,33 +392,27 @@ def do_action(rng, state, action, static_params):
     # Stalagmite
     can_mine_stalagmite = state.inventory.pickaxe >= 1
     is_mining_stalagmite = jnp.logical_and(
-        state.map[state.player_level][block_position[0], block_position[1]]
-        == BlockType.STALAGMITE.value,
+        old_cell == BlockType.STALAGMITE.value,
         can_mine_stalagmite,
     )
     mined_stalagmite_block = jax.lax.select(
         is_mining_stalagmite,
         BlockType.PATH.value,
-        new_map[block_position[0], block_position[1]],
+        cell,
     )
-    new_map = new_map.at[block_position[0], block_position[1]].set(
-        mined_stalagmite_block
-    )
+    cell = mined_stalagmite_block
     new_inventory = new_inventory.replace(
         stone=new_inventory.stone + 1 * is_mining_stalagmite
     )
 
     # Chest
-    is_opening_chest = (
-        state.map[state.player_level][block_position[0], block_position[1]]
-        == BlockType.CHEST.value
-    )
+    is_opening_chest = old_cell == BlockType.CHEST.value
     mined_chest_block = jax.lax.select(
         is_opening_chest,
         BlockType.PATH.value,
-        new_map[block_position[0], block_position[1]],
+        cell,
     )
-    new_map = new_map.at[block_position[0], block_position[1]].set(mined_chest_block)
+    cell = mined_chest_block
     rng, _rng = jax.random.split(rng)
     new_inventory = add_items_from_chest(_rng, state, new_inventory, is_opening_chest)
 
@@ -442,10 +427,7 @@ def do_action(rng, state, action, static_params):
     )
 
     # Boss
-    is_attacking_boss = (
-        state.map[state.player_level][block_position[0], block_position[1]]
-        == BlockType.NECROMANCER.value
-    )
+    is_attacking_boss = old_cell == BlockType.NECROMANCER.value
 
     is_damaging_boss = jnp.logical_and(
         is_attacking_boss,
@@ -471,9 +453,6 @@ def do_action(rng, state, action, static_params):
     action_block_in_bounds = jnp.logical_and(
         action_block_in_bounds, jnp.logical_not(did_attack_mob)
     )
-    new_map = jax.lax.select(
-        action_block_in_bounds, new_map, state.map[state.player_level]
-    )
     new_inventory = jax.tree.map(
         lambda x, y: jax.lax.select(action_block_in_bounds, x, y),
         new_inventory,
@@ -491,10 +470,7 @@ def do_action(rng, state, action, static_params):
         action_block_in_bounds, new_achievements, state.achievements
     )
 
-    new_whole_map = state.map.at[state.player_level].set(new_map)
-
     state = state.replace(
-        map=new_whole_map,
         inventory=new_inventory,
         player_drink=new_drink,
         player_thirst=new_thirst,
@@ -513,6 +489,31 @@ def do_action(rng, state, action, static_params):
         lambda x, y: jax.lax.select(doing_mining, x, y),
         state,
         old_state,
+    )
+
+    # map and mob_map can only have changed at block_position, so instead of
+    # selecting between two whole maps (which also forces copies of them),
+    # write that one cell in place. When nothing changes this writes the old
+    # value back, a no-op for an out-of-bounds block_position as well, since
+    # the reads and the write index it the same way.
+    map_cell = jax.lax.select(
+        jnp.logical_and(doing_mining, action_block_in_bounds), cell, old_cell
+    )
+    old_mob_cell = old_state.mob_map[
+        old_state.player_level, block_position[0], block_position[1]
+    ]
+    mob_cell = jax.lax.select(
+        doing_mining,
+        jnp.logical_and(old_mob_cell, jnp.logical_not(did_kill_mob)),
+        old_mob_cell,
+    )
+    state = state.replace(
+        map=old_state.map.at[
+            old_state.player_level, block_position[0], block_position[1]
+        ].set(map_cell),
+        mob_map=old_state.mob_map.at[
+            old_state.player_level, block_position[0], block_position[1]
+        ].set(mob_cell),
     )
 
     return state
@@ -829,12 +830,22 @@ def add_new_growing_plant(state, position, is_placing_sapling, static_params):
 def place_block(state, action, static_params):
     placing_block_position = state.player_position + DIRECTIONS[state.player_direction]
 
-    new_item_map = state.item_map[state.player_level]
+    # map and item_map can only change at placing_block_position, so their
+    # values there are carried as scalars (cell, item_cell) and written once
+    # at the end instead of rebuilding and selecting whole level maps. Every
+    # read of the old maps goes through old_cell / old_item_cell, the gathers
+    # the final in-place writes depend on.
+    old_cell = state.map[
+        state.player_level, placing_block_position[0], placing_block_position[1]
+    ]
+    old_item_cell = state.item_map[
+        state.player_level, placing_block_position[0], placing_block_position[1]
+    ]
+    item_cell = old_item_cell
 
     is_placement_on_solid_block_or_item = jnp.logical_or(
-        is_in_solid_block(state, placing_block_position),
-        new_item_map[placing_block_position[0], placing_block_position[1]]
-        != ItemType.NONE.value,
+        SOLID_BLOCK_MAPPING[old_cell],  # is_in_solid_block
+        item_cell != ItemType.NONE.value,
     )
 
     # Crafting table
@@ -847,15 +858,9 @@ def place_block(state, action, static_params):
     placed_crafting_table_block = jax.lax.select(
         is_placing_crafting_table,
         BlockType.CRAFTING_TABLE.value,
-        state.map[state.player_level][
-            placing_block_position[0], placing_block_position[1]
-        ],
+        old_cell,
     )
-    new_map = (
-        state.map[state.player_level]
-        .at[placing_block_position[0], placing_block_position[1]]
-        .set(placed_crafting_table_block)
-    )
+    cell = placed_crafting_table_block
     new_inventory = state.inventory.replace(
         wood=state.inventory.wood - 2 * is_placing_crafting_table
     )
@@ -877,11 +882,9 @@ def place_block(state, action, static_params):
     placed_furnace_block = jax.lax.select(
         is_placing_furnace,
         BlockType.FURNACE.value,
-        new_map[placing_block_position[0], placing_block_position[1]],
+        cell,
     )
-    new_map = new_map.at[placing_block_position[0], placing_block_position[1]].set(
-        placed_furnace_block
-    )
+    cell = placed_furnace_block
     new_inventory = new_inventory.replace(
         stone=new_inventory.stone - 1 * is_placing_furnace
     )
@@ -895,10 +898,7 @@ def place_block(state, action, static_params):
     stone_key_down = action == Action.PLACE_STONE.value
     has_stone = new_inventory.stone > 0
     is_placing_on_valid_block = jnp.logical_or(
-        state.map[state.player_level][
-            placing_block_position[0], placing_block_position[1]
-        ]
-        == BlockType.WATER.value,
+        old_cell == BlockType.WATER.value,
         jnp.logical_not(is_placement_on_solid_block_or_item),
     )
     is_placing_stone = jnp.logical_and(
@@ -908,11 +908,9 @@ def place_block(state, action, static_params):
     placed_stone_block = jax.lax.select(
         is_placing_stone,
         BlockType.STONE.value,
-        new_map[placing_block_position[0], placing_block_position[1]],
+        cell,
     )
-    new_map = new_map.at[placing_block_position[0], placing_block_position[1]].set(
-        placed_stone_block
-    )
+    cell = placed_stone_block
     new_inventory = new_inventory.replace(
         stone=new_inventory.stone - 1 * is_placing_stone
     )
@@ -926,16 +924,11 @@ def place_block(state, action, static_params):
     torch_key_down = action == Action.PLACE_TORCH.value
     has_torch = new_inventory.torches > 0
 
-    is_placing_on_valid_block = CAN_PLACE_ITEM_MAPPING[
-        state.map[state.player_level][
-            placing_block_position[0], placing_block_position[1]
-        ]
-    ]
+    is_placing_on_valid_block = CAN_PLACE_ITEM_MAPPING[old_cell]
 
     is_placing_on_valid_block = jnp.logical_and(
         is_placing_on_valid_block,
-        new_item_map[placing_block_position[0], placing_block_position[1]]
-        == ItemType.NONE.value,
+        item_cell == ItemType.NONE.value,
     )
     is_placing_torch = jnp.logical_and(
         torch_key_down,
@@ -945,47 +938,42 @@ def place_block(state, action, static_params):
     placed_torch_item = jax.lax.select(
         is_placing_torch,
         ItemType.TORCH.value,
-        new_item_map[placing_block_position[0], placing_block_position[1]],
+        item_cell,
     )
-    new_item_map = new_item_map.at[
-        placing_block_position[0], placing_block_position[1]
-    ].set(placed_torch_item)
+    item_cell = placed_torch_item
     new_inventory = new_inventory.replace(
         torches=new_inventory.torches - 1 * is_placing_torch
     )
 
-    light_map_padding = 6
-    padded_light_map = jnp.pad(
-        state.light_map[state.player_level],
-        (light_map_padding, light_map_padding),
-        constant_values=0,
+    # The torch lights the 9x9 window centred on placing_block_position. It
+    # is read and written back through the 9x9 region of the light map that
+    # holds the window's on-map part (the window clamped to the map), with
+    # plain dynamic slices: a scatter here would run as a sequential loop
+    # under --xla_gpu_deterministic_ops. Region cells outside the window, and
+    # the whole region unless a torch is placed, are written back unchanged.
+    window_start = placing_block_position - 4
+    region_start = jnp.clip(window_start, 0, jnp.array(static_params.map_size) - 9)
+    region_light_map = jax.lax.dynamic_slice(
+        state.light_map,
+        (state.player_level, region_start[0], region_start[1]),
+        (1, 9, 9),
+    )[0]
+    # Window coordinates of each region cell; window cells are those in [0, 9).
+    window_rows = region_start[0] - window_start[0] + jnp.arange(9)
+    window_cols = region_start[1] - window_start[1] + jnp.arange(9)
+    region_in_window = jnp.logical_and(
+        jnp.logical_and(window_rows >= 0, window_rows < 9)[:, None],
+        jnp.logical_and(window_cols >= 0, window_cols < 9)[None, :],
     )
+    region_torch_light = TORCH_LIGHT_MAP[
+        jnp.clip(window_rows, 0, 8)[:, None], jnp.clip(window_cols, 0, 8)[None, :]
+    ]
 
-    current_light_map = jax.lax.dynamic_slice(
-        padded_light_map,
-        placing_block_position
-        - jnp.array([4, 4])
-        + jnp.array([light_map_padding, light_map_padding]),
-        (9, 9),
-    )
+    torch_light_map = jnp.clip(region_torch_light + region_light_map, 0.0, 1.0)
 
-    torch_light_map = jnp.clip(TORCH_LIGHT_MAP + current_light_map, 0.0, 1.0)
-
-    torch_light_map = torch_light_map * is_placing_torch + current_light_map * (
+    torch_light_map = torch_light_map * is_placing_torch + region_light_map * (
         1 - is_placing_torch
     )
-
-    new_padded_light_map_floor = jax.lax.dynamic_update_slice(
-        padded_light_map,
-        torch_light_map,
-        placing_block_position
-        - jnp.array([4, 4])
-        + jnp.array([light_map_padding, light_map_padding]),
-    )
-    new_light_map_floor = new_padded_light_map_floor[
-        light_map_padding:-light_map_padding, light_map_padding:-light_map_padding
-    ]
-    new_light_map = state.light_map.at[state.player_level].set(new_light_map_floor)
 
     new_achievements = new_achievements.at[Achievement.PLACE_TORCH.value].set(
         jnp.logical_or(
@@ -1001,24 +989,20 @@ def place_block(state, action, static_params):
     is_placing_sapling = jnp.logical_and(
         sapling_key_down,
         jnp.logical_and(
-            new_map[placing_block_position[0], placing_block_position[1]]
-            == BlockType.GRASS.value,
+            cell == BlockType.GRASS.value,
             has_sapling,
         ),
     )
     is_placing_sapling = jnp.logical_and(
         is_placing_sapling,
-        new_item_map[placing_block_position[0], placing_block_position[1]]
-        == ItemType.NONE.value,
+        item_cell == ItemType.NONE.value,
     )
     placed_sapling_block = jax.lax.select(
         is_placing_sapling,
         BlockType.PLANT.value,
-        new_map[placing_block_position[0], placing_block_position[1]],
+        cell,
     )
-    new_map = new_map.at[placing_block_position[0], placing_block_position[1]].set(
-        placed_sapling_block
-    )
+    cell = placed_sapling_block
     new_inventory = new_inventory.replace(
         sapling=new_inventory.sapling - 1 * is_placing_sapling
     )
@@ -1043,12 +1027,6 @@ def place_block(state, action, static_params):
         action_block_in_bounds, jnp.logical_not(is_in_mob(state, action_block))
     )
 
-    new_map = jax.lax.select(
-        action_block_in_bounds, new_map, state.map[state.player_level]
-    )
-    new_item_map = jax.lax.select(
-        action_block_in_bounds, new_item_map, state.item_map[state.player_level]
-    )
     new_inventory = jax.tree.map(
         lambda x, y: jax.lax.select(action_block_in_bounds, x, y),
         new_inventory,
@@ -1070,12 +1048,25 @@ def place_block(state, action, static_params):
     new_growing_plants_mask = jax.lax.select(
         action_block_in_bounds, new_growing_plants_mask, state.growing_plants_mask
     )
-    new_light_map = jax.lax.select(
-        action_block_in_bounds, new_light_map, state.light_map
-    )
 
-    new_whole_map = state.map.at[state.player_level].set(new_map)
-    new_whole_item_map = state.item_map.at[state.player_level].set(new_item_map)
+    # One in-place write per map. When nothing is placed these write the old
+    # values back, a no-op also for an out-of-bounds placing_block_position,
+    # since the reads and the writes index it the same way.
+    new_whole_map = state.map.at[
+        state.player_level, placing_block_position[0], placing_block_position[1]
+    ].set(jax.lax.select(action_block_in_bounds, cell, old_cell))
+    new_whole_item_map = state.item_map.at[
+        state.player_level, placing_block_position[0], placing_block_position[1]
+    ].set(jax.lax.select(action_block_in_bounds, item_cell, old_item_cell))
+    new_light_map = jax.lax.dynamic_update_slice(
+        state.light_map,
+        jnp.where(
+            jnp.logical_and(region_in_window, action_block_in_bounds),
+            torch_light_map,
+            region_light_map,
+        )[None],
+        (state.player_level, region_start[0], region_start[1]),
+    )
 
     state = state.replace(
         map=new_whole_map,
@@ -1249,6 +1240,14 @@ def update_mobs(rng, state, params, static_params):
             should_not_despawn = jnp.array(True)
 
         rng, _rng = jax.random.split(rng)
+
+        # The mob_map scatters below update it in place only if every read of
+        # the old mob_map has already happened. The collision checks behind
+        # position (and, for ranged mobs, behind the decision to shoot) are
+        # not data dependencies of the first scatter, so without this barrier
+        # XLA cannot order them and instead copies the whole mob_map twice per
+        # iteration of this loop. Values are unchanged.
+        position, state = jax.lax.optimization_barrier((position, state))
 
         # Clear our old entry if we are alive
         new_mob_map = state.mob_map.at[
@@ -1563,6 +1562,14 @@ def update_mobs(rng, state, params, static_params):
         should_not_despawn = jnp.logical_or(
             should_not_despawn, is_fighting_boss(state, static_params)
         )
+
+        # The mob_map scatters below update it in place only if every read of
+        # the old mob_map has already happened. The collision checks behind
+        # position (and, for ranged mobs, behind the decision to shoot) are
+        # not data dependencies of the first scatter, so without this barrier
+        # XLA cannot order them and instead copies the whole mob_map twice per
+        # iteration of this loop. Values are unchanged.
+        position, state = jax.lax.optimization_barrier((position, state))
 
         # Clear our old entry if we are alive
         new_mob_map = state.mob_map.at[
@@ -2473,8 +2480,10 @@ def change_floor(
             ),
         ),
     )
+    # num_stored_levels, not num_levels: with only level 0 stored there is no
+    # floor below to move to.
     is_moving_down = jnp.logical_and(
-        is_moving_down, state.player_level < static_params.num_levels - 1
+        is_moving_down, state.player_level < static_params.num_stored_levels - 1
     )
 
     moving_down_position = state.up_ladders[state.player_level + 1]

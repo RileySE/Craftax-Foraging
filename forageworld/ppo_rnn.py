@@ -107,8 +107,8 @@ def build_parser():
     parser.add_argument('--featureless_world', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument('--stripped_world', action=argparse.BooleanOptionalAction, default=False,
                         help="Replace level 0's map with a minimal world for isolated evaluation: nothing but grass, "
-                             "one water tile, one cow and one predator, each placed uniformly at random (levels 1-8 "
-                             "are left as generated, being legacy and unused). Nothing spawns or respawns in it, and "
+                             "one water tile, one cow and one predator, each placed uniformly at random. Nothing "
+                             "spawns or respawns in it, and "
                              "the predator never despawns, so the world stays exactly as generated apart from what "
                              "the agent does to it; --predators therefore defaults to off here (pass it explicitly to "
                              "override). Takes precedence over --featureless_world. Other env flags (--map_size, "
@@ -859,12 +859,22 @@ def make_train(config):
             fresh_leaf = jnp.asarray(fresh_leaf)
             saved_leaf = jnp.asarray(saved_leaf)
             if fresh_leaf.shape != saved_leaf.shape or fresh_leaf.dtype != saved_leaf.dtype:
+                hint = ""
+                if (fresh_leaf.ndim == saved_leaf.ndim and [
+                        (s, f) for s, f in zip(saved_leaf.shape, fresh_leaf.shape) if s != f
+                ] == [(9, 1)]):
+                    hint = (
+                        " The checkpoint stores all 9 env levels: it predates single-level "
+                        "env state (StaticEnvParams.single_level). Resume it with the "
+                        "commit that wrote it, or load just its weights with --init_from."
+                    )
                 raise ValueError(
                     "Cannot resume: checkpoint state {} has shape {} / dtype {} "
-                    "but the current configuration expects shape {} / dtype {}.".format(
+                    "but the current configuration expects shape {} / dtype {}.{}".format(
                         jax.tree_util.keystr(path),
                         saved_leaf.shape, saved_leaf.dtype,
                         fresh_leaf.shape, fresh_leaf.dtype,
+                        hint,
                     )
                 )
             return saved_leaf
@@ -951,6 +961,12 @@ def make_train(config):
     static_params.replay_map_seed = config.get('REPLAY_MAP_SEED')
 
     static_params.max_passive_mobs = config['MAX_COWS']
+    # The reduced action space has no DESCEND/ASCEND, so the agent never leaves
+    # level 0 and the other 8 levels need not be stored. This changes the env
+    # state's shapes (not its level-0 contents), so --resume_from checkpoints
+    # written before single-level storage no longer restore; --init_from, which
+    # only loads network weights, still works.
+    static_params.single_level = not config['FULL_ACTION_SPACE']
 
     if config["ENV_NAME"] == "Craftax-Classic-Symbolic-v1":
         from forageworld.craftax_classic.envs.craftax_symbolic_env import (

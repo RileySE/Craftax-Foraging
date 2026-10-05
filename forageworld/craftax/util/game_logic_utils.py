@@ -82,7 +82,9 @@ def attack_mob_class(
     return mobs, did_kill_mob, is_attacking_mob, new_achievements
 
 
-def attack_mob(state, position, damage_vector, can_eat):
+def attack_mob(state, position, damage_vector, can_eat, update_mob_map=True):
+    """With update_mob_map=False the caller clears the killed mob's mob_map
+    cell itself (do_action does, at cell level); everything else is the same."""
     # Melee
     (
         new_melee_mobs,
@@ -165,13 +167,16 @@ def attack_mob(state, position, damage_vector, can_eat):
     did_kill_monster = jnp.logical_or(did_kill_melee_mob, did_kill_ranged_mob)
     did_kill_mob = jnp.logical_or(did_kill_monster, did_kill_passive_mob)
 
+    if update_mob_map:
+        state = state.replace(
+            mob_map=state.mob_map.at[state.player_level, position[0], position[1]].set(
+                jnp.logical_and(
+                    state.mob_map[state.player_level, position[0], position[1]],
+                    jnp.logical_not(did_kill_mob),
+                )
+            ),
+        )
     state = state.replace(
-        mob_map=state.mob_map.at[state.player_level, position[0], position[1]].set(
-            jnp.logical_and(
-                state.mob_map[state.player_level, position[0], position[1]],
-                jnp.logical_not(did_kill_mob),
-            )
-        ),
         monsters_killed=state.monsters_killed.at[state.player_level].add(
             1 * did_kill_monster
         ),

@@ -559,8 +559,8 @@ def strip_world_level_zero(rng, state, static_params):
     """Replace level 0 with the minimal evaluation world: nothing but grass,
     one water tile, one passive mob (cow) and one predator. The three are
     placed uniformly at random over distinct cells, none of them the player's,
-    so no mob starts in the water or on top of the other. Levels 1-8 are left
-    as generated, being legacy and unused.
+    so no mob starts in the water or on top of the other. Any other levels
+    (only stored with the full action space) are left as generated.
 
     Nothing respawns here: passive and monster spawning both require a PATH
     tile (see spawn_mobs) and this world has none, so the cow is gone once
@@ -671,47 +671,60 @@ def generate_world(rng, params, static_params):
         params=params,
     )
 
-    smoothgens = jax.vmap(generate_smoothworld, in_axes=(0, None, None, 0))(
-        _rng[1:],
-        static_params,
-        player_position,
-        jax.tree.map(lambda x: x[1:], world_configs),
-    )
-
-    smoothgens = jax.tree.map(
-        lambda over, others: jnp.concatenate([jnp.array([over]), others], axis=0),
-        overworld,
-        smoothgens,
-    )
-
-    # Generate dungeons
+    # Every key below is split exactly as in the full world even when the
+    # other levels are skipped, so level 0 and everything drawn after the
+    # levels (potion mapping, state_rng, the stripped world) are unchanged.
     rngs = jax.random.split(rng, 4)
-    rng, _rng = rngs[0], rngs[1:]
-    dungeons = jax.vmap(generate_dungeon, in_axes=(0, None, 0))(
-        _rng, static_params, ALL_DUNGEON_CONFIGS
-    )
+    rng, dungeon_rngs = rngs[0], rngs[1:]
 
-    # Splice smoothgens and dungeons in order of levels
-    map, item_map, light_map, ladders_down, ladders_up = jax.tree.map(
-        lambda x, y: jnp.stack(
-            (x[0], y[0], x[1], y[1], y[2], x[2], x[3], x[4], x[5]), axis=0
-        ),
-        smoothgens,
-        dungeons,
-    )
+    if static_params.single_level:
+        map, item_map, light_map, ladders_down, ladders_up = jax.tree.map(
+            lambda x: x[None], overworld
+        )
+    else:
+        smoothgens = jax.vmap(generate_smoothworld, in_axes=(0, None, None, 0))(
+            _rng[1:],
+            static_params,
+            player_position,
+            jax.tree.map(lambda x: x[1:], world_configs),
+        )
+
+        smoothgens = jax.tree.map(
+            lambda over, others: jnp.concatenate([jnp.array([over]), others], axis=0),
+            overworld,
+            smoothgens,
+        )
+
+        # Generate dungeons
+        dungeons = jax.vmap(generate_dungeon, in_axes=(0, None, 0))(
+            dungeon_rngs, static_params, ALL_DUNGEON_CONFIGS
+        )
+
+        # Splice smoothgens and dungeons in order of levels
+        map, item_map, light_map, ladders_down, ladders_up = jax.tree.map(
+            lambda x, y: jnp.stack(
+                (x[0], y[0], x[1], y[1], y[2], x[2], x[3], x[4], x[5]), axis=0
+            ),
+            smoothgens,
+            dungeons,
+        )
 
     # Mobs
     def generate_empty_mobs(max_mobs):
         return Mobs(
             position=jnp.zeros(
-                (static_params.num_levels, max_mobs, 2), dtype=jnp.int32
+                (static_params.num_stored_levels, max_mobs, 2), dtype=jnp.int32
             ),
-            health=jnp.ones((static_params.num_levels, max_mobs), dtype=jnp.float32),
-            mask=jnp.zeros((static_params.num_levels, max_mobs), dtype=bool),
+            health=jnp.ones(
+                (static_params.num_stored_levels, max_mobs), dtype=jnp.float32
+            ),
+            mask=jnp.zeros((static_params.num_stored_levels, max_mobs), dtype=bool),
             attack_cooldown=jnp.zeros(
-                (static_params.num_levels, max_mobs), dtype=jnp.int32
+                (static_params.num_stored_levels, max_mobs), dtype=jnp.int32
             ),
-            type_id=jnp.zeros((static_params.num_levels, max_mobs), dtype=jnp.int32),
+            type_id=jnp.zeros(
+                (static_params.num_stored_levels, max_mobs), dtype=jnp.int32
+            ),
         )
 
     melee_mobs = generate_empty_mobs(2)  # make space for changing curriculum
@@ -723,7 +736,7 @@ def generate_world(rng, params, static_params):
         projectiles = generate_empty_mobs(max_num)
 
         projectile_directions = jnp.ones(
-            (static_params.num_levels, max_num, 2), dtype=jnp.int32
+            (static_params.num_stored_levels, max_num, 2), dtype=jnp.int32
         )
 
         return projectiles, projectile_directions
@@ -761,13 +774,13 @@ def generate_world(rng, params, static_params):
         map=map,
         item_map=item_map,
         mob_map=jnp.zeros(
-            (static_params.num_levels, *static_params.map_size), dtype=bool
+            (static_params.num_stored_levels, *static_params.map_size), dtype=bool
         ),
         light_map=light_map,
         down_ladders=ladders_down,
         up_ladders=ladders_up,
-        chests_opened=jnp.zeros(static_params.num_levels, dtype=bool),
-        monsters_killed=jnp.zeros(static_params.num_levels, dtype=jnp.int32)
+        chests_opened=jnp.zeros(static_params.num_stored_levels, dtype=bool),
+        monsters_killed=jnp.zeros(static_params.num_stored_levels, dtype=jnp.int32)
         .at[0]
         .set(10),  # First ladder starts open
         player_position=player_position,

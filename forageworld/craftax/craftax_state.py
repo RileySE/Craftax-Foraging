@@ -149,6 +149,17 @@ class StaticEnvParams:
     # Minimal evaluation world on level 0: grass, one water tile, one passive
     # mob and one predator, nothing else (--stripped_world).
     stripped_world: bool = False
+    # Store only level 0 in the state. Valid only when the agent cannot change
+    # floors (no DESCEND/ASCEND in its action space), so levels 1-8 would never
+    # be read; dropping them shrinks every per-level array 9x, and with it every
+    # whole-state copy and select in the step. Level 0 is generated from the
+    # same RNG keys either way, so it is identical to level 0 of the full world.
+    # num_levels keeps meaning the game's level count (boss on the last level).
+    single_level: bool = False
+
+    @property
+    def num_stored_levels(self) -> int:
+        return 1 if self.single_level else self.num_levels
 
     # Mobs
     # HACK: Doubled to 18 for patch depletion stuff
