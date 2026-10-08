@@ -71,13 +71,14 @@ from orbax.checkpoint import (
 
 import wandb
 from flax.linen.initializers import constant, orthogonal, normal, uniform
-from typing import Sequence, NamedTuple, Dict, Callable
+from typing import Sequence, NamedTuple, Dict, Callable, Optional, Tuple
 from flax.training.train_state import TrainState
 import distrax
 import functools
 from ml_collections import ConfigDict
 
 from forageworld.craftax import craftax_state
+from forageworld.craftax.renderer import COMPACT_SYMBOLIC_OBS_INDEX, SYMBOLIC_OBS_DIM
 from forageworld.craftax.world_gen.world_gen import MAP_SEED_BOUND
 from forageworld.environment_base.wrappers import (
     LogWrapper,
@@ -522,6 +523,7 @@ MAP_RNG_STREAM = 0x6D617073
 # Position of the map RNG key in the runner state tuple (train_state, env_state,
 # last_obs, last_done, hstate, rng, map_rng, update_step).
 RUNNER_STATE_MAP_RNG_INDEX = 6
+RUNNER_STATE_LAST_OBS_INDEX = 2
 
 
 def map_rng_from_key(key):
@@ -631,18 +633,69 @@ class ScannedRNN(nn.Module):
         cell = nn.SimpleCell(features=hidden_size)
         return cell.initialize_carry(jax.random.PRNGKey(0), (batch_size, hidden_size))
 
+
+class ObservationDense(nn.Module):
+    """nn.Dense for the compact observation that keeps the full observation's
+    kernel.
+
+    NOTE: the kernel is deliberately oversize. It has one row per element of
+    the FULL symbolic observation (full_obs_dim), but only the rows of the
+    elements the compact observation keeps (obs_index) are used; the other
+    rows would multiply elements that are always 0, so they never affect the
+    output and never get a gradient (as before the compact observation, when
+    those inputs were simply 0). It is kept for backwards comparability with
+    previous results: the parameter tree, the kernel's shape and its initial
+    values stay the same (the orthogonal initialization of a shorter kernel
+    would have larger entries), so runs start from the same network as before
+    and checkpoints, weight dumps and --init_from carry over unchanged.
+    """
+
+    features: int
+    obs_index: Tuple[int, ...]
+    full_obs_dim: int
+    kernel_init: Callable
+    bias_init: Callable
+
+    @nn.compact
+    def __call__(self, inputs):
+        kernel = self.param(
+            "kernel", self.kernel_init, (self.full_obs_dim, self.features)
+        )
+        bias = self.param("bias", self.bias_init, (self.features,))
+        kernel = kernel[np.asarray(self.obs_index)]
+        y = jax.lax.dot_general(inputs, kernel, (((inputs.ndim - 1,), (0,)), ((), ())))
+        return y + jnp.reshape(bias, (1,) * (y.ndim - 1) + (-1,))
+
+
+def observation_layer(module, obs):
+    """The networks' first layer, on the observation: nn.Dense, or
+    ObservationDense when module.obs_index says the observation is compact.
+    Named Dense_0 either way, so the parameter tree is the same; the layers
+    after it are named explicitly to match it."""
+    kwargs = dict(
+        kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0), name="Dense_0"
+    )
+    if module.obs_index is None:
+        return nn.Dense(module.config["LAYER_SIZE"], **kwargs)(obs)
+    return ObservationDense(
+        module.config["LAYER_SIZE"],
+        obs_index=module.obs_index,
+        full_obs_dim=module.full_obs_dim,
+        **kwargs,
+    )(obs)
+
+
 class ActorCriticRNN(nn.Module):
     action_dim: Sequence[int]
     config: Dict
+    # Set when the observation is compact (see ObservationDense).
+    obs_index: Optional[Tuple[int, ...]] = None
+    full_obs_dim: Optional[int] = None
 
     @nn.compact
     def __call__(self, hidden, x):
         obs, dones = x
-        embedding = nn.Dense(
-            self.config["LAYER_SIZE"],
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-        )(obs)
+        embedding = observation_layer(self, obs)
         embedding = nn.relu(embedding)
 
         rnn_in = (embedding, dones)
@@ -658,16 +711,21 @@ class ActorCriticRNN(nn.Module):
             self.config["LAYER_SIZE"],
             kernel_init=orthogonal(2),
             bias_init=constant(0.0),
+            name="Dense_1",
         )(embedding)
         actor_mean = nn.relu(actor_mean)
         actor_mean = nn.Dense(
             self.config["LAYER_SIZE"],
             kernel_init=orthogonal(2),
             bias_init=constant(0.0),
+            name="Dense_2",
         )(actor_mean)
         actor_mean = nn.relu(actor_mean)
         actor_mean = nn.Dense(
-            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+            self.action_dim,
+            kernel_init=orthogonal(0.01),
+            bias_init=constant(0.0),
+            name="Dense_3",
         )(actor_mean)
 
         pi = distrax.Categorical(logits=actor_mean)
@@ -676,48 +734,52 @@ class ActorCriticRNN(nn.Module):
             self.config["LAYER_SIZE"],
             kernel_init=orthogonal(2),
             bias_init=constant(0.0),
+            name="Dense_4",
         )(embedding)
         critic = nn.relu(critic)
         critic = nn.Dense(
             self.config["LAYER_SIZE"],
             kernel_init=orthogonal(2),
             bias_init=constant(0.0),
+            name="Dense_5",
         )(critic)
         critic = nn.relu(critic)
-        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
-            critic
-        )
+        critic = nn.Dense(
+            1, kernel_init=orthogonal(1.0), bias_init=constant(0.0), name="Dense_6"
+        )(critic)
 
         aux = nn.Dense(
-        self.config["LAYER_SIZE"],
-        kernel_init=orthogonal(2),
-        bias_init=constant(0.0),
+            self.config["LAYER_SIZE"],
+            kernel_init=orthogonal(2),
+            bias_init=constant(0.0),
+            name="Dense_7",
         )(embedding)
         aux = nn.relu(aux)
         aux = nn.Dense(
             self.config["LAYER_SIZE"],
             kernel_init=orthogonal(2),
             bias_init=constant(0.0),
+            name="Dense_8",
         )(aux)
         aux = nn.relu(aux)
-        aux = nn.Dense(2, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
-            aux
-        )
+        aux = nn.Dense(
+            2, kernel_init=orthogonal(1.0), bias_init=constant(0.0), name="Dense_9"
+        )(aux)
 
         return hidden, pi, jnp.squeeze(critic, axis=-1), aux
+
 
 class SimpleActorCriticRNN(nn.Module):
     action_dim: Sequence[int]
     config: Dict
+    # Set when the observation is compact (see ObservationDense).
+    obs_index: Optional[Tuple[int, ...]] = None
+    full_obs_dim: Optional[int] = None
 
     @nn.compact
     def __call__(self, hidden, x):
         obs, dones = x
-        embedding = nn.Dense(
-            self.config["LAYER_SIZE"],
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-        )(obs)
+        embedding = observation_layer(self, obs)
         embedding = nn.relu(embedding)
 
         rnn_in = (embedding, dones)
@@ -730,16 +792,24 @@ class SimpleActorCriticRNN(nn.Module):
         )(hidden, rnn_in)
 
         actor_mean = nn.Dense(
-            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+            self.action_dim,
+            kernel_init=orthogonal(0.01),
+            bias_init=constant(0.0),
+            name="Dense_1",
         )(embedding)
 
         pi = distrax.Categorical(logits=actor_mean)
 
-        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(embedding)
+        critic = nn.Dense(
+            1, kernel_init=orthogonal(1.0), bias_init=constant(0.0), name="Dense_2"
+        )(embedding)
 
-        aux = nn.Dense(2, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(embedding)
+        aux = nn.Dense(
+            2, kernel_init=orthogonal(1.0), bias_init=constant(0.0), name="Dense_3"
+        )(embedding)
 
         return hidden, pi, jnp.squeeze(critic, axis=-1), aux
+
 
 class SimplerActorCriticRNN(nn.Module):
     action_dim: Sequence[int]
@@ -938,6 +1008,23 @@ def make_train(config):
                     len(saved_leaves), len(fresh_leaves)
                 )
             )
+        if obs_layer_kwargs:
+            # A checkpoint written before the compact observation holds the full
+            # last observation. The elements the compact one leaves out are
+            # always 0, so keeping the others converts it exactly.
+            obs_index = np.asarray(obs_layer_kwargs["obs_index"])
+            for i, (path, fresh_leaf) in enumerate(fresh_leaves):
+                saved_leaf = np.asarray(saved_leaves[i])
+                if (path[0] == jax.tree_util.SequenceKey(RUNNER_STATE_LAST_OBS_INDEX)
+                        and saved_leaf.shape[-1] == obs_layer_kwargs["full_obs_dim"]
+                        and np.shape(fresh_leaf)[-1] == len(obs_index)):
+                    if np.any(np.delete(saved_leaf, obs_index, axis=-1) != 0):
+                        raise ValueError(
+                            "Cannot resume: the checkpoint's last observation is non-zero "
+                            "where the compact observation assumes it is always 0"
+                        )
+                    saved_leaves[i] = saved_leaf[..., obs_index]
+                    print("Converted the checkpoint's full last observation to the compact one")
         restored = [
             _checked(path, fresh_leaf, saved_leaf)
             for (path, fresh_leaf), saved_leaf in zip(fresh_leaves, saved_leaves)
@@ -970,6 +1057,31 @@ def make_train(config):
     # Nor can it shoot or cast (SHOOT_ARROW / CAST_*), so player projectiles
     # never exist and their per-step update can be skipped.
     static_params.player_projectiles = config['FULL_ACTION_SPACE']
+    # For the same reason most of the symbolic observation is always 0, so it
+    # is replaced by the compact one, which leaves those elements out
+    # (renderer.COMPACT_SYMBOLIC_OBS_INDEX). Only for the networks whose first
+    # layer is a Dense on the observation, which then keeps the full
+    # observation's kernel (ObservationDense); --simpler_network and
+    # --no_memory get the full observation as before.
+    uses_observation_dense = not config['NO_MEMORY'] and (
+        config['SIMPLE_NETWORK'] or not config['SIMPLER_NETWORK']
+    )
+    static_params.compact_obs = (
+        not config['FULL_ACTION_SPACE']
+        and config['ENV_NAME'] == 'Craftax-Symbolic-v1'
+        and uses_observation_dense
+    )
+    # Where the compact observation's elements sit in the full one: the first
+    # layer's kernel rows they use. An action appended by --action_in_obs
+    # stays last.
+    obs_layer_kwargs = {}
+    if static_params.compact_obs:
+        obs_index, full_obs_dim = COMPACT_SYMBOLIC_OBS_INDEX, SYMBOLIC_OBS_DIM
+        if config['ACTION_IN_OBS']:
+            obs_index, full_obs_dim = np.append(obs_index, full_obs_dim), full_obs_dim + 1
+        obs_layer_kwargs = dict(
+            obs_index=tuple(int(i) for i in obs_index), full_obs_dim=full_obs_dim
+        )
 
     if config["ENV_NAME"] == "Craftax-Classic-Symbolic-v1":
         from forageworld.craftax_classic.envs.craftax_symbolic_env import (
@@ -1071,11 +1183,15 @@ def make_train(config):
                 network = ActorCriticConv(action_space_size, config=config)
         else:
             if config['SIMPLE_NETWORK']:
-                network = SimpleActorCriticRNN(action_space_size, config=config)
+                network = SimpleActorCriticRNN(
+                    action_space_size, config=config, **obs_layer_kwargs
+                )
             elif config['SIMPLER_NETWORK']:
                 network = SimplerActorCriticRNN(action_space_size, config=config)
             else:
-                network = ActorCriticRNN(action_space_size, config=config)
+                network = ActorCriticRNN(
+                    action_space_size, config=config, **obs_layer_kwargs
+                )
 
         # Second instance of the same network class for the periodic gradient
         # probe: identical param tree but full BPTT, so the probe measures the
@@ -1937,6 +2053,19 @@ def make_train(config):
             )
 
             h0 = hstate[:n_probe]
+            if obs_layer_kwargs:
+                # Differentiate with respect to the full observation, as before
+                # the compact one: grad_viz_network takes it with a plain
+                # Dense, and the always-0 elements still get a gradient through
+                # their (unused) kernel rows, so the magnitudes stay comparable.
+                obs_seq = (
+                    jnp.zeros(
+                        obs_seq.shape[:-1] + (obs_layer_kwargs["full_obs_dim"],),
+                        obs_seq.dtype,
+                    )
+                    .at[..., np.asarray(obs_layer_kwargs["obs_index"])]
+                    .set(obs_seq)
+                )
 
             def _probe_loss(obs_in):
                 _, _, value, _ = grad_viz_network.apply(

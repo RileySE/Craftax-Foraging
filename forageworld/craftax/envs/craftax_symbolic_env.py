@@ -9,7 +9,11 @@ from forageworld.environment_base.environment_no_auto_reset import EnvironmentNo
 from forageworld.craftax.constants import *
 from forageworld.craftax.game_logic import craftax_step
 from forageworld.craftax.craftax_state import EnvState, EnvParams, StaticEnvParams
-from forageworld.craftax.renderer import render_craftax_symbolic, render_craftax_pixels
+from forageworld.craftax.renderer import (
+    COMPACT_SYMBOLIC_OBS_INDEX,
+    render_craftax_symbolic,
+    render_craftax_pixels,
+)
 from forageworld.craftax.util.game_logic_utils import has_beaten_boss
 from forageworld.craftax.world_gen.world_gen import generate_world
 
@@ -59,6 +63,10 @@ class CraftaxSymbolicEnv(EnvironmentNoAutoReset):
 
     def get_obs(self, state: EnvState) -> chex.Array:
         pixels = render_craftax_symbolic(state, self.static_env_params.directional_vision)
+        if self.static_env_params.compact_obs:
+            # Leave out the elements that are always 0 here (see
+            # COMPACT_SYMBOLIC_OBS_INDEX): the rest is unchanged.
+            pixels = pixels[COMPACT_SYMBOLIC_OBS_INDEX]
         return pixels
 
     def is_terminal(self, state: EnvState, params: EnvParams) -> bool:
@@ -109,6 +117,8 @@ class CraftaxSymbolicEnv(EnvironmentNoAutoReset):
         inventory_obs_shape = self.get_inventory_obs_shape()
 
         obs_shape = flat_map_obs_shape + inventory_obs_shape
+        if self.static_env_params.compact_obs:
+            obs_shape = len(COMPACT_SYMBOLIC_OBS_INDEX)
 
         return spaces.Box(
             0.0,

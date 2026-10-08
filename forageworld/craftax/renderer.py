@@ -1,9 +1,92 @@
 import jax
+import numpy as np
 from functools import partial
 
 from forageworld.craftax.constants import *
 from forageworld.craftax.craftax_state import EnvState
 from forageworld.craftax.util.game_logic_utils import is_boss_vulnerable
+
+
+# Layout of the symbolic observation (render_craftax_symbolic): for each cell of
+# the OBS_DIM view, row-major, a one-hot of the block (len(BlockType) channels),
+# a one-hot of the item (len(ItemType)), 5 mob classes x 8 mob types (melee,
+# passive, ranged, mob projectile, player projectile) and a light channel; then
+# these non-map values:
+SYMBOLIC_OBS_FLAT_FIELDS = (
+    ("wood", "stone", "coal", "iron", "diamond", "sapphire", "ruby", "sapling",
+     "torches", "arrows", "books", "pickaxe", "sword", "sword_enchantment",
+     "bow_enchantment", "bow")
+    + tuple(f"potion_{i}" for i in range(6))
+    + ("health", "food", "drink", "energy", "mana", "xp", "dexterity", "strength",
+       "intelligence")
+    + ("direction_left", "direction_right", "direction_up", "direction_down")
+    + tuple(f"armour_{i}" for i in range(4))
+    + tuple(f"armour_enchantment_{i}" for i in range(4))
+    + ("light_level", "is_sleeping", "is_resting", "learned_fireball",
+       "learned_iceball", "floor", "ladder_open", "boss_vulnerable")
+)
+SYMBOLIC_OBS_CELL_CHANNELS = len(BlockType) + len(ItemType) + 5 * 8 + 1
+SYMBOLIC_OBS_DIM = (
+    OBS_DIM[0] * OBS_DIM[1] * SYMBOLIC_OBS_CELL_CHANNELS + len(SYMBOLIC_OBS_FLAT_FIELDS)
+)
+
+# Compact symbolic observation (StaticEnvParams.compact_obs): the elements of
+# the symbolic observation that can be non-zero when the agent stays on level 0
+# with the reduced (17-action) action space, in their original order. All the
+# other elements are provably always 0 there, so leaving them out changes no
+# information:
+# - Blocks: INVALID is never assigned; OUT_OF_BOUNDS only appears off the map,
+#   where the zero light padding masks it out; WOOD is an unused block type;
+#   PLANT and RIPE_PLANT only come from placing saplings, which place_block
+#   disables; all other blocks belong to later levels (dungeons, mines, fire,
+#   ice, boss) or are ores level 0 lacks (sapphire, ruby).
+# - Items: TORCH needs PLACE_TORCH (or a dungeon), level 0 has no LADDER_UP,
+#   and LADDER_DOWN_BLOCKED is never used.
+# - Mobs: level 0 only spawns type 0 of each class (zombie, cow, skeleton), and
+#   skeletons only shoot arrows (type 0). Player projectiles need SHOOT_ARROW
+#   or CAST_*.
+# - Non-map values: sapphire, ruby, torches, arrows, books, bow and potions
+#   only come from ore of later levels, chests or crafting actions outside the
+#   17; enchantments, armour, spells and resting need such actions too; xp is
+#   only earned on new floors; the floor is always 0 and the boss is never
+#   vulnerable (that needs the boss level).
+COMPACT_OBS_BLOCKS = (
+    BlockType.GRASS, BlockType.WATER, BlockType.STONE, BlockType.TREE,
+    BlockType.PATH, BlockType.COAL, BlockType.IRON, BlockType.DIAMOND,
+    BlockType.CRAFTING_TABLE, BlockType.FURNACE, BlockType.SAND, BlockType.LAVA,
+)
+COMPACT_OBS_ITEMS = (ItemType.NONE, ItemType.LADDER_DOWN)
+COMPACT_OBS_MOB_CLASSES = (0, 1, 2, 3)  # type 0 of each; not player projectiles
+COMPACT_OBS_FLAT_FIELDS = (
+    "wood", "stone", "coal", "iron", "diamond", "sapling", "pickaxe", "sword",
+    "health", "food", "drink", "energy", "mana", "dexterity", "strength",
+    "intelligence", "direction_left", "direction_right", "direction_up",
+    "direction_down", "light_level", "is_sleeping", "ladder_open",
+)
+
+
+def _compact_symbolic_obs_index():
+    n_blocks, n_items = len(BlockType), len(ItemType)
+    channels = (
+        [block.value for block in COMPACT_OBS_BLOCKS]
+        + [n_blocks + item.value for item in COMPACT_OBS_ITEMS]
+        + [n_blocks + n_items + 8 * mob_class for mob_class in COMPACT_OBS_MOB_CLASSES]
+        + [SYMBOLIC_OBS_CELL_CHANNELS - 1]  # light
+    )
+    n_cells = OBS_DIM[0] * OBS_DIM[1]
+    map_index = (
+        np.arange(n_cells)[:, None] * SYMBOLIC_OBS_CELL_CHANNELS + np.array(channels)
+    ).ravel()
+    flat_index = n_cells * SYMBOLIC_OBS_CELL_CHANNELS + np.array(
+        [SYMBOLIC_OBS_FLAT_FIELDS.index(field) for field in COMPACT_OBS_FLAT_FIELDS]
+    )
+    index = np.concatenate([map_index, flat_index])
+    assert np.all(np.diff(index) > 0)
+    return index
+
+
+# Indices of the compact observation's elements in the full symbolic observation.
+COMPACT_SYMBOLIC_OBS_INDEX = _compact_symbolic_obs_index()
 
 
 def render_craftax_symbolic(state: EnvState, directional_vision: bool = True):

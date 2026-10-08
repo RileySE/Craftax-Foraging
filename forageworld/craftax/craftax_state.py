@@ -161,6 +161,10 @@ class StaticEnvParams:
     # is, the per-step player-projectile update is skipped: with every
     # projectile inactive it would only move their unobservable positions.
     player_projectiles: bool = True
+    # Emit the compact symbolic observation (renderer.COMPACT_SYMBOLIC_OBS_INDEX):
+    # the full one without the elements that are provably always 0 when the
+    # agent stays on level 0 with the reduced action space. Valid only then.
+    compact_obs: bool = False
 
     @property
     def num_stored_levels(self) -> int:
