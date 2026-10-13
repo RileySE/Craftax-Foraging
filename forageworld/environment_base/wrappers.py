@@ -108,13 +108,22 @@ class OptimisticResetVecEnvWrapper(GymnaxWrapper):
     The wrapper also necessarily handles the batching of environment steps and resetting.
     reset_ratio: the number of environment workers per environment reset.  Higher means more efficient but a higher
     chance of duplicate resets.
+    any_done_axis_name: the axis name of a vmap this wrapper is stepped under
+    (e.g. training repeats), over which step reduces its skip-the-reset check.
     """
 
-    def __init__(self, env: environment.Environment, num_envs: int, reset_ratio: int):
+    def __init__(
+        self,
+        env: environment.Environment,
+        num_envs: int,
+        reset_ratio: int,
+        any_done_axis_name: Optional[str] = None,
+    ):
         super().__init__(env)
 
         self.num_envs = num_envs
         self.reset_ratio = reset_ratio
+        self.any_done_axis_name = any_done_axis_name
         assert (
             num_envs % reset_ratio == 0
         ), "Reset ratio must perfectly divide num envs."
@@ -144,34 +153,57 @@ class OptimisticResetVecEnvWrapper(GymnaxWrapper):
         rng, _rng = jax.random.split(rng)
         if reset_rng is not None:
             _rng = reset_rng
-        rngs = jax.random.split(_rng, self.num_resets)
-        obs_re, state_re = self.reset_fn(rngs, params)
+        reset_key = _rng
 
-        rng, _rng = jax.random.split(rng)
-        reset_indexes = jnp.arange(self.num_resets).repeat(self.reset_ratio)
+        def _reset_done_envs(rng):
+            rngs = jax.random.split(reset_key, self.num_resets)
+            obs_re, state_re = self.reset_fn(rngs, params)
 
-        being_reset = jax.random.choice(
-            _rng,
-            jnp.arange(self.num_envs),
-            shape=(self.num_resets,),
-            p=done,
-            replace=False,
-        )
-        reset_indexes.at[being_reset].set(jnp.arange(self.num_resets))
+            rng, _rng = jax.random.split(rng)
+            reset_indexes = jnp.arange(self.num_resets).repeat(self.reset_ratio)
 
-        obs_re = obs_re[reset_indexes]
-        state_re = jax.tree.map(lambda x: x[reset_indexes], state_re)
-
-        # Auto-reset environment based on termination
-        def auto_reset(done, state_re, state_st, obs_re, obs_st):
-            state = jax.tree.map(
-                lambda x, y: jax.lax.select(done, x, y), state_re, state_st
+            being_reset = jax.random.choice(
+                _rng,
+                jnp.arange(self.num_envs),
+                shape=(self.num_resets,),
+                p=done,
+                replace=False,
             )
-            obs = jax.lax.select(done, obs_re, obs_st)
+            reset_indexes.at[being_reset].set(jnp.arange(self.num_resets))
 
-            return state, obs
+            obs_re = obs_re[reset_indexes]
+            state_re = jax.tree.map(lambda x: x[reset_indexes], state_re)
 
-        state, obs = jax.vmap(auto_reset)(done, state_re, state_st, obs_re, obs_st)
+            # Auto-reset environment based on termination
+            def auto_reset(done, state_re, state_st, obs_re, obs_st):
+                state = jax.tree.map(
+                    lambda x, y: jax.lax.select(done, x, y), state_re, state_st
+                )
+                obs = jax.lax.select(done, obs_re, obs_st)
+
+                return state, obs
+
+            state, obs = jax.vmap(auto_reset)(done, state_re, state_st, obs_re, obs_st)
+            return obs, state
+
+        # When no env finished, the reset above would select every stepped
+        # state unchanged, so skip generating the new worlds. Under a vmap a
+        # batched predicate makes lax.cond compute both branches and select
+        # (what this always did), so inside a vmap named any_done_axis_name
+        # the check is reduced over it: the worlds are skipped only when no
+        # env of any mapped instance finished.
+        any_done = done.any()
+        if self.any_done_axis_name is not None:
+            try:
+                any_done = (
+                    jax.lax.psum(any_done.astype(jnp.int32), self.any_done_axis_name)
+                    > 0
+                )
+            except NameError:  # not stepped under a vmap with that axis name
+                pass
+        obs, state = jax.lax.cond(
+            any_done, _reset_done_envs, lambda rng: (obs_st, state_st), rng
+        )
 
         return obs, state, reward, done, info
 

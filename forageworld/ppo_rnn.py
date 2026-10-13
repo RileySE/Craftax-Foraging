@@ -894,6 +894,11 @@ def load_connectome_constraints_cellstats(pkl_filepath):
     return targets
 
 
+# Name of run_ppo's vmap over training repeats. The env's reset wrapper reduces
+# its skip-the-reset check over it, which keeps that check an actual branch.
+REPEATS_AXIS = "repeats"
+
+
 def make_train(config):
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_ENV_STEPS"] // config["NUM_ENVS"] // config['UPDATES_PER_VIZ']
@@ -1134,11 +1139,13 @@ def make_train(config):
             env,
             num_envs=config["NUM_ENVS"],
             reset_ratio=min(config["OPTIMISTIC_RESET_RATIO"], config["NUM_ENVS"]),
+            any_done_axis_name=REPEATS_AXIS,
         )
         env_viz = OptimisticResetVecEnvWrapper(
             env_viz,
             num_envs=config["NUM_ENVS"],
             reset_ratio=min(config["OPTIMISTIC_RESET_RATIO"], config["NUM_ENVS"]),
+            any_done_axis_name=REPEATS_AXIS,
         )
     else:
         env = AutoResetEnvWrapper(env)
@@ -2288,14 +2295,16 @@ def run_ppo(config, checkpoint=None, weights_only=False):
 
     train = make_train(config)
     device = jax.devices()[JAX_DEVICE_INDEX]
-    init_jit = jax.jit(jax.vmap(train.init), device=device)
+    init_jit = jax.jit(jax.vmap(train.init, axis_name=REPEATS_AXIS), device=device)
     # The outer training loop runs here in Python rather than inside one big
     # lax.scan: every iteration then executes the same compiled step program,
     # so a run resumed from a checkpoint performs bit-for-bit the computation
     # the uninterrupted run would have (and reuses its compilation cache
     # entries). donate_argnums recycles the carry buffers like scan did.
-    step_jit = jax.jit(jax.vmap(train.step), device=device, donate_argnums=0)
-    finish_jit = jax.jit(jax.vmap(train.finish), device=device)
+    step_jit = jax.jit(
+        jax.vmap(train.step, axis_name=REPEATS_AXIS), device=device, donate_argnums=0
+    )
+    finish_jit = jax.jit(jax.vmap(train.finish, axis_name=REPEATS_AXIS), device=device)
 
     num_outer_iters = int(config["NUM_UPDATES"])
     checkpoint_interval = config.get("CHECKPOINT_INTERVAL", 0)

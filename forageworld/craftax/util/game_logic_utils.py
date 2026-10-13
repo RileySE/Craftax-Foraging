@@ -343,13 +343,11 @@ def is_position_in_bounds_not_in_mob_not_colliding(state, position, collision_ma
 
 
 def is_near_block(state, block_type):
-    def _is_given_block(unused, loc_add):
-        pos = state.player_position + loc_add
-        is_in_bounds = in_bounds(state, pos)
-        is_correct_block = state.map[state.player_level][pos[0], pos[1]] == block_type
-        return None, jnp.logical_and(is_in_bounds, is_correct_block)
-
-    _, is_block = jax.lax.scan(_is_given_block, None, CLOSE_BLOCKS)
+    # All eight neighbouring cells at once (in_bounds is elementwise).
+    pos = state.player_position + CLOSE_BLOCKS
+    is_in_bounds = in_bounds(state, pos.T)
+    is_correct_block = state.map[state.player_level][pos[:, 0], pos[:, 1]] == block_type
+    is_block = jnp.logical_and(is_in_bounds, is_correct_block)
 
     return is_block.sum() > 0
 

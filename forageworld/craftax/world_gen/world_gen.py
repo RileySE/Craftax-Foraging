@@ -6,6 +6,7 @@ import jax.scipy as jsp
 from forageworld.craftax.constants import *
 from forageworld.craftax.game_logic import calculate_light_level, get_distance_map
 from forageworld.craftax.craftax_state import EnvState, Inventory, Mobs
+from forageworld.craftax.util.maths_utils import weighted_choice
 from forageworld.craftax.util.noise import generate_fractal_noise_2d
 from forageworld.craftax.world_gen.world_gen_configs import (
     ALL_DUNGEON_CONFIGS,
@@ -101,7 +102,7 @@ def generate_dungeon(rng, static_params, config):
         block_map, item_map, room_occupancy_chunks, rng = carry
 
         rng, _rng = jax.random.split(rng)
-        room_chunk = jax.random.choice(
+        room_chunk = weighted_choice(
             _rng,
             jnp.arange(world_chunk_width * world_chunk_height),
             p=room_occupancy_chunks,
@@ -205,9 +206,7 @@ def generate_dungeon(rng, static_params, config):
         path_source = room_positions[path_index]
 
         rng, _rng = jax.random.split(rng)
-        sink_index = jax.random.choice(
-            _rng, jnp.arange(num_rooms), p=included_rooms_mask
-        )
+        sink_index = weighted_choice(_rng, jnp.arange(num_rooms), p=included_rooms_mask)
         path_sink = room_positions[sink_index]
 
         # Horizontal component
@@ -291,7 +290,7 @@ def generate_dungeon(rng, static_params, config):
     adj_path_map = adj_path_map > 0.5
 
     rng, _rng = jax.random.split(rng)
-    rare_map = jax.random.choice(
+    rare_map = weighted_choice(
         _rng,
         jnp.array([False, True]),
         static_params.map_size,
@@ -321,7 +320,7 @@ def generate_dungeon(rng, static_params, config):
     # Ladders
     valid_ladder_down = (map.flatten() == BlockType.PATH.value).astype(jnp.float32)
     rng, _rng = jax.random.split(rng)
-    ladder_index = jax.random.choice(
+    ladder_index = weighted_choice(
         _rng,
         jnp.arange(static_params.map_size[0] * static_params.map_size[1]),
         p=valid_ladder_down / valid_ladder_down.sum(),
@@ -339,7 +338,7 @@ def generate_dungeon(rng, static_params, config):
 
     valid_ladder_up = map.flatten() == BlockType.PATH.value
     rng, _rng = jax.random.split(rng)
-    ladder_index = jax.random.choice(
+    ladder_index = weighted_choice(
         _rng,
         jnp.arange(static_params.map_size[0] * static_params.map_size[1]),
         p=valid_ladder_up,
@@ -497,7 +496,7 @@ def generate_smoothworld(rng, static_params, player_position, config, params=Non
 
     valid_ladder_down = map.flatten() == config.valid_ladder
     rng, _rng = jax.random.split(rng)
-    ladder_index = jax.random.choice(
+    ladder_index = weighted_choice(
         _rng,
         jnp.arange(static_params.map_size[0] * static_params.map_size[1]),
         p=valid_ladder_down,
@@ -516,7 +515,7 @@ def generate_smoothworld(rng, static_params, player_position, config, params=Non
 
     valid_ladder_up = map.flatten() == config.valid_ladder
     rng, _rng = jax.random.split(rng)
-    ladder_index = jax.random.choice(
+    ladder_index = weighted_choice(
         _rng,
         jnp.arange(static_params.map_size[0] * static_params.map_size[1]),
         p=valid_ladder_up,

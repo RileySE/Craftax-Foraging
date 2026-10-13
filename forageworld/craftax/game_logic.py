@@ -1,4 +1,5 @@
 from forageworld.craftax.util.game_logic_utils import *
+from forageworld.craftax.util.maths_utils import weighted_choice
 
 from jax._src.interpreters import batching as _batching
 from jax._src.lax.lax import optimization_barrier_p as _optimization_barrier_p
@@ -13,13 +14,13 @@ if _optimization_barrier_p not in _batching.primitive_batchers:
     )
 
 
-def update_plants_with_eat(state, plant_position, static_params):
-    def _is_plant(unused, index):
-        return None, (state.growing_plants_positions[index] == plant_position).all()
+# HACK: planting is disabled. place_block never plants a sapling, so no plant
+# ever grows and update_plants is skipped.
+PLANTING_ENABLED = False
 
-    _, is_plant = jax.lax.scan(
-        _is_plant, None, jnp.arange(static_params.max_growing_plants)
-    )
+
+def update_plants_with_eat(state, plant_position, static_params):
+    is_plant = (state.growing_plants_positions == plant_position).all(axis=-1)
 
     plant_index = jnp.argmax(is_plant)
 
@@ -47,7 +48,7 @@ def add_items_from_chest(rng, state, inventory, is_opening_chest):
     rng, _rng = jax.random.split(rng)
     is_looting_ore = jax.random.uniform(_rng) < 0.6
     rng, _rng = jax.random.split(rng)
-    ore_loot_id = jax.random.choice(
+    ore_loot_id = weighted_choice(
         _rng,
         jnp.arange(5, dtype=jnp.int32),
         shape=(),
@@ -109,7 +110,7 @@ def add_items_from_chest(rng, state, inventory, is_opening_chest):
     )
     rng, _rng = jax.random.split(rng)
     pickaxe_loot_level = (
-        jax.random.choice(
+        weighted_choice(
             _rng,
             (jnp.arange(4) + 1).astype(int),
             shape=(),
@@ -128,7 +129,7 @@ def add_items_from_chest(rng, state, inventory, is_opening_chest):
     )
     rng, _rng = jax.random.split(rng)
     sword_loot_level = (
-        jax.random.choice(
+        weighted_choice(
             _rng,
             (jnp.arange(4) + 1).astype(int),
             shape=(),
@@ -982,9 +983,8 @@ def place_block(state, action, static_params):
     )
 
     # Plant
-    #sapling_key_down = action == Action.PLACE_PLANT.value
-    # HACK disable planting
-    sapling_key_down = False
+    # HACK disable planting (PLANTING_ENABLED = False)
+    sapling_key_down = PLANTING_ENABLED and action == Action.PLACE_PLANT.value
     has_sapling = new_inventory.sapling > 0
     is_placing_sapling = jnp.logical_and(
         sapling_key_down,
@@ -1110,7 +1110,7 @@ def update_mobs(rng, state, params, static_params):
             player_move_direction_abs == player_move_direction_abs.max()
         ) / player_move_direction_abs.sum()
         rng, _rng = jax.random.split(rng)
-        player_move_direction_index = jax.random.choice(
+        player_move_direction_index = weighted_choice(
             _rng,
             jnp.arange(2),
             p=player_move_direction_index_p,
@@ -1386,8 +1386,13 @@ def update_mobs(rng, state, params, static_params):
         return (rng, state), None
 
     rng, _rng = jax.random.split(rng)
+    # Unrolled 4 mobs per iteration: each iteration of a loop on the GPU costs
+    # a host round trip, which dominates this small body.
     (rng, state), _ = jax.lax.scan(
-        _move_passive_mob, (rng, state), jnp.arange(static_params.max_passive_mobs)
+        _move_passive_mob,
+        (rng, state),
+        jnp.arange(static_params.max_passive_mobs),
+        unroll=4,
     )
 
     # Move ranged_mobs
@@ -1417,7 +1422,7 @@ def update_mobs(rng, state, params, static_params):
             player_move_direction_abs == player_move_direction_abs.max()
         ) / player_move_direction_abs.sum()
         rng, _rng = jax.random.split(rng)
-        player_move_direction_index = jax.random.choice(
+        player_move_direction_index = weighted_choice(
             _rng,
             jnp.arange(2),
             p=player_move_direction_index_p,
@@ -1997,6 +2002,11 @@ def update_player_intrinsics(state, action, static_params):
 
 
 def update_plants(state, static_params):
+    if not PLANTING_ENABLED:
+        # growing_plants_mask stays all False and growing_plants_age all 0, so
+        # the update below would change nothing; skip its loop over the plants.
+        return state
+
     growing_plants_age = state.growing_plants_age + 1
     growing_plants_age *= state.growing_plants_mask
 
@@ -2141,7 +2151,7 @@ def spawn_mobs(state, rng, params, static_params):
     )
 
     rng, _rng = jax.random.split(rng)
-    passive_mob_position = jax.random.choice(
+    passive_mob_position = weighted_choice(
         _rng,
         jnp.arange(static_params.map_size[0] * static_params.map_size[1]),
         shape=(1,),
@@ -2270,7 +2280,7 @@ def spawn_mobs(state, rng, params, static_params):
     )
 
     rng, _rng = jax.random.split(rng)
-    melee_mob_position = jax.random.choice(
+    melee_mob_position = weighted_choice(
         _rng,
         jnp.arange(static_params.map_size[0] * static_params.map_size[1]),
         shape=(1,),
@@ -2390,7 +2400,7 @@ def spawn_mobs(state, rng, params, static_params):
     )
 
     rng, _rng = jax.random.split(rng)
-    ranged_mob_position = jax.random.choice(
+    ranged_mob_position = weighted_choice(
         _rng,
         jnp.arange(static_params.map_size[0] * static_params.map_size[1]),
         shape=(1,),
@@ -2746,7 +2756,7 @@ def read_book(rng, state, action):
     spells_to_learn /= spells_to_learn.sum()
 
     rng, _rng = jax.random.split(rng)
-    spell_to_learn_index = jax.random.choice(
+    spell_to_learn_index = weighted_choice(
         _rng, jnp.arange(2), shape=(), p=spells_to_learn
     )
 
@@ -2824,7 +2834,7 @@ def enchant(rng, state: EnvState, action):
     armour_targets = (
         unenchanted_armour + (unenchanted_armour.sum() == 0) * opposite_enchanted_armour
     )
-    armour_target = jax.random.choice(_rng, jnp.arange(4), shape=(), p=armour_targets)
+    armour_target = weighted_choice(_rng, jnp.arange(4), shape=(), p=armour_targets)
 
     is_enchanting = jnp.logical_or(
         is_enchanting_sword, jnp.logical_or(is_enchanting_bow, is_enchanting_armour)
