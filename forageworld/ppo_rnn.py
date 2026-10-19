@@ -70,7 +70,7 @@ from orbax.checkpoint import (
 )
 
 import wandb
-from flax.linen.initializers import constant, orthogonal, normal, uniform
+from flax.linen.initializers import constant, lecun_normal, orthogonal, normal, uniform
 from typing import Sequence, NamedTuple, Dict, Callable, Optional, Tuple
 from flax.training.train_state import TrainState
 import distrax
@@ -294,6 +294,22 @@ def build_parser():
     parser.add_argument('--simple_network', action=argparse.BooleanOptionalAction, default=False, help='Use the simplified network architecture with no nonlinearity downstream of the RNN.')
     parser.add_argument('--simpler_network', action=argparse.BooleanOptionalAction, default=False,
                         help='Use an even simpler network architecture which also removes the FC layer upstream of the RNN.')
+    parser.add_argument('--feedforward_network', action=argparse.BooleanOptionalAction, default=False,
+                        help="Use a purely feedforward (memoryless) ablation of --simple_network. Each step goes "
+                             "through the same layers and nonlinearities as there - a ReLU layer on the "
+                             "observation, then a tanh layer of --layer_size units feeding the same linear actor, "
+                             "critic and aux heads, each layer initialized as its counterpart is - but the tanh "
+                             "layer reads only the current observation, with no recurrent input. The ReLU layer is "
+                             "widened to make up the --layer_size^2 parameters of the missing recurrent kernel, so "
+                             "the parameter count matches --simple_network's to within half a ReLU unit's "
+                             "parameters (under 0.1%% at --layer_size 512), counting the observation elements the "
+                             "network reads, not the always-zero rows the compact observation's kernel keeps. "
+                             "The tanh layer's activations take the hidden state's "
+                             "place in the hidden-state logs. With no recurrent kernel there is nothing for the "
+                             "connectome options to act on, so it implies --no_connectome and cannot be combined "
+                             "with them, --truncate_backprop or --rnn_hidden_initializer, and the gradient probe "
+                             "(--grad_viz_steps) is skipped. Mutually exclusive with --simple_network, "
+                             "--simpler_network and --no_memory.")
     parser.add_argument('--truncate_backprop', type=int, default=0,
                         help="Truncate backprop through time in the RNN to at most this many timesteps, by stopping "
                              "the hidden-state gradient at every K-step boundary within the rollout window (chunked "
@@ -382,6 +398,16 @@ def build_parser():
 # Options that choose the recurrent kernel's initial values.
 KERNEL_INIT_FLAGS = ('connectome_init', 'connectome_zero_init', 'sparse_default_init', 'connectome_mask_init')
 
+# Options that need the loaded connectome targets.
+CONNECTOME_FLAGS = (
+    'connectome_init', 'connectome_zero_init', 'sparse_default_init',
+    'connectome_mask_init', 'match_row_degrees', 'match_col_degrees',
+    'connectome_freeze', 'connectome_freeze_zeros',
+    'connectome_randomize_targets', 'connectome_uniform_targets',
+    'exclude_self_weights', 'fixed_connectome_targets',
+    'no_init_diags',
+)
+
 
 def kernel_init_conflict(flags):
     """Return an error message if `flags` (option name -> value) selects
@@ -401,6 +427,36 @@ def kernel_init_conflict(flags):
         return ("--connectome_mask_init is mutually exclusive with --connectome_init, "
                 "--connectome_zero_init and --sparse_default_init: all of them set the recurrent "
                 "kernel's initial values")
+    return None
+
+
+def feedforward_conflict(flags):
+    """Return an error message if `flags` (option name -> value) combine
+    --feedforward_network with an option it cannot honor, else None.
+
+    Shared by parse_args and the resume path, like kernel_init_conflict. The
+    network has no recurrent kernel or hidden state, so options acting on
+    those would otherwise be silently ignored.
+    """
+    if not flags.get('feedforward_network'):
+        return None
+    networks = [name for name in ('simple_network', 'simpler_network', 'no_memory') if flags.get(name)]
+    if networks:
+        return "--feedforward_network is mutually exclusive with {}: each selects the network".format(
+            ", ".join(f"--{name}" for name in networks)
+        )
+    incompatible = [name for name in CONNECTOME_FLAGS if flags.get(name)]
+    if flags.get('truncate_backprop', 0) > 0:
+        incompatible.append('truncate_backprop')
+    if flags.get('rnn_hidden_initializer', 'orthogonal') != 'orthogonal':
+        incompatible.append('rnn_hidden_initializer')
+    if incompatible:
+        return "--feedforward_network has no recurrent kernel, so it is incompatible with: {}".format(
+            ", ".join(f"--{name}" for name in incompatible)
+        )
+    if not flags.get('no_connectome'):
+        return ("--feedforward_network implies --no_connectome: it has no recurrent kernel for the "
+                "connectome constraint loss to act on")
     return None
 
 
@@ -439,17 +495,15 @@ def parse_args():
         args.env_seed = args.seed
     if args.replay_map_seed is not None and not 0 <= args.replay_map_seed < MAP_SEED_BOUND:
         parser.error("--replay_map_seed must be in [0, {}), the range map seeds are drawn from".format(MAP_SEED_BOUND))
+    if args.feedforward_network and 'no_connectome' not in parse_explicit_args():
+        # Set rather than required, so the flag alone selects the ablation and
+        # the run config records that no constraint was applied.
+        args.no_connectome = True
+    conflict = feedforward_conflict(vars(args))
+    if conflict:
+        parser.error(conflict)
     if args.no_connectome:
-        incompatible = [
-            name for name in (
-                'connectome_init', 'connectome_zero_init', 'sparse_default_init',
-                'connectome_mask_init', 'match_row_degrees', 'match_col_degrees',
-                'connectome_freeze', 'connectome_freeze_zeros',
-                'connectome_randomize_targets', 'connectome_uniform_targets',
-                'exclude_self_weights', 'fixed_connectome_targets',
-                'no_init_diags',
-            ) if getattr(args, name)
-        ]
+        incompatible = [name for name in CONNECTOME_FLAGS if getattr(args, name)]
         if incompatible:
             parser.error(
                 "--no_connectome is incompatible with: "
@@ -667,18 +721,21 @@ class ObservationDense(nn.Module):
         return y + jnp.reshape(bias, (1,) * (y.ndim - 1) + (-1,))
 
 
-def observation_layer(module, obs):
+def observation_layer(module, obs, features=None):
     """The networks' first layer, on the observation: nn.Dense, or
     ObservationDense when module.obs_index says the observation is compact.
     Named Dense_0 either way, so the parameter tree is the same; the layers
-    after it are named explicitly to match it."""
+    after it are named explicitly to match it. `features` defaults to
+    LAYER_SIZE."""
+    if features is None:
+        features = module.config["LAYER_SIZE"]
     kwargs = dict(
         kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0), name="Dense_0"
     )
     if module.obs_index is None:
-        return nn.Dense(module.config["LAYER_SIZE"], **kwargs)(obs)
+        return nn.Dense(features, **kwargs)(obs)
     return ObservationDense(
-        module.config["LAYER_SIZE"],
+        features,
         obs_index=module.obs_index,
         full_obs_dim=module.full_obs_dim,
         **kwargs,
@@ -809,6 +866,93 @@ class SimpleActorCriticRNN(nn.Module):
         )(embedding)
 
         return hidden, pi, jnp.squeeze(critic, axis=-1), aux
+
+
+def param_matched_width(n_inputs, layer_size):
+    """Width of FeedforwardActorCritic's ReLU layer that gives it
+    SimpleActorCriticRNN's parameter count, for an observation of n_inputs
+    elements and a hidden layer of layer_size (L) units.
+
+    The two networks' heads are identical, so only the layers before them
+    need to balance: the RNN's observation layer ((n_inputs + 1) * L), cell
+    input layer (L * L + L) and recurrent kernel (L * L, no bias) against the
+    feedforward network's observation layer ((n_inputs + 1) * W) and tanh
+    layer (W * L + L). Equating them gives
+    W = L * (n_inputs + 1 + 2L) / (n_inputs + 1 + L), and rounding W to a whole
+    unit leaves the counts within half a unit's (n_inputs + 1 + L) parameters
+    of each other.
+    """
+    return int(round(
+        layer_size * (n_inputs + 1 + 2 * layer_size) / (n_inputs + 1 + layer_size)
+    ))
+
+
+class FeedforwardActorCritic(nn.Module):
+    """Memoryless ablation of SimpleActorCriticRNN with the same parameter
+    count and the same layers and nonlinearities per step.
+
+    SimpleActorCriticRNN computes h_t = tanh(W_i relu(W_0 o_t + b_0) + b_i +
+    W_h h_{t-1}) and reads its heads off h_t; this computes the same thing
+    without the W_h h_{t-1} term, each layer initialized as its counterpart
+    there. Dropping W_h removes LAYER_SIZE**2 parameters, which the ReLU layer
+    makes up by being param_matched_width units wide instead of LAYER_SIZE.
+    The tanh layer, which stands in for the RNN's hidden units, keeps
+    LAYER_SIZE. The heads have SimpleActorCriticRNN's names and shapes, so for
+    the same seed they start from the same values (the widened first layer
+    cannot).
+
+    The observation layer's width depends on the number of observation
+    elements the network reads, so a compact observation (see
+    ObservationDense) is matched over the elements it keeps.
+
+    Takes and returns a hidden state so it drops into the training loop
+    unchanged: the one passed in is ignored, and the one returned is the tanh
+    layer's activation at the last step, so the hidden-state logs record it.
+    """
+
+    action_dim: Sequence[int]
+    config: Dict
+    # Set when the observation is compact (see ObservationDense).
+    obs_index: Optional[Tuple[int, ...]] = None
+    full_obs_dim: Optional[int] = None
+
+    @nn.compact
+    def __call__(self, hidden, x):
+        obs, dones = x
+        embedding = observation_layer(
+            self, obs,
+            features=param_matched_width(obs.shape[-1], self.config["LAYER_SIZE"]),
+        )
+        embedding = nn.relu(embedding)
+
+        # nn.SimpleCell's input layer and initialization, minus the recurrent
+        # kernel whose output it is summed with there.
+        embedding = nn.Dense(
+            self.config["LAYER_SIZE"],
+            kernel_init=lecun_normal(),
+            bias_init=constant(0.0),
+            name="Hidden",
+        )(embedding)
+        embedding = nn.tanh(embedding)
+
+        actor_mean = nn.Dense(
+            self.action_dim,
+            kernel_init=orthogonal(0.01),
+            bias_init=constant(0.0),
+            name="Dense_1",
+        )(embedding)
+
+        pi = distrax.Categorical(logits=actor_mean)
+
+        critic = nn.Dense(
+            1, kernel_init=orthogonal(1.0), bias_init=constant(0.0), name="Dense_2"
+        )(embedding)
+
+        aux = nn.Dense(
+            2, kernel_init=orthogonal(1.0), bias_init=constant(0.0), name="Dense_3"
+        )(embedding)
+
+        return embedding[-1], pi, jnp.squeeze(critic, axis=-1), aux
 
 
 class SimplerActorCriticRNN(nn.Module):
@@ -1188,6 +1332,10 @@ def make_train(config):
                 network = ActorCriticSharedRep(action_space_size, config=config)
             else:
                 network = ActorCriticConv(action_space_size, config=config)
+        elif config.get('FEEDFORWARD_NETWORK', False):
+            network = FeedforwardActorCritic(
+                action_space_size, config=config, **obs_layer_kwargs
+            )
         else:
             if config['SIMPLE_NETWORK']:
                 network = SimpleActorCriticRNN(
@@ -1203,7 +1351,11 @@ def make_train(config):
         # Second instance of the same network class for the periodic gradient
         # probe: identical param tree but full BPTT, so the probe measures the
         # network's intrinsic gradient decay even when training truncates it.
-        do_grad_viz = (not config['NO_MEMORY']) and config['GRAD_VIZ_STEPS'] > 0
+        do_grad_viz = (
+            not config['NO_MEMORY']
+            and not config.get('FEEDFORWARD_NETWORK', False)
+            and config['GRAD_VIZ_STEPS'] > 0
+        )
         if do_grad_viz:
             grad_viz_network = type(network)(
                 action_space_size,
@@ -1380,6 +1532,10 @@ def make_train(config):
                 config["NUM_ENVS"], config["LAYER_SIZE"]
             )
             network_params = network.init(_rng, init_hstate, init_x)
+            if config.get('FEEDFORWARD_NETWORK', False):
+                print("Feedforward network: {}-unit ReLU layer, matching --simple_network's parameter "
+                      "count for {} observation inputs".format(
+                          network_params['params']['Dense_0']['bias'].shape[0], obs_shape[-1]))
 
             if not config['NO_CONNECTOME']:
                 kernel = network_params['params']['ScannedRNN_0']['SimpleCell_1']['h']['kernel']
@@ -2501,6 +2657,13 @@ if __name__ == "__main__":
                 ", ".join(f"--{name}" for name in inherited),
                 " ".join(f"--no-{name}" for name in inherited),
             ))
+        if config.get("FEEDFORWARD_NETWORK") and "no_connectome" not in explicit_args:
+            # As in parse_args, which cannot see a flag stored in the checkpoint.
+            config["NO_CONNECTOME"] = True
+        conflict = feedforward_conflict({key.lower(): value for key, value in config.items()})
+        if conflict:
+            raise ValueError("{} (options not typed on this command line come from the checkpoint's "
+                             "stored config)".format(conflict))
         if config.get("CONNECTOME_MASK_INIT") and not checkpoint["config"].get("CONNECTOME_MASK_INIT", False):
             # Only when turned on relative to the checkpoint: resuming a
             # --connectome_mask_init run (every auto-resume leg retypes the
