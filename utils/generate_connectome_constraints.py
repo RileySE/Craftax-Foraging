@@ -32,6 +32,28 @@ parser.add_argument(
          'synapse-count nor the connection-count statistics. Pass '
          '--no-transmitter_signs for the original unsigned, transmitter-agnostic '
          'constraints. (default: signed)')
+parser.add_argument(
+    '--syn_count_normalization',
+    choices=['per_pair', 'global_percentile'],
+    default='per_pair',
+    help="How synapse counts are scaled into constraint magnitudes. 'per_pair' "
+         "divides each pre/post type pair's counts by that pair's own maximum, so "
+         "every block's largest constraint is ~1 regardless of how strong its "
+         "connections are. 'global_percentile' divides every pair by one shared "
+         "count, the --syn_count_percentile percentile of the per-connection "
+         "counts pooled across all usable type pairs, and clips values above 1. "
+         "That keeps the relative strength of connections between blocks, while "
+         "the few strongest connections saturate rather than setting the scale "
+         "for everything else. Only magnitudes change: the RNG draws, and hence "
+         "which entries are non-zero and their signs, are identical for a given "
+         "--seed, except that under global_percentile the sort keeps entries "
+         "clipped to the same value in draw order, so their signs can trade places "
+         "within a row. (default: %(default)s)")
+parser.add_argument(
+    '--syn_count_percentile', type=float, default=99.,
+    help="Percentile of the per-connection synapse counts, pooled across all "
+         "usable type pairs, that maps to 1 under --syn_count_normalization "
+         "global_percentile. (default: %(default)s)")
 parser.add_argument('--seed', type=int, default=0,
                     help='RNG seed (default: %(default)s).')
 args = parser.parse_args()
@@ -43,6 +65,7 @@ post_cell_type_field = 'post_' + args.cell_type_field
 rnn_units_per_type = args.rnn_units_per_type
 sort_constraints = args.sort_constraints
 transmitter_signs = args.transmitter_signs
+syn_count_normalization = args.syn_count_normalization
 nt_field = 'nt_type'
 nt_positives = ['ACH']
 nt_negatives = ['GABA', 'GLUT']
@@ -122,6 +145,20 @@ for cell_id in unique_cell_ids:
                 connection_counts_per_cell_per_type_pair[this_cell_type][post_type].append(0)
 
 print('Total connections:', total_connections)
+if syn_count_normalization == 'global_percentile':
+    # Pooled over the accumulated pairs rather than the whole CSV, so pairs with
+    # an unusable pre or post type can't set the scale. float32 to match the
+    # dtype of the counts it divides.
+    all_syn_counts = np.asarray(
+        [count for post_counts in syn_counts_per_type_pair.values()
+         for counts in post_counts.values() for count in counts], dtype=np.float64)
+    print('Global max synapse count:', all_syn_counts.max(initial=0.))
+    global_syn_count_percentile = np.float32(
+        np.percentile(all_syn_counts, args.syn_count_percentile)
+        if all_syn_counts.size else 0.)
+    print(f'Global {args.syn_count_percentile:g}th percentile synapse count: '
+          f'{global_syn_count_percentile} ({100. * np.mean(all_syn_counts > global_syn_count_percentile):.2f}% '
+          f'of {all_syn_counts.size} connections clipped to 1)')
 print('Sampling constraint distributions...')
 pre_n = 0
 post_n = 0
@@ -146,7 +183,11 @@ for pre_cell_type in connection_counts_per_cell_per_type_pair.keys():
         curr_counts /= curr_counts.max() + 0.000001
         curr_counts *= rnn_units_per_type
         curr_counts = np.ceil(curr_counts)
-        curr_syn_counts /= curr_syn_counts.max() + 0.000001
+        if syn_count_normalization == 'global_percentile':
+            curr_syn_counts = np.minimum(
+                curr_syn_counts / (global_syn_count_percentile + 0.000001), 1.)
+        else:
+            curr_syn_counts /= curr_syn_counts.max() + 0.000001
         curr_count_dist = np.random.choice(curr_counts, (rnn_units_per_type,))
         curr_constraints = np.zeros((rnn_units_per_type, rnn_units_per_type))
         for curr_unit in range(rnn_units_per_type):
