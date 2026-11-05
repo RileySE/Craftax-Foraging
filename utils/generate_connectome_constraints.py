@@ -54,6 +54,15 @@ parser.add_argument(
     help="Percentile of the per-connection synapse counts, pooled across all "
          "usable type pairs, that maps to 1 under --syn_count_normalization "
          "global_percentile. (default: %(default)s)")
+parser.add_argument(
+    '--aggregate_neuropils', action=argparse.BooleanOptionalAction, default=True,
+    help='Sum the synapse counts of CSV rows that share a pre/post root-ID pair '
+         '(the CSV has one row per neuropil a pair connects in) into a single '
+         'connection, before the syn_count > 5 threshold, so each pair counts '
+         'once with its total synapse count. Pass --no-aggregate_neuropils for '
+         'the original per-row behaviour, where each of a pair\'s neuropil rows '
+         'is a separate connection and is thresholded on its own. '
+         '(default: aggregated)')
 parser.add_argument('--seed', type=int, default=0,
                     help='RNG seed (default: %(default)s).')
 args = parser.parse_args()
@@ -66,6 +75,7 @@ rnn_units_per_type = args.rnn_units_per_type
 sort_constraints = args.sort_constraints
 transmitter_signs = args.transmitter_signs
 syn_count_normalization = args.syn_count_normalization
+aggregate_neuropils = args.aggregate_neuropils
 nt_field = 'nt_type'
 nt_positives = ['ACH']
 nt_negatives = ['GABA', 'GLUT']
@@ -77,6 +87,23 @@ np.random.seed(args.seed)
 
 print('Loading CSV and parsing usable cell types...')
 data = pd.read_csv(datafile_name)
+if aggregate_neuropils:
+    # Every column but neuropil and syn_count describes the pair (its neurons'
+    # cell types and transmitter), so the pair's first row stands in for it,
+    # with the summed count; its neuropil is left as that row's and is unused.
+    # Summing before the threshold below keeps the synapses of a pair's
+    # sub-threshold neuropils, and keeps pairs whose synapses are all spread
+    # thinly across neuropils.
+    pair_fields = ['pre_root_id', 'post_root_id']
+    pair_rows = data.groupby(pair_fields, sort=False)
+    if transmitter_signs:
+        n_mixed = int((pair_rows[nt_field].nunique() > 1).sum())
+        if n_mixed:
+            raise SystemExit(f'{n_mixed} root-ID pairs have rows with different '
+                             f'{nt_field}s, so their summed connection has no single sign')
+    n_rows_before = len(data)
+    data = data.assign(syn_count=pair_rows['syn_count'].transform('sum')).drop_duplicates(pair_fields)
+    print(f'Aggregated {n_rows_before} neuropil rows into {len(data)} pre/post root-ID pairs.')
 data = data[data['syn_count'] > 5]
 if transmitter_signs:
     # Only the transmitters we model carry a usable sign; connections labelled
@@ -89,7 +116,6 @@ if transmitter_signs:
         data[nt_field].isin(nt_positives), 1., -1.).astype(np.float32)
     print(f'Dropped {n_rows_before - len(data)} of {n_rows_before} connections '
           f'with an unmodelled {nt_field}.')
-unique_cell_ids = data['pre_root_id'].unique()
 unique_cell_types = data[pre_cell_type_field].unique()
 unique_post_cell_types = data[post_cell_type_field].unique()
 unique_cell_types = np.array(unique_cell_types, dtype=np.str_)
@@ -113,8 +139,10 @@ for cell_type in usable_cell_types:
 
 print('Accumulating connection and synapse counts...')
 total_connections = 0
-for cell_id in unique_cell_ids:
-    entries = data.loc[data['pre_root_id'] == cell_id]
+# groupby(sort=False) visits the cells in order of first appearance, each
+# with its rows in CSV order, so this is the order a .loc scan of the whole
+# table per unique() cell gave, in one pass instead of one per cell.
+for cell_id, entries in data.groupby('pre_root_id', sort=False):
     this_cell_type = ''
     seen_cell_types = []
     for connection in entries.iterrows():
